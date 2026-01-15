@@ -64,38 +64,5 @@
     "vite-plugin-electron": "^0.28.6",
     "vite-plugin-electron-renderer": "^0.14.5"
   },
-  "main": "dist-electron/main.js",
-  "build": {
-    "appId": "com.opencowork.app",
-    "productName": "OpenCowork",
-    "protocols": [
-      {
-        "name": "OpenCowork",
-        "schemes": [
-          "opencowork"
-        ]
-      }
-    ],
-    "extraResources": [
-      "resources/**"
-    ],
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "Utility"
-    },
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ]
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ]
-    }
-  }
+  "main": "dist-electron/main.js"
 }
