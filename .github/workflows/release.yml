@@ -3,10 +3,40 @@ name: Build/Release
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - 'v*'
 
 jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      -
+        name: Check out Git repository
+        uses: actions/checkout@v4
+
+      -
+        name: Extract version from tag
+        id: extract_version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      -
+        name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.extract_version.outputs.version }}
+          name: ${{ steps.extract_version.outputs.version }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   release:
     runs-on: ${{ matrix.os }}
+    if: github.event_name == 'release'
 
     strategy:
       matrix:
@@ -48,7 +78,7 @@ jobs:
           npx vite build
           npx electron-builder --${{ matrix.platform }} --publish never
 
-      - 
+      -
         name: Upload executables to Release
         uses: softprops/action-gh-release@v2
         if: success()
