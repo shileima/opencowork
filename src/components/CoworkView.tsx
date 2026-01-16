@@ -72,10 +72,17 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
             setPermissionRequest(req);
         });
 
+        // Listen for abort events
+        const removeAbortListener = window.ipcRenderer.on('agent:aborted', () => {
+            setStreamingText('');
+            setPermissionRequest(null);
+        });
+
         return () => {
             removeStreamListener?.();
             removeHistoryListener?.();
             removeConfirmListener?.();
+            removeAbortListener?.();
         };
     }, []);
 
@@ -479,7 +486,6 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
                                 onPaste={handlePaste}
                                 placeholder={mode === 'chat' ? "输入消息... (Ctrl+L 聚焦)" : workingDir ? "描述任务... (Ctrl+L 聚焦)" : "请先选择工作目录"}
                                 className="flex-1 bg-transparent text-stone-800 placeholder:text-stone-400 py-3 text-sm focus:outline-none"
-                                disabled={isProcessing}
                             />
 
                             {/* Model Selector */}

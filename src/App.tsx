@@ -16,10 +16,10 @@ function App() {
   const isFloatingBall = window.location.hash === '#/floating-ball' || window.location.hash === '#floating-ball';
 
   useEffect(() => {
+    // Listen for history updates (don't reset isProcessing here - wait for agent:done)
     const removeListener = window.ipcRenderer.on('agent:history-update', (_event, ...args) => {
       const updatedHistory = args[0] as Anthropic.MessageParam[];
       setHistory(updatedHistory);
-      setIsProcessing(false);
     });
 
     const removeErrorListener = window.ipcRenderer.on('agent:error', (_event, ...args) => {
@@ -28,9 +28,20 @@ function App() {
       setIsProcessing(false);
     });
 
+    const removeAbortListener = window.ipcRenderer.on('agent:aborted', () => {
+      setIsProcessing(false);
+    });
+
+    // Only reset isProcessing when processing is truly done
+    const removeDoneListener = window.ipcRenderer.on('agent:done', () => {
+      setIsProcessing(false);
+    });
+
     return () => {
       removeListener();
       removeErrorListener();
+      removeAbortListener();
+      removeDoneListener();
     };
   }, []);
 

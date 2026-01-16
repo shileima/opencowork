@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowUp, ChevronDown, Home, History, X, Plus } from 'lucide-react';
+import { ArrowUp, ChevronDown, Home, History, X, Plus, Square } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 type BallState = 'collapsed' | 'input' | 'expanded';
@@ -58,10 +58,10 @@ export function FloatingBallPage() {
 
     // Listen for state changes and messages
     useEffect(() => {
+        // Don't reset isProcessing on history update - wait for agent:done
         const removeHistoryListener = window.ipcRenderer.on('agent:history-update', (_event, ...args) => {
             const history = args[0] as Message[];
             setMessages(history.filter(m => m.role !== 'system'));
-            setIsProcessing(false);
             setStreamingText('');
         });
 
@@ -75,10 +75,23 @@ export function FloatingBallPage() {
             setStreamingText('');
         });
 
+        // Listen for abort event
+        const removeAbortListener = window.ipcRenderer.on('agent:aborted', () => {
+            setIsProcessing(false);
+            setStreamingText('');
+        });
+
+        // Only reset isProcessing when processing is truly done
+        const removeDoneListener = window.ipcRenderer.on('agent:done', () => {
+            setIsProcessing(false);
+        });
+
         return () => {
             removeHistoryListener?.();
             removeStreamListener?.();
             removeErrorListener?.();
+            removeAbortListener?.();
+            removeDoneListener?.();
         };
     }, []);
 
@@ -163,6 +176,12 @@ export function FloatingBallPage() {
         }
         setInput('');
         setImages([]);
+    };
+
+    // Handle abort - stop the current task
+    const handleAbort = () => {
+        window.ipcRenderer.invoke('agent:abort');
+        setIsProcessing(false);
     };
 
     // Handle collapse
@@ -372,16 +391,27 @@ export function FloatingBallPage() {
                             className="flex-1 bg-transparent text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none"
                             autoFocus
                         />
-                        <button
-                            type="submit"
-                            disabled={!input.trim() && images.length === 0}
-                            className={`p-1.5 rounded-lg transition-all ${input.trim() || images.length > 0
-                                ? 'bg-orange-500 text-white'
-                                : 'bg-stone-200 text-stone-400'
-                                }`}
-                        >
-                            <ArrowUp size={14} />
-                        </button>
+                        {isProcessing ? (
+                            <button
+                                type="button"
+                                onClick={handleAbort}
+                                className="p-1.5 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all"
+                                title="停止"
+                            >
+                                <Square size={14} fill="currentColor" />
+                            </button>
+                        ) : (
+                            <button
+                                type="submit"
+                                disabled={!input.trim() && images.length === 0}
+                                className={`p-1.5 rounded-lg transition-all ${input.trim() || images.length > 0
+                                    ? 'bg-orange-500 text-white'
+                                    : 'bg-stone-200 text-stone-400'
+                                    }`}
+                            >
+                                <ArrowUp size={14} />
+                            </button>
+                        )}
                     </form>
                 </div>
 
@@ -652,18 +682,28 @@ export function FloatingBallPage() {
                             onPaste={handlePaste}
                             placeholder="继续对话..."
                             className="flex-1 bg-transparent text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none"
-                            disabled={isProcessing}
                         />
-                        <button
-                            type="submit"
-                            disabled={!input.trim() && images.length === 0 || isProcessing}
-                            className={`p-1.5 rounded-lg transition-all ${input.trim() || images.length > 0 && !isProcessing
-                                ? 'bg-orange-500 text-white'
-                                : 'bg-stone-200 text-stone-400'
-                                }`}
-                        >
-                            <ArrowUp size={14} />
-                        </button>
+                        {isProcessing ? (
+                            <button
+                                type="button"
+                                onClick={handleAbort}
+                                className="p-1.5 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all"
+                                title="停止"
+                            >
+                                <Square size={14} fill="currentColor" />
+                            </button>
+                        ) : (
+                            <button
+                                type="submit"
+                                disabled={!input.trim() && images.length === 0}
+                                className={`p-1.5 rounded-lg transition-all ${input.trim() || images.length > 0
+                                    ? 'bg-orange-500 text-white'
+                                    : 'bg-stone-200 text-stone-400'
+                                    }`}
+                            >
+                                <ArrowUp size={14} />
+                            </button>
+                        )}
                     </div>
                 </form>
             </div>

@@ -150,6 +150,8 @@ export class AgentRuntime {
             this.isProcessing = false;
             this.abortController = null;
             this.notifyUpdate();
+            // Broadcast done event to signal processing is complete
+            this.broadcast('agent:done', { timestamp: Date.now() });
         }
     }
 
@@ -213,6 +215,7 @@ ${workingDirContext}
             console.log('Base URL:', this.anthropic.baseURL);
 
             try {
+                // Pass abort signal to the API for true interruption
                 const stream = await this.anthropic.messages.create({
                     model: this.model,
                     max_tokens: 4096,
@@ -220,6 +223,8 @@ ${workingDirContext}
                     messages: this.history,
                     stream: true,
                     tools: tools
+                }, {
+                    signal: this.abortController?.signal
                 });
 
                 const finalContent: Anthropic.ContentBlock[] = [];
@@ -272,17 +277,38 @@ ${workingDirContext}
                                     });
                                 }
                                 currentToolUse = null;
+                            } else if (textBuffer) {
+                                // [Fix] Flush text buffer on block stop
+                                finalContent.push({ type: 'text', text: textBuffer, citations: null });
+                                textBuffer = "";
                             }
                             break;
                         case 'message_stop':
                             if (textBuffer) {
                                 finalContent.push({ type: 'text', text: textBuffer, citations: null });
+                                textBuffer = "";
                             }
                             break;
                     }
                 }
 
-                if (this.abortController?.signal.aborted) return;
+                // If aborted, save any partial content that was generated
+                if (this.abortController?.signal.aborted) {
+                    if (textBuffer) {
+                        finalContent.push({ type: 'text', text: textBuffer + '\n\n[已中断]', citations: null });
+                    }
+                    if (finalContent.length > 0) {
+                        const assistantMsg: Anthropic.MessageParam = { role: 'assistant', content: finalContent };
+                        this.history.push(assistantMsg);
+                        this.notifyUpdate();
+                    }
+                    return; // Stop execution completely
+                }
+
+                // [Fix] Ensure any remaining buffer is captured (in case message_stop didn't fire)
+                if (textBuffer) {
+                    finalContent.push({ type: 'text', text: textBuffer, citations: null });
+                }
 
                 if (finalContent.length > 0) {
                     const assistantMsg: Anthropic.MessageParam = { role: 'assistant', content: finalContent };
@@ -293,6 +319,12 @@ ${workingDirContext}
                     if (toolUses.length > 0) {
                         const toolResults: Anthropic.ToolResultBlockParam[] = [];
                         for (const toolUse of toolUses) {
+                            // Check abort before each tool execution
+                            if (this.abortController?.signal.aborted) {
+                                console.log('[AgentRuntime] Aborted before tool execution');
+                                return;
+                            }
+
                             if (toolUse.type !== 'tool_use') continue;
 
                             console.log(`Executing tool: ${toolUse.name}`);
@@ -389,8 +421,20 @@ ${skillInfo.instructions}
                 }
 
             } catch (loopError: unknown) {
-                const loopErr = loopError as { status?: number; message?: string };
+                // Check if this is an abort error - handle gracefully
+                if (this.abortController?.signal.aborted) {
+                    console.log('[AgentRuntime] Request was aborted');
+                    return; // Exit cleanly on abort
+                }
+
+                const loopErr = loopError as { status?: number; message?: string; name?: string };
                 console.error("Agent Loop detailed error:", loopError);
+
+                // Check for abort-related errors (different SDK versions may throw different errors)
+                if (loopErr.name === 'AbortError' || loopErr.message?.includes('abort')) {
+                    console.log('[AgentRuntime] Caught abort error');
+                    return;
+                }
 
                 // Handle Sensitive Content Error (1027)
                 if (loopErr.status === 500 && (loopErr.message?.includes('sensitive') || JSON.stringify(loopError).includes('1027'))) {
@@ -457,6 +501,24 @@ ${skillInfo.instructions}
     }
 
     public abort() {
+        if (!this.isProcessing) return;
+
         this.abortController?.abort();
+
+        // Clear any pending confirmations - respond with 'denied'
+        for (const [, pending] of this.pendingConfirmations) {
+            pending.resolve(false);
+        }
+        this.pendingConfirmations.clear();
+
+        // Broadcast abort event to all windows
+        this.broadcast('agent:aborted', {
+            aborted: true,
+            timestamp: Date.now()
+        });
+
+        // Mark processing as complete
+        this.isProcessing = false;
+        this.abortController = null;
     }
 }
