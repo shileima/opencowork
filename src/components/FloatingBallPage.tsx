@@ -42,11 +42,25 @@ export function FloatingBallPage() {
             });
         }
     }, [showHistory]);
-    const inputRef = useRef<HTMLInputElement>(null);
+
+    // Change ref to textarea
+    const inputRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const collapseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
+
+    // Auto-resize textarea
+    useEffect(() => {
+        if (inputRef.current) {
+            inputRef.current.style.height = 'auto'; // Reset to auto
+            // Only set specific height if there is content, otherwise let rows=1 handle it
+            // This prevents placeholder from causing expansion when the window is still resizing (small width)
+            if (input) {
+                inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 72)}px`;
+            }
+        }
+    }, [input, ballState]);
 
     // Add transparent class to html element
     useEffect(() => {
@@ -182,6 +196,13 @@ export function FloatingBallPage() {
     const handleAbort = () => {
         window.ipcRenderer.invoke('agent:abort');
         setIsProcessing(false);
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSubmit(e as any);
+        }
     };
 
     // Handle collapse
@@ -346,7 +367,7 @@ export function FloatingBallPage() {
                 </div>
 
                 {/* Input Area */}
-                <div className="p-3">
+                <div className="p-2">
                     {/* Image Preview */}
                     {images.length > 0 && (
                         <div className="flex gap-2 mb-2 overflow-x-auto pb-1">
@@ -364,59 +385,77 @@ export function FloatingBallPage() {
                         </div>
                     )}
 
-                    <form onSubmit={handleSubmit} className="flex items-center gap-2 bg-stone-50 rounded-xl px-3 py-2">
-                        <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            className="text-stone-400 hover:text-stone-600 p-1"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /></svg>
-                        </button>
-                        <input
-                            type="file"
-                            ref={fileInputRef}
-                            className="hidden"
-                            accept="image/*"
-                            multiple
-                            onChange={handleFileSelect}
-                        />
+                    <form onSubmit={handleSubmit} className="flex flex-col gap-1">
+                        <div className="flex flex-col bg-[#FAF9F7] border border-stone-200 rounded-[20px] px-3 pt-2 pb-1 shadow-sm transition-all hover:shadow-md focus-within:ring-4 focus-within:ring-orange-50/50 focus-within:border-orange-200">
+                            <textarea
+                                ref={inputRef}
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                                onPaste={handlePaste}
+                                placeholder="描述任务... (Enter 发送, Shift+Enter 换行)"
+                                rows={1}
+                                className="w-full bg-transparent text-stone-800 placeholder:text-stone-400 text-sm focus:outline-none resize-none overflow-y-auto min-h-[24px] max-h-[72px] leading-6 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0"
+                                style={{
+                                    scrollbarWidth: 'none',
+                                    msOverflowStyle: 'none',
+                                    height: 'auto'
+                                }}
+                                autoFocus
+                            />
 
-                        <input
-                            ref={inputRef}
-                            type="text"
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onPaste={handlePaste}
-                            placeholder="描述任务..."
-                            className="flex-1 bg-transparent text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none"
-                            autoFocus
-                        />
-                        {isProcessing ? (
-                            <button
-                                type="button"
-                                onClick={handleAbort}
-                                className="p-1.5 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all"
-                                title="停止"
-                            >
-                                <Square size={14} fill="currentColor" />
-                            </button>
-                        ) : (
-                            <button
-                                type="submit"
-                                disabled={!input.trim() && images.length === 0}
-                                className={`p-1.5 rounded-lg transition-all ${input.trim() || images.length > 0
-                                    ? 'bg-orange-500 text-white'
-                                    : 'bg-stone-200 text-stone-400'
-                                    }`}
-                            >
-                                <ArrowUp size={14} />
-                            </button>
-                        )}
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-0.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
+                                        title="上传图片"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 0 0 0-2.828 0L6 21" /></svg>
+                                    </button>
+                                    <input
+                                        type="file"
+                                        ref={fileInputRef}
+                                        className="hidden"
+                                        accept="image/*"
+                                        multiple
+                                        onChange={handleFileSelect}
+                                    />
+                                </div>
+
+                                <div>
+                                    {isProcessing ? (
+                                        <button
+                                            type="button"
+                                            onClick={handleAbort}
+                                            className="p-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all flex items-center gap-1 px-2 shadow-sm"
+                                            title="停止"
+                                        >
+                                            <Square size={12} fill="currentColor" />
+                                            <span className="text-[10px] font-semibold">停止</span>
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="submit"
+                                            disabled={!input.trim() && images.length === 0}
+                                            className={`p-1 rounded-lg transition-all shadow-sm flex items-center justify-center ${input.trim() || images.length > 0
+                                                ? 'bg-orange-500 text-white hover:bg-orange-600 hover:shadow-orange-200 hover:shadow-md'
+                                                : 'bg-stone-100 text-stone-300 cursor-not-allowed'
+                                                }`}
+                                            style={{ width: '26px', height: '26px' }}
+                                        >
+                                            <ArrowUp size={16} />
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
                     </form>
                 </div>
 
                 {/* Quick Actions */}
-                <div className="px-3 pb-3 flex items-center justify-between">
+                <div className="px-2 pb-1.5 flex items-center justify-between">
                     <div className="flex items-center gap-1">
                         <button
                             onClick={() => {
@@ -657,56 +696,77 @@ export function FloatingBallPage() {
                     </div>
                 )}
 
-                <form onSubmit={handleSubmit}>
-                    <div className="flex items-center gap-2 bg-stone-50 rounded-xl px-3 py-2">
-                        <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            className="text-stone-400 hover:text-stone-600 p-1"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /></svg>
-                        </button>
-                        <input
-                            type="file"
-                            ref={fileInputRef}
-                            className="hidden"
-                            accept="image/*"
-                            multiple
-                            onChange={handleFileSelect}
-                        />
-
-                        <input
-                            type="text"
+                <form onSubmit={handleSubmit} className="flex flex-col">
+                    <div className="flex flex-col bg-[#FAF9F7] border border-stone-200 rounded-[20px] px-3 pt-2 pb-1 shadow-sm transition-all hover:shadow-md focus-within:ring-4 focus-within:ring-orange-50/50 focus-within:border-orange-200">
+                        <textarea
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
+                            onKeyDown={handleKeyDown}
                             onPaste={handlePaste}
-                            placeholder="继续对话..."
-                            className="flex-1 bg-transparent text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none"
+                            placeholder="继续对话... (Enter 发送, Shift+Enter 换行)"
+                            rows={1}
+                            className="w-full bg-transparent text-stone-800 placeholder:text-stone-400 text-sm focus:outline-none resize-none overflow-y-auto min-h-[24px] max-h-[72px] leading-6 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0"
+                            style={{
+                                scrollbarWidth: 'none',
+                                msOverflowStyle: 'none',
+                                height: 'auto'
+                            }}
+                            ref={ballState === 'expanded' ? inputRef : undefined}
                         />
-                        {isProcessing ? (
-                            <button
-                                type="button"
-                                onClick={handleAbort}
-                                className="p-1.5 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all"
-                                title="停止"
-                            >
-                                <Square size={14} fill="currentColor" />
-                            </button>
-                        ) : (
-                            <button
-                                type="submit"
-                                disabled={!input.trim() && images.length === 0}
-                                className={`p-1.5 rounded-lg transition-all ${input.trim() || images.length > 0
-                                    ? 'bg-orange-500 text-white'
-                                    : 'bg-stone-200 text-stone-400'
-                                    }`}
-                            >
-                                <ArrowUp size={14} />
-                            </button>
-                        )}
+
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-0.5">
+                                <button
+                                    type="button"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
+                                    title="上传图片"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 0 0 0-2.828 0L6 21" /></svg>
+                                </button>
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    className="hidden"
+                                    accept="image/*"
+                                    multiple
+                                    onChange={handleFileSelect}
+                                />
+                            </div>
+
+                            <div>
+                                {isProcessing ? (
+                                    <button
+                                        type="button"
+                                        onClick={handleAbort}
+                                        className="p-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all flex items-center gap-1 px-2 shadow-sm"
+                                        title="停止"
+                                    >
+                                        <Square size={12} fill="currentColor" />
+                                        <span className="text-[10px] font-semibold">停止</span>
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="submit"
+                                        disabled={!input.trim() && images.length === 0}
+                                        className={`p-1 rounded-lg transition-all shadow-sm flex items-center justify-center ${input.trim() || images.length > 0
+                                            ? 'bg-orange-500 text-white hover:bg-orange-600 hover:shadow-orange-200 hover:shadow-md'
+                                            : 'bg-stone-100 text-stone-300 cursor-not-allowed'
+                                            }`}
+                                        style={{ width: '26px', height: '26px' }}
+                                    >
+                                        <ArrowUp size={16} />
+                                    </button>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 </form>
-            </div>
-        </div>
+
+                <p className="text-[11px] text-stone-400 text-center mt-1.5 mb-1 px-2">
+                    AI 可能会出错，请仔细核查重要信息
+                </p>
+            </div >
+        </div >
     );
 }

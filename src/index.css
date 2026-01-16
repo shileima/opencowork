@@ -106,8 +106,9 @@
   }
 
   .input-bar {
-    @apply bg-white border border-stone-200 rounded-xl flex items-center shadow-sm transition-all;
-    @apply focus-within:border-stone-300 focus-within:ring-2 focus-within:ring-orange-100;
+    @apply bg-[#F7F6F3] border border-transparent rounded-[20px] flex items-center transition-all duration-200;
+    @apply hover:border-stone-200 hover:bg-white hover:shadow-sm;
+    @apply focus-within:bg-white focus-within:border-orange-200 focus-within:ring-4 focus-within:ring-orange-50/80 focus-within:shadow-md;
   }
 
   .input-bar-dark {

@@ -35,14 +35,30 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
     const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set());
     const [streamingText, setStreamingText] = useState('');
     const [workingDir, setWorkingDir] = useState<string | null>(null);
-    const [modelName, setModelName] = useState('glm-4.7');
     const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
     const [showHistory, setShowHistory] = useState(false);
     const [sessions, setSessions] = useState<SessionSummary[]>([]);
-    const scrollRef = useRef<HTMLDivElement>(null);
-    const inputRef = useRef<HTMLInputElement>(null);
+    const [modelName, setModelName] = useState<string>('Claude-3.5-Sonnet');
+
+    // Change ref to textarea
+    const inputRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const scrollRef = useRef<HTMLDivElement>(null);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
+
+    // Auto-resize textarea
+    useEffect(() => {
+        if (inputRef.current) {
+            inputRef.current.style.height = 'auto'; // Reset to auto to get correct scrollHeight
+            inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 72)}px`; // Max height ~3 lines
+        }
+    }, [input]);
+
+    const scrollToBottom = () => {
+        if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+    };
 
     // Load config including model name
     useEffect(() => {
@@ -96,9 +112,7 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
     }, [showHistory]);
 
     useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }
+        scrollToBottom();
     }, [history, streamingText, images]); // Scroll when images change too
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -160,17 +174,14 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
 
     const handlePaste = (e: React.ClipboardEvent) => {
         const items = e.clipboardData.items;
-        for (let i = 0; i < items.length; i++) {
-            if (items[i].type.indexOf('image') !== -1) {
+        for (const item of items) {
+            if (item.type.indexOf('image') !== -1) {
                 e.preventDefault();
-                const blob = items[i].getAsFile();
+                const blob = item.getAsFile();
                 if (blob) {
                     const reader = new FileReader();
                     reader.onload = (e) => {
-                        const result = e.target?.result as string;
-                        if (result) {
-                            setImages(prev => [...prev, result]);
-                        }
+                        setImages(prev => [...prev, e.target?.result as string]);
                     };
                     reader.readAsDataURL(blob);
                 }
@@ -184,16 +195,23 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
 
     // Keyboard shortcuts
     useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
+        const handleGlobalKeyDown = (e: KeyboardEvent) => {
             // Focus input on Ctrl/Cmd+L
             if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
                 e.preventDefault();
                 inputRef.current?.focus();
             }
         };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
+        window.addEventListener('keydown', handleGlobalKeyDown);
+        return () => window.removeEventListener('keydown', handleGlobalKeyDown);
     }, []);
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSubmit(e as any);
+        }
+    };
 
     const toggleBlock = (id: string) => {
         setExpandedBlocks(prev => {
@@ -455,71 +473,99 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
                     )}
 
                     <form onSubmit={handleSubmit}>
-                        <div className="input-bar">
-                            <button type="button" onClick={handleSelectFolder} className="p-3 text-stone-400 hover:text-stone-600 transition-colors" title="选择工作目录">
-                                <FolderOpen size={18} />
-                            </button>
+                        <div className="flex flex-col bg-[#FAF9F7] border border-stone-200 rounded-[20px] px-3 pt-2 pb-1 shadow-sm transition-all hover:shadow-md focus-within:ring-4 focus-within:ring-orange-50/50 focus-within:border-orange-200">
 
-                            {/* Image Upload Button */}
-                            <button
-                                type="button"
-                                onClick={() => fileInputRef.current?.click()}
-                                className="p-3 text-stone-400 hover:text-stone-600 transition-colors"
-                                title="上传图片"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /></svg>
-                            </button>
-                            <input
-                                type="file"
-                                ref={fileInputRef}
-                                className="hidden"
-                                accept="image/*"
-                                multiple
-                                onChange={handleFileSelect}
-                            />
-
-                            <input
+                            <textarea
                                 ref={inputRef}
-                                type="text"
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={handleKeyDown}
                                 onPaste={handlePaste}
-                                placeholder={mode === 'chat' ? "输入消息... (Ctrl+L 聚焦)" : workingDir ? "描述任务... (Ctrl+L 聚焦)" : "请先选择工作目录"}
-                                className="flex-1 bg-transparent text-stone-800 placeholder:text-stone-400 py-3 text-sm focus:outline-none"
+                                placeholder={mode === 'chat' ? "输入消息... (Shift+Enter 换行)" : workingDir ? "描述任务... (Shift+Enter 换行)" : "请先选择工作目录"}
+                                rows={1}
+                                className="w-full bg-transparent text-stone-800 placeholder:text-stone-400 text-sm focus:outline-none resize-none overflow-y-auto min-h-[24px] max-h-[120px] leading-6 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0"
+                                style={{
+                                    scrollbarWidth: 'none',
+                                    msOverflowStyle: 'none',
+                                    height: 'auto'
+                                }}
                             />
+                            {/* Hide scrollbar */}
+                            <style>{`
+                                textarea::-webkit-scrollbar {
+                                    display: none;
+                                }
+                            `}</style>
 
-                            {/* Model Selector */}
-                            <div className="flex items-center gap-1.5 px-3 text-xs text-stone-500 border-l border-stone-100">
-                                <span className="font-medium max-w-20 truncate">{modelName}</span>
-                                <ChevronDown size={12} />
-                            </div>
-
-                            <div className="pr-2">
-                                {isProcessing ? (
+                            {/* Toolbar Row - Divider removed */}
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-0.5">
                                     <button
                                         type="button"
-                                        onClick={onAbort}
-                                        className="p-2.5 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all"
+                                        onClick={handleSelectFolder}
+                                        className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
+                                        title="选择工作目录"
                                     >
-                                        <Square size={16} fill="currentColor" />
+                                        <FolderOpen size={16} />
                                     </button>
-                                ) : (
+
                                     <button
-                                        type="submit"
-                                        disabled={!input.trim() && images.length === 0}
-                                        className={`p-2.5 rounded-lg transition-all ${input.trim() || images.length > 0
-                                            ? 'bg-orange-500 text-white shadow-md hover:bg-orange-600'
-                                            : 'bg-stone-100 text-stone-300'
-                                            }`}
+                                        type="button"
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
+                                        title="上传图片"
                                     >
-                                        <ArrowUp size={16} />
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 0 0 0-2.828 0L6 21" /></svg>
                                     </button>
-                                )}
+                                    <input
+                                        type="file"
+                                        ref={fileInputRef}
+                                        className="hidden"
+                                        accept="image/*"
+                                        multiple
+                                        onChange={handleFileSelect}
+                                    />
+
+                                    <div className="w-px h-3 bg-stone-200 mx-1" />
+
+                                    {/* Model Selector */}
+                                    <div className="flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-stone-500 bg-stone-100/50 hover:bg-stone-100 rounded-md cursor-pointer transition-colors">
+                                        <span className="max-w-[100px] truncate scale-90 origin-left">{modelName}</span>
+                                        <ChevronDown size={12} className="text-stone-400" />
+                                    </div>
+                                </div>
+
+                                {/* Send/Stop Button */}
+                                <div>
+                                    {isProcessing ? (
+                                        <button
+                                            type="button"
+                                            onClick={onAbort}
+                                            className="p-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all flex items-center gap-1 px-2 shadow-sm"
+                                            title="停止"
+                                        >
+                                            <Square size={12} fill="currentColor" />
+                                            <span className="text-[10px] font-semibold">停止</span>
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="submit"
+                                            disabled={!input.trim() && images.length === 0}
+                                            className={`p-1 rounded-lg transition-all shadow-sm flex items-center justify-center ${input.trim() || images.length > 0
+                                                ? 'bg-orange-500 text-white hover:bg-orange-600 hover:shadow-orange-200 hover:shadow-md'
+                                                : 'bg-stone-100 text-stone-300 cursor-not-allowed'
+                                                }`}
+                                            style={{ width: '26px', height: '26px' }}
+                                        >
+                                            <ArrowUp size={16} />
+                                        </button>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     </form>
 
-                    <p className="text-[11px] text-stone-400 text-center mt-3">
+                    <p className="text-[11px] text-stone-400 text-center mt-1.5 mb-1">
                         AI 可能会出错，请仔细核查重要信息
                     </p>
                 </div>
