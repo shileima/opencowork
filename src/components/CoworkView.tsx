@@ -673,7 +673,7 @@ function EmptyState({ mode, workingDir }: { mode: Mode, workingDir: string | nul
     return (
         <div className="flex flex-col items-center justify-center h-full text-center space-y-4 py-20">
             <div className="w-16 h-16 rounded-2xl bg-white shadow-lg flex items-center justify-center rotate-3 border border-stone-100 overflow-hidden">
-                <img src="/icon.png" alt="Logo" className="w-full h-full object-cover" />
+                <img src="./icon.png" alt="Logo" className="w-full h-full object-cover" />
             </div>
             <div className="space-y-2">
                 <h2 className="text-xl font-semibold text-stone-800">

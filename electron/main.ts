@@ -30,6 +30,23 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
+// Helper to get icon path for both dev and prod
+function getIconPath(): string {
+  // Try PNG first as it's always available
+  const pngName = 'icon.png'
+
+  if (app.isPackaged) {
+    // In production, icon is in extraResources
+    const pngPath = path.join(process.resourcesPath, pngName)
+    if (fs.existsSync(pngPath)) return pngPath
+    // Fallback to app directory
+    return path.join(process.resourcesPath, 'app.asar.unpacked', pngName)
+  } else {
+    // In development, use public folder
+    return path.join(process.env.APP_ROOT!, 'public', 'icon.png')
+  }
+}
+
 // [Fix] Set specific userData path for dev mode to avoid permission/locking issues
 if (VITE_DEV_SERVER_URL) {
   const devUserData = path.join(process.env.APP_ROOT, '.vscode', 'electron-userdata');
@@ -72,7 +89,7 @@ app.on('activate', () => {
 
 app.whenReady().then(() => {
   // Set App User Model ID for Windows notifications
-  app.setAppUserModelId('com.opencowork.app')
+  // app.setAppUserModelId('com.opencowork.app')
 
   // Register Protocol Client
   if (app.isPackaged) {
@@ -472,8 +489,11 @@ function initializeAgent() {
 
 function createTray() {
   try {
-    tray = new Tray(path.join(process.env.VITE_PUBLIC || '', 'icon.png'))
+    const iconPath = getIconPath()
+    console.log('Tray icon path:', iconPath)
+    tray = new Tray(iconPath)
   } catch (e) {
+    console.error('Failed to load tray icon:', e)
     const blankIcon = nativeImage.createEmpty()
     tray = new Tray(blankIcon)
   }
@@ -519,12 +539,28 @@ function createTray() {
 }
 
 function createMainWindow() {
+  const iconPath = getIconPath()
+  console.log('Main window icon path:', iconPath)
+  console.log('Icon exists:', fs.existsSync(iconPath))
+
+  // Load icon as nativeImage for better Windows taskbar support
+  let iconImage = undefined
+  try {
+    iconImage = nativeImage.createFromPath(iconPath)
+    if (iconImage.isEmpty()) {
+      console.warn('Icon image is empty, falling back to default')
+      iconImage = undefined
+    }
+  } catch (e) {
+    console.error('Failed to load icon:', e)
+  }
+
   mainWin = new BrowserWindow({
     width: 480,
     height: 720,
     minWidth: 400,
     minHeight: 600,
-    icon: path.join(process.env.VITE_PUBLIC || '', 'icon.png'),
+    icon: iconImage || iconPath,
     frame: false,
     titleBarStyle: 'hiddenInset',
     webPreferences: {
@@ -575,7 +611,7 @@ function createFloatingBallWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
     },
-    icon: path.join(process.env.VITE_PUBLIC, 'icon.png'),
+    icon: getIconPath(),
   })
 
   if (VITE_DEV_SERVER_URL) {

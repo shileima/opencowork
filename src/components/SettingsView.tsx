@@ -223,7 +223,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                         value={config.apiKey}
                                         onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
                                         placeholder="sk-..."
-                                        className="w-full bg-white border border-stone-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+                                        className="w-full bg-white border border-stone-200 rounded-lg px-3 py-2 text-sm text-stone-700 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
                                     />
                                 </div>
                                 <div>
@@ -233,7 +233,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                         value={config.apiUrl}
                                         onChange={(e) => setConfig({ ...config, apiUrl: e.target.value })}
                                         placeholder="https://api.anthropic.com"
-                                        className="w-full bg-white border border-stone-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+                                        className="w-full bg-white border border-stone-200 rounded-lg px-3 py-2 text-sm text-stone-700 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
                                     />
                                 </div>
                                 <div>
@@ -243,7 +243,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                         value={config.model}
                                         onChange={(e) => setConfig({ ...config, model: e.target.value })}
                                         placeholder="glm-4.7"
-                                        className="w-full bg-white border border-stone-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+                                        className="w-full bg-white border border-stone-200 rounded-lg px-3 py-2 text-sm text-stone-700 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
                                     />
                                     <p className="text-xs text-stone-400 mt-1">输入模型名称，如 MiniMax-M2.1</p>
                                 </div>

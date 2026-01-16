@@ -60,7 +60,7 @@ export function SkillEditor({ filename, readOnly = false, onClose, onSave }: Ski
                             onChange={(e) => setName(e.target.value)}
                             disabled={!!filename || readOnly} // Disable if editing existing or read-only
                             placeholder="my-cool-skill"
-                            className="w-full bg-white border border-stone-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-500 disabled:bg-stone-50 disabled:text-stone-500"
+                            className="w-full bg-white border border-stone-200 rounded-lg px-3 py-2 text-sm text-stone-800 focus:outline-none focus:border-orange-500 disabled:bg-stone-50 disabled:text-stone-700"
                         />
                     </div>
 
@@ -70,7 +70,7 @@ export function SkillEditor({ filename, readOnly = false, onClose, onSave }: Ski
                             value={content}
                             onChange={(e) => setContent(e.target.value)}
                             disabled={readOnly}
-                            className="flex-1 w-full bg-stone-50 border border-stone-200 rounded-lg p-4 font-mono text-xs focus:outline-none focus:border-orange-500 resize-none disabled:text-stone-500"
+                            className="flex-1 w-full bg-stone-50 border border-stone-200 rounded-lg p-4 font-mono text-xs text-stone-800 focus:outline-none focus:border-orange-500 resize-none disabled:text-stone-700"
                             spellCheck={false}
                         />
                     </div>

@@ -11,6 +11,13 @@ interface ContentBlock {
     source?: { media_type: string; data: string };
 }
 
+interface SessionSummary {
+    id: string;
+    title: string;
+    createdAt: number;
+    updatedAt: number;
+}
+
 interface Message {
     role: 'user' | 'assistant' | 'system';
     content: string | ContentBlock[];
@@ -24,7 +31,17 @@ export function FloatingBallPage() {
     const [isProcessing, setIsProcessing] = useState(false);
     const [streamingText, setStreamingText] = useState('');
     const [showHistory, setShowHistory] = useState(false);
+    const [sessions, setSessions] = useState<SessionSummary[]>([]);  // Add sessions state
     const [isHovering, setIsHovering] = useState(false);
+
+    // Fetch session list when history is opened
+    useEffect(() => {
+        if (showHistory) {
+            window.ipcRenderer.invoke('session:list').then((list) => {
+                setSessions(list as SessionSummary[]);
+            });
+        }
+    }, [showHistory]);
     const inputRef = useRef<HTMLInputElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const collapseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -282,7 +299,7 @@ export function FloatingBallPage() {
                 <div className="relative w-14 h-14 group">
                     <div className="absolute inset-0 bg-amber-200/30 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
                     <div className="relative w-14 h-14 rounded-full bg-stone-800 flex items-center justify-center shadow-lg border border-stone-700 transition-transform hover:scale-105 overflow-hidden">
-                        <img src="/icon.png" alt="Logo" className="w-full h-full object-cover" />
+                        <img src="./icon.png" alt="Logo" className="w-full h-full object-cover" />
                     </div>
                     {isProcessing && (
                         <div className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-orange-500 rounded-full animate-pulse border-2 border-white" />
@@ -352,7 +369,7 @@ export function FloatingBallPage() {
                             onChange={(e) => setInput(e.target.value)}
                             onPaste={handlePaste}
                             placeholder="描述任务..."
-                            className="flex-1 bg-transparent text-sm text-stone-700 placeholder:text-stone-400 focus:outline-none"
+                            className="flex-1 bg-transparent text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none"
                             autoFocus
                         />
                         <button
@@ -406,21 +423,42 @@ export function FloatingBallPage() {
                 </div>
 
                 {/* Previous Tasks (History) */}
-                {showHistory && messages.length > 0 && (
-                    <div className="border-t border-stone-100 p-3 max-h-40 overflow-y-auto">
-                        <p className="text-xs text-stone-400 mb-2">最近任务</p>
-                        {messages
-                            .filter(m => m.role === 'user')
-                            .slice(-5)
-                            .map((msg, idx) => {
-                                const text = typeof msg.content === 'string' ? msg.content :
-                                    Array.isArray(msg.content) ? msg.content.find(b => b.type === 'text')?.text : '';
-                                return text ? (
-                                    <div key={idx} className="text-xs text-stone-600 py-1 truncate">
-                                        • {text}
-                                    </div>
-                                ) : null;
-                            })}
+                {showHistory && (
+                    <div className="border-t border-stone-100 p-3 max-h-60 overflow-y-auto scrollbar-hide">
+                        <p className="text-xs text-stone-400 mb-2">历史记录</p>
+                        {sessions.length === 0 ? (
+                            <p className="text-xs text-stone-300 py-2 text-center">暂无历史</p>
+                        ) : (
+                            <div className="space-y-1">
+                                {sessions.map((session) => (
+                                    <button
+                                        key={session.id}
+                                        onClick={() => {
+                                            window.ipcRenderer.invoke('session:load', session.id);
+                                            setShowHistory(false);
+                                        }}
+                                        className="w-full text-left p-2 hover:bg-stone-50 rounded-lg transition-colors group border border-transparent hover:border-stone-100"
+                                    >
+                                        <div className="text-xs text-stone-700 font-medium truncate">
+                                            {session.title || 'Untitled Session'}
+                                        </div>
+                                        <div className="text-[10px] text-stone-400 mt-0.5 flex justify-between">
+                                            <span>
+                                                {new Date(session.updatedAt).toLocaleString('zh-CN', {
+                                                    month: 'numeric',
+                                                    day: 'numeric',
+                                                    hour: '2-digit',
+                                                    minute: '2-digit'
+                                                })}
+                                            </span>
+                                            <span className="opacity-0 group-hover:opacity-100 text-orange-500 transition-opacity">
+                                                加载
+                                            </span>
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -497,7 +535,7 @@ export function FloatingBallPage() {
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-3">
+            <div className="flex-1 overflow-y-auto p-3 space-y-3 scrollbar-hide">
                 {messages.filter(m => m.role !== 'system').map((msg, idx) => {
                     if (msg.role === 'user') {
                         const text = typeof msg.content === 'string' ? msg.content :
@@ -574,7 +612,7 @@ export function FloatingBallPage() {
             <div className="border-t border-stone-100 p-2">
                 {/* Image Preview */}
                 {images.length > 0 && (
-                    <div className="flex gap-2 mb-2 overflow-x-auto pb-1 px-1">
+                    <div className="flex gap-2 mb-2 overflow-x-auto pb-1 px-1 scrollbar-hide">
                         {images.map((img, idx) => (
                             <div key={idx} className="relative w-12 h-12 rounded border border-stone-200 overflow-hidden shrink-0 group">
                                 <img src={img} alt="Preview" className="w-full h-full object-cover" />
@@ -613,7 +651,7 @@ export function FloatingBallPage() {
                             onChange={(e) => setInput(e.target.value)}
                             onPaste={handlePaste}
                             placeholder="继续对话..."
-                            className="flex-1 bg-transparent text-sm text-stone-700 placeholder:text-stone-400 focus:outline-none"
+                            className="flex-1 bg-transparent text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none"
                             disabled={isProcessing}
                         />
                         <button
