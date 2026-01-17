@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Settings, FolderOpen, Server, Check, Plus, Trash2, Edit2, Zap, Eye, EyeOff, Download } from 'lucide-react';
+import { X, Settings, FolderOpen, Server, Check, Plus, Trash2, Edit2, Zap, Eye, EyeOff } from 'lucide-react';
 import logo from '../assets/logo.png';
 import { SkillEditor } from './SkillEditor';
 
