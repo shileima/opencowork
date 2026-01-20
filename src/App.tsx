@@ -110,7 +110,7 @@ function App() {
     <div className="h-screen w-full bg-[#FAF8F5] dark:bg-zinc-950 flex flex-col overflow-hidden font-sans text-stone-900 dark:text-zinc-100">
       {/* Custom Titlebar */}
       <header
-        className="h-10 border-b border-stone-200/80 dark:border-zinc-800 flex items-center justify-between px-3 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm shrink-0 transition-colors"
+        className={`h-10 border-b border-stone-200/80 dark:border-zinc-800 flex items-center justify-between px-3 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm shrink-0 transition-colors ${window.platform === 'darwin' ? 'pl-20' : ''}`}
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
         <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
@@ -119,28 +119,32 @@ function App() {
         </div>
 
         <div className="flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          {/* Window Controls */}
-          <button
-            onClick={() => window.ipcRenderer.invoke('window:minimize')}
-            className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded transition-colors"
-            title="Minimize"
-          >
-            <Minus size={14} />
-          </button>
-          <button
-            onClick={() => window.ipcRenderer.invoke('window:maximize')}
-            className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded transition-colors"
-            title="Maximize"
-          >
-            <Square size={12} />
-          </button>
-          <button
-            onClick={() => window.ipcRenderer.invoke('window:close')}
-            className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-red-100 hover:text-red-500 dark:text-zinc-500 dark:hover:text-red-400 dark:hover:bg-red-900/30 rounded transition-colors"
-            title="Close"
-          >
-            <X size={14} />
-          </button>
+          {/* Window Controls - Windows/Linux only */}
+          {window.platform !== 'darwin' && (
+            <>
+              <button
+                onClick={() => window.ipcRenderer.invoke('window:minimize')}
+                className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded transition-colors"
+                title="Minimize"
+              >
+                <Minus size={14} />
+              </button>
+              <button
+                onClick={() => window.ipcRenderer.invoke('window:maximize')}
+                className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded transition-colors"
+                title="Maximize"
+              >
+                <Square size={12} />
+              </button>
+              <button
+                onClick={() => window.ipcRenderer.invoke('window:close')}
+                className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-red-100 hover:text-red-500 dark:text-zinc-500 dark:hover:text-red-400 dark:hover:bg-red-900/30 rounded transition-colors"
+                title="Close"
+              >
+                <X size={14} />
+              </button>
+            </>
+          )}
         </div>
       </header>
 
