@@ -38,6 +38,8 @@ export function FloatingBallPage() {
     const [isHovering, setIsHovering] = useState(false);
     const [isSuccess, setIsSuccess] = useState(false);
 
+    const [sessionId, setSessionId] = useState<string | null>(null);
+
     // Fetch session list when history is opened
     useEffect(() => {
         if (showHistory) {
@@ -47,6 +49,67 @@ export function FloatingBallPage() {
         }
     }, [showHistory]);
 
+    // Initialize session on mount
+    useEffect(() => {
+        if (!sessionId) {
+            window.ipcRenderer.invoke('agent:new-session').then((res: any) => {
+                if (res.sessionId) setSessionId(res.sessionId);
+            });
+        }
+    }, []); // Run once on mount
+
+    // Listen for state changes and messages - depends on sessionId
+    useEffect(() => {
+        const removeUpdateListener = window.ipcRenderer.on('agent:update', (_event, ...args) => {
+            const data = args[0] as { sessionId: string, history: Message[], isProcessing: boolean };
+            if (sessionId && data.sessionId !== sessionId) return;
+            setMessages(data.history.filter(m => m.role !== 'system') || []);
+            setStreamingText('');
+            // setIsProcessing(data.isProcessing); // Optional: sync processing state
+        });
+
+        const removeStreamListener = window.ipcRenderer.on('agent:stream-token', (_event, ...args) => {
+            const data = args[0] as { sessionId: string, token: string };
+            if (sessionId && data.sessionId !== sessionId) return;
+            setStreamingText(prev => prev + data.token);
+        });
+
+        const removeErrorListener = window.ipcRenderer.on('agent:error', (_event, ...args) => {
+            const data = args[0] as { sessionId: string, error: string } | string;
+            const errSessionId = typeof data === 'string' ? null : data.sessionId;
+            if (errSessionId && sessionId && errSessionId !== sessionId) return;
+
+            setIsProcessing(false);
+            setStreamingText('');
+        });
+
+        // Listen for abort event
+        const removeAbortListener = window.ipcRenderer.on('agent:aborted', (_event, ...args) => {
+            const data = args[0] as { sessionId: string };
+            if (sessionId && data.sessionId !== sessionId) return;
+            setIsProcessing(false);
+            setStreamingText('');
+        });
+
+        // Only reset isProcessing when processing is truly done
+        const removeDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
+            const data = args[0] as { sessionId: string };
+            if (sessionId && data.sessionId !== sessionId) return;
+            setIsProcessing(false);
+            setIsSuccess(true);
+            setTimeout(() => setIsSuccess(false), 3000); // Reset success state after 3s
+        });
+
+        return () => {
+            removeUpdateListener?.();
+            removeStreamListener?.();
+            removeErrorListener?.();
+            removeAbortListener?.();
+            removeDoneListener?.();
+        };
+    }, [sessionId]);
+
+    // ... (refs and resizing logic same as before) ...
     // Change ref to textarea
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -71,47 +134,6 @@ export function FloatingBallPage() {
         document.documentElement.classList.add('floating-ball-mode');
         return () => {
             document.documentElement.classList.remove('floating-ball-mode');
-        };
-    }, []);
-
-    // Listen for state changes and messages
-    useEffect(() => {
-        // Don't reset isProcessing on history update - wait for agent:done
-        const removeHistoryListener = window.ipcRenderer.on('agent:history-update', (_event, ...args) => {
-            const history = args[0] as Message[];
-            setMessages(history.filter(m => m.role !== 'system'));
-            setStreamingText('');
-        });
-
-        const removeStreamListener = window.ipcRenderer.on('agent:stream-token', (_event, ...args) => {
-            const token = args[0] as string;
-            setStreamingText(prev => prev + token);
-        });
-
-        const removeErrorListener = window.ipcRenderer.on('agent:error', () => {
-            setIsProcessing(false);
-            setStreamingText('');
-        });
-
-        // Listen for abort event
-        const removeAbortListener = window.ipcRenderer.on('agent:aborted', () => {
-            setIsProcessing(false);
-            setStreamingText('');
-        });
-
-        // Only reset isProcessing when processing is truly done
-        const removeDoneListener = window.ipcRenderer.on('agent:done', () => {
-            setIsProcessing(false);
-            setIsSuccess(true);
-            setTimeout(() => setIsSuccess(false), 3000); // Reset success state after 3s
-        });
-
-        return () => {
-            removeHistoryListener?.();
-            removeStreamListener?.();
-            removeErrorListener?.();
-            removeAbortListener?.();
-            removeDoneListener?.();
         };
     }, []);
 
@@ -237,6 +259,7 @@ export function FloatingBallPage() {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if ((!input.trim() && images.length === 0) || isProcessing) return;
+        if (!sessionId) return; // Should allow processing?
 
         setIsProcessing(true);
         setStreamingText('');
@@ -245,9 +268,9 @@ export function FloatingBallPage() {
         try {
             // Send as object if images exist, otherwise string for backward compat
             if (images.length > 0) {
-                await window.ipcRenderer.invoke('agent:send-message', { content: input, images });
+                await window.ipcRenderer.invoke('agent:send-message', { sessionId, input: { content: input, images } });
             } else {
-                await window.ipcRenderer.invoke('agent:send-message', input.trim());
+                await window.ipcRenderer.invoke('agent:send-message', { sessionId, input: input.trim() });
             }
         } catch (err) {
             console.error(err);
@@ -259,7 +282,8 @@ export function FloatingBallPage() {
 
     // Handle abort - stop the current task
     const handleAbort = () => {
-        window.ipcRenderer.invoke('agent:abort');
+        if (!sessionId) return;
+        window.ipcRenderer.invoke('agent:abort', sessionId);
         setIsProcessing(false);
     };
 
@@ -672,8 +696,11 @@ export function FloatingBallPage() {
             <div className="px-2 pb-1.5 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-1">
                     <button
-                        onClick={() => {
-                            window.ipcRenderer.invoke('agent:new-session');
+                        onClick={async () => {
+                            const res = await window.ipcRenderer.invoke('agent:new-session') as { sessionId?: string };
+                            if (res && res.sessionId) {
+                                setSessionId(res.sessionId);
+                            }
                             setMessages([]);
                             setImages([]);
                         }}
@@ -723,6 +750,7 @@ export function FloatingBallPage() {
                                     <button
                                         key={session.id}
                                         onClick={() => {
+                                            setSessionId(session.id);
                                             window.ipcRenderer.invoke('session:load', session.id);
                                             setShowHistory(false);
                                             setBallState('expanded');

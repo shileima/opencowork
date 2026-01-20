@@ -21,14 +21,16 @@ interface SessionSummary {
 }
 
 interface CoworkViewProps {
+    sessionId: string | null;
     history: Anthropic.MessageParam[];
     onSendMessage: (message: string | { content: string, images: string[] }) => void;
     onAbort: () => void;
     isProcessing: boolean;
     onOpenSettings: () => void;
+    onSessionChange: (sessionId: string) => void;
 }
 
-export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOpenSettings }: CoworkViewProps) {
+export function CoworkView({ sessionId, history, onSendMessage, onAbort, isProcessing, onOpenSettings, onSessionChange }: CoworkViewProps) {
     const { t } = useI18n();
     const [input, setInput] = useState('');
     const [images, setImages] = useState<string[]>([]); // Base64 strings
@@ -93,19 +95,24 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
         });
         // ... existing listeners
         const removeStreamListener = window.ipcRenderer.on('agent:stream-token', (_event, ...args) => {
-            const token = args[0] as string;
-            setStreamingText(prev => prev + token);
-        });
-
-        // Clear streaming when history updates and save session
-        const removeHistoryListener = window.ipcRenderer.on('agent:history-update', (_event, ...args) => {
-            const newHistory = args[0] as Anthropic.MessageParam[];
-            setStreamingText('');
-            // Auto-save session
-            if (newHistory && newHistory.length > 0) {
-                window.ipcRenderer.invoke('session:save', newHistory);
+            const data = args[0] as { sessionId: string, token: string };
+            // Filter by session ID
+            if (data.sessionId === sessionId) {
+                setStreamingText(prev => prev + data.token);
             }
         });
+
+        const removeThinkingListener = window.ipcRenderer.on('agent:stream-thinking', (_event, ...args) => {
+            const data = args[0] as { sessionId: string, text: string };
+            if (data.sessionId === sessionId) {
+                // For now, just append to streaming text or handle differently if UI supports it
+                setStreamingText(prev => prev + data.text);
+            }
+        });
+
+        // Clear streaming when history updates is handled in parent via props update
+        // But we still need to clear it locally if we detect a change?
+        // Actually App handles history update.
 
         // Listen for permission requests
         const removeConfirmListener = window.ipcRenderer.on('agent:confirm-request', (_event, ...args) => {
@@ -114,18 +121,26 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
         });
 
         // Listen for abort events
-        const removeAbortListener = window.ipcRenderer.on('agent:aborted', () => {
-            setStreamingText('');
-            setPermissionRequest(null);
+        const removeAbortListener = window.ipcRenderer.on('agent:aborted', (_event, ...args) => {
+            const data = args[0] as { sessionId: string };
+            if (data.sessionId === sessionId) {
+                setStreamingText('');
+                setPermissionRequest(null);
+            }
         });
 
         return () => {
             removeStreamListener?.();
-            removeHistoryListener?.();
+            removeThinkingListener?.();
             removeConfirmListener?.();
             removeAbortListener?.();
         };
-    }, []);
+    }, [sessionId]);
+
+    // Reset streaming text when history length changes (message completed)
+    useEffect(() => {
+        setStreamingText('');
+    }, [history.length]);
 
     // Fetch session list when history panel is opened
     useEffect(() => {
@@ -348,7 +363,12 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
                     )}
                     <div className="flex items-center gap-1">
                         <button
-                            onClick={() => window.ipcRenderer.invoke('agent:new-session')}
+                            onClick={async () => {
+                                const res = await window.ipcRenderer.invoke('agent:new-session') as { sessionId?: string };
+                                if (res && res.sessionId) {
+                                    onSessionChange(res.sessionId);
+                                }
+                            }}
                             className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded-lg transition-colors"
                             title={t('newSession')}
                         >
@@ -414,7 +434,8 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
                                         <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                             <button
                                                 onClick={() => {
-                                                    window.ipcRenderer.invoke('session:load', session.id);
+                                                    // Load session and notify parent
+                                                    onSessionChange(session.id);
                                                     setShowHistory(false);
                                                 }}
                                                 className="text-[10px] flex items-center gap-1 text-orange-500 hover:text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full"
@@ -422,7 +443,8 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
                                                 {t('load')}
                                             </button>
                                             <button
-                                                onClick={async () => {
+                                                onClick={async (e) => {
+                                                    e.stopPropagation();
                                                     await window.ipcRenderer.invoke('session:delete', session.id);
                                                     setSessions(sessions.filter(s => s.id !== session.id));
                                                 }}

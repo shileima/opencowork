@@ -15,17 +15,22 @@ export type AgentMessage = {
     id?: string;
 };
 
+export interface AgentSession {
+    id: string;
+    history: Anthropic.MessageParam[];
+    artifacts: { path: string; name: string; type: string }[];
+    isProcessing: boolean;
+    abortController: AbortController | null;
+}
+
 export class AgentRuntime {
     private anthropic: Anthropic;
-    private history: Anthropic.MessageParam[] = [];
+    private sessions: Map<string, AgentSession> = new Map();
     private windows: BrowserWindow[] = [];
     private fsTools: FileSystemTools;
     private skillManager: SkillManager;
     private mcpService: MCPClientService;
-    private abortController: AbortController | null = null;
-    private isProcessing = false;
     private pendingConfirmations: Map<string, { resolve: (approved: boolean) => void }> = new Map();
-    private artifacts: { path: string; name: string; type: string }[] = [];
 
     private model: string;
 
@@ -36,7 +41,20 @@ export class AgentRuntime {
         this.fsTools = new FileSystemTools();
         this.skillManager = new SkillManager();
         this.mcpService = new MCPClientService();
-        // Note: IPC handlers are now registered in main.ts, not here
+    }
+
+    // Helper to get or create session context
+    private getSession(sessionId: string): AgentSession {
+        if (!this.sessions.has(sessionId)) {
+            this.sessions.set(sessionId, {
+                id: sessionId,
+                history: [],
+                artifacts: [],
+                isProcessing: false,
+                abortController: null
+            });
+        }
+        return this.sessions.get(sessionId)!;
     }
 
     // Add a window to receive updates (for floating ball)
@@ -89,26 +107,30 @@ export class AgentRuntime {
     }
 
     // Clear history for new session
-    public clearHistory() {
-        this.history = [];
-        this.artifacts = [];
-        this.notifyUpdate();
+    public clearHistory(sessionId: string) {
+        const session = this.getSession(sessionId);
+        session.history = [];
+        session.artifacts = [];
+        this.notifyUpdate(sessionId);
     }
 
     // Load history from saved session
-    public loadHistory(messages: Anthropic.MessageParam[]) {
-        this.history = messages;
-        this.artifacts = [];
-        this.notifyUpdate();
+    public loadHistory(sessionId: string, messages: Anthropic.MessageParam[]) {
+        const session = this.getSession(sessionId);
+        session.history = messages;
+        session.artifacts = [];
+        this.notifyUpdate(sessionId);
     }
 
-    public async processUserMessage(input: string | { content: string, images: string[] }) {
-        if (this.isProcessing) {
-            throw new Error('Agent is already processing a message');
+    public async processUserMessage(input: string | { content: string, images: string[] }, sessionId: string) {
+        const session = this.getSession(sessionId);
+
+        if (session.isProcessing) {
+            throw new Error('Agent is already processing a message in this session');
         }
 
-        this.isProcessing = true;
-        this.abortController = new AbortController();
+        session.isProcessing = true;
+        session.abortController = new AbortController();
 
         try {
             await this.skillManager.loadSkills();
@@ -148,11 +170,11 @@ export class AgentRuntime {
             }
 
             // Add user message to history
-            this.history.push({ role: 'user', content: userContent });
-            this.notifyUpdate();
+            session.history.push({ role: 'user', content: userContent });
+            this.notifyUpdate(sessionId);
 
             // Start the agent loop
-            await this.runLoop();
+            await this.runLoop(session);
 
         } catch (error: unknown) {
             const err = error as { status?: number; message?: string };
@@ -160,28 +182,28 @@ export class AgentRuntime {
 
             // [Fix] Handle MiniMax/provider sensitive content errors gracefully
             if (err.status === 500 && (err.message?.includes('sensitive') || JSON.stringify(error).includes('1027'))) {
-                this.broadcast('agent:error', 'AI Provider Error: The generated content was flagged as sensitive and blocked by the provider.');
+                this.broadcast('agent:error', { sessionId, error: 'AI Provider Error: The generated content was flagged as sensitive and blocked by the provider.' });
             } else {
-                this.broadcast('agent:error', err.message || 'An unknown error occurred');
+                this.broadcast('agent:error', { sessionId, error: err.message || 'An unknown error occurred' });
             }
         } finally {
-            this.isProcessing = false;
-            this.abortController = null;
-            this.notifyUpdate();
+            session.isProcessing = false;
+            session.abortController = null;
+            this.notifyUpdate(sessionId);
             // Broadcast done event to signal processing is complete
-            this.broadcast('agent:done', { timestamp: Date.now() });
+            this.broadcast('agent:done', { sessionId, timestamp: Date.now() });
         }
     }
 
-    private async runLoop() {
+    private async runLoop(session: AgentSession) {
         let keepGoing = true;
         let iterationCount = 0;
         const MAX_ITERATIONS = 30;
 
         while (keepGoing && iterationCount < MAX_ITERATIONS) {
             iterationCount++;
-            console.log(`[AgentRuntime] Loop iteration: ${iterationCount}`);
-            if (this.abortController?.signal.aborted) break;
+            console.log(`[AgentRuntime] Loop iteration: ${iterationCount} for session ${session.id}`);
+            if (session.abortController?.signal.aborted) break;
 
             const tools: Anthropic.Tool[] = [
                 ReadFileSchema,
@@ -276,11 +298,11 @@ export class AgentRuntime {
                     model: this.model,
                     max_tokens: 131072,
                     system: systemPrompt,
-                    messages: this.history,
+                    messages: session.history,
                     stream: true,
                     tools: tools
                 } as any, {
-                    signal: this.abortController?.signal
+                    signal: session.abortController?.signal
                 });
 
                 const finalContent: Anthropic.ContentBlock[] = [];
@@ -288,7 +310,7 @@ export class AgentRuntime {
                 let textBuffer = "";
 
                 for await (const chunk of stream) {
-                    if (this.abortController?.signal.aborted) {
+                    if (session.abortController?.signal.aborted) {
                         stream.controller.abort();
                         break;
                     }
@@ -307,12 +329,12 @@ export class AgentRuntime {
                             if (chunk.delta.type === 'text_delta') {
                                 textBuffer += chunk.delta.text;
                                 // Broadcast streaming token to ALL windows
-                                this.broadcast('agent:stream-token', chunk.delta.text);
+                                this.broadcast('agent:stream-token', { sessionId: session.id, token: chunk.delta.text });
                             } else if ((chunk.delta as any).type === 'reasoning_content' || (chunk.delta as any).reasoning) {
                                 // Support for native "Thinking" models (DeepSeek/compatible args)
                                 const reasoningObj = chunk.delta as any;
                                 const text = reasoningObj.text || reasoningObj.reasoning || ""; // Adapt to provider
-                                this.broadcast('agent:stream-thinking', text);
+                                this.broadcast('agent:stream-thinking', { sessionId: session.id, text });
                             } else if (chunk.delta.type === 'input_json_delta' && currentToolUse) {
                                 currentToolUse.input += chunk.delta.partial_json;
                             }
@@ -354,14 +376,14 @@ export class AgentRuntime {
                 }
 
                 // If aborted, save any partial content that was generated
-                if (this.abortController?.signal.aborted) {
+                if (session.abortController?.signal.aborted) {
                     if (textBuffer) {
                         finalContent.push({ type: 'text', text: textBuffer + '\n\n[已中断]', citations: null });
                     }
                     if (finalContent.length > 0) {
                         const assistantMsg: Anthropic.MessageParam = { role: 'assistant', content: finalContent };
-                        this.history.push(assistantMsg);
-                        this.notifyUpdate();
+                        session.history.push(assistantMsg);
+                        this.notifyUpdate(session.id);
                     }
                     return; // Stop execution completely
                 }
@@ -373,15 +395,15 @@ export class AgentRuntime {
 
                 if (finalContent.length > 0) {
                     const assistantMsg: Anthropic.MessageParam = { role: 'assistant', content: finalContent };
-                    this.history.push(assistantMsg);
-                    this.notifyUpdate();
+                    session.history.push(assistantMsg);
+                    this.notifyUpdate(session.id);
 
                     const toolUses = finalContent.filter(c => c.type === 'tool_use');
                     if (toolUses.length > 0) {
                         const toolResults: Anthropic.ToolResultBlockParam[] = [];
                         for (const toolUse of toolUses) {
                             // Check abort before each tool execution
-                            if (this.abortController?.signal.aborted) {
+                            if (session.abortController?.signal.aborted) {
                                 console.log('[AgentRuntime] Aborted before tool execution');
                                 return;
                             }
@@ -408,8 +430,8 @@ export class AgentRuntime {
                                         if (approved) {
                                             result = await this.fsTools.writeFile(args);
                                             const fileName = args.path.split(/[\\/]/).pop() || 'file';
-                                            this.artifacts.push({ path: args.path, name: fileName, type: 'file' });
-                                            this.broadcast('agent:artifact-created', { path: args.path, name: fileName, type: 'file' });
+                                            session.artifacts.push({ path: args.path, name: fileName, type: 'file' });
+                                            this.broadcast('agent:artifact-created', { session: session.id, path: args.path, name: fileName, type: 'file' });
                                         } else {
                                             result = 'User denied the write operation.';
                                         }
@@ -473,8 +495,8 @@ ${skillInfo.instructions}
                             });
                         }
 
-                        this.history.push({ role: 'user', content: toolResults });
-                        this.notifyUpdate();
+                        session.history.push({ role: 'user', content: toolResults });
+                        this.notifyUpdate(session.id);
                     } else {
                         keepGoing = false;
                     }
@@ -484,7 +506,7 @@ ${skillInfo.instructions}
 
             } catch (loopError: unknown) {
                 // Check if this is an abort error - handle gracefully
-                if (this.abortController?.signal.aborted) {
+                if (session.abortController?.signal.aborted) {
                     console.log('[AgentRuntime] Request was aborted');
                     return; // Exit cleanly on abort
                 }
@@ -503,11 +525,11 @@ ${skillInfo.instructions}
                     console.log("Caught sensitive content error, asking Agent to retry...");
 
                     // Add a system-like user message to prompt the agent to fix its output
-                    this.history.push({
+                    session.history.push({
                         role: 'user',
                         content: `[SYSTEM ERROR] Your previous response was blocked by the safety filter (Error Code 1027: output new_sensitive). \n\nThis usually means the generated content contained sensitive, restricted, or unsafe material.\n\nPlease generate a NEW response that:\n1. Addresses the user's request safely.\n2. Avoids the sensitive topic or phrasing that triggered the block.\n3. Acknowledges the issue briefly if necessary.`
                     });
-                    this.notifyUpdate();
+                    this.notifyUpdate(session.id);
 
                     // Allow the loop to continue to the next iteration
                     continue;
@@ -528,8 +550,13 @@ ${skillInfo.instructions}
         }
     }
 
-    private notifyUpdate() {
-        this.broadcast('agent:history-update', this.history);
+    private notifyUpdate(sessionId: string) {
+        const session = this.getSession(sessionId);
+        this.broadcast('agent:update', {
+            sessionId,
+            history: session.history,
+            isProcessing: session.isProcessing
+        });
     }
 
     private async requestConfirmation(tool: string, description: string, args: Record<string, unknown>): Promise<boolean> {
@@ -562,10 +589,11 @@ ${skillInfo.instructions}
         }
     }
 
-    public abort() {
-        if (!this.isProcessing) return;
+    public abort(sessionId: string) {
+        const session = this.getSession(sessionId);
+        if (!session.isProcessing) return;
 
-        this.abortController?.abort();
+        session.abortController?.abort();
 
         // Clear any pending confirmations - respond with 'denied'
         for (const [, pending] of this.pendingConfirmations) {
@@ -575,16 +603,19 @@ ${skillInfo.instructions}
 
         // Broadcast abort event to all windows
         this.broadcast('agent:aborted', {
+            sessionId,
             aborted: true,
             timestamp: Date.now()
         });
 
         // Mark processing as complete
-        this.isProcessing = false;
-        this.abortController = null;
+        session.isProcessing = false;
+        session.abortController = null;
     }
     public dispose() {
-        this.abort();
+        for (const sessionId of this.sessions.keys()) {
+            this.abort(sessionId);
+        }
         this.mcpService.dispose();
     }
 }

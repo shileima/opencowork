@@ -2,7 +2,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { configStore } from '../../config/ConfigStore';
 
-// @ts-ignore - Import new transport type
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import path from 'path';
 import fs from 'fs/promises';
@@ -10,7 +9,6 @@ import os from 'os';
 import { ipcMain } from 'electron';
 
 // Polyfill EventSource for Node environment to support headers in SSE
-// @ts-ignore
 
 
 
@@ -456,7 +454,7 @@ export class MCPClientService {
             // === WINDOWS COMMAND FIX ===
             // Apply Windows-specific command fixes before connecting
             // Must cast or check type because 'command' is not on all types
-            let workingConfig = { ...config };
+            const workingConfig = { ...config };
 
             if (process.platform === 'win32' && workingConfig.type === 'stdio' && workingConfig.command) {
                 const cmd = workingConfig.command.toLowerCase();
@@ -509,7 +507,7 @@ export class MCPClientService {
 
             if (workingConfig.type === 'sse' || workingConfig.type === 'http') {
                 // HTTP/SSE config with Claude Code compatibility
-                let urlStr = injectKeys(workingConfig.url);
+                const urlStr = injectKeys(workingConfig.url);
                 const headers = { ...workingConfig.headers };
 
                 // Inject into headers
@@ -551,9 +549,7 @@ export class MCPClientService {
                         const esModule = require('eventsource');
                         const ES = esModule.default || esModule.EventSource || esModule;
 
-                        // @ts-ignore
                         if (global.EventSource !== ES) {
-                            // @ts-ignore
                             global.EventSource = ES;
                             console.log('[MCP] EventSource polyfilled successfully via createRequire for ' + name);
                         }
@@ -596,7 +592,6 @@ export class MCPClientService {
 
 
                     // Use StreamableHTTPClientTransport as recommended by SDK for 'http' and 'sse' types
-                    // @ts-ignore
                     transport = new StreamableHTTPClientTransport(new URL(urlStr!), {
                         requestInit: transportOptions.requestInit,
                         // streamableHttp uses requestInit for initial request? or has specific options?

@@ -144,13 +144,13 @@ app.whenReady().then(() => {
 
 // IPC Handlers
 
-ipcMain.handle('agent:send-message', async (_event, message: string | { content: string, images: string[] }) => {
+ipcMain.handle('agent:send-message', async (_event, { sessionId, input }: { sessionId: string, input: string | { content: string, images: string[] } }) => {
   if (!agent) throw new Error('Agent not initialized')
-  return await agent.processUserMessage(message)
+  return await agent.processUserMessage(input, sessionId)
 })
 
-ipcMain.handle('agent:abort', () => {
-  agent?.abort()
+ipcMain.handle('agent:abort', (_, sessionId: string) => {
+  agent?.abort(sessionId)
 })
 
 ipcMain.handle('agent:confirm-response', (_, { id, approved, remember, tool, path }: { id: string, approved: boolean, remember?: boolean, tool?: string, path?: string }) => {
@@ -162,7 +162,7 @@ ipcMain.handle('agent:confirm-response', (_, { id, approved, remember, tool, pat
 })
 
 ipcMain.handle('agent:new-session', () => {
-  agent?.clearHistory()
+  // agent?.clearHistory() // No longer needed for multi-session, just create new
   const session = sessionStore.createSession()
   return { success: true, sessionId: session.id }
 })
@@ -179,7 +179,7 @@ ipcMain.handle('session:get', (_, id: string) => {
 ipcMain.handle('session:load', (_, id: string) => {
   const session = sessionStore.getSession(id)
   if (session && agent) {
-    agent.loadHistory(session.messages)
+    agent.loadHistory(id, session.messages)
     sessionStore.setCurrentSession(id)
     return { success: true }
   }
