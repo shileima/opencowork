@@ -223,10 +223,18 @@ export class MCPClientService {
         }
 
         // --- MERGE DEFAULTS (Green Version Logic) ---
-        // If built-in servers are missing, add them (unless explicitly disabled? standard json doesn't track deleted well, so checking existence is safer for "built-in" re-add)
-        // Actually, if user deleted it, we might not want to re-add. But user asked for "Green version open, it is already configured".
-        // A simple heuristic: if map is completely empty, definitely add.
-        // Or check each default key, if missing, add it.
+        // 1. Prune Obsolete Built-ins
+        // If a server is marked 'builtin' but is no longer in DEFAULT_MCP_CONFIGS, remove it.
+        // This handles cases where we renamed or removed a built-in tool (e.g. 'git', 'time').
+        for (const key of Object.keys(masterConfig)) {
+            const config = masterConfig[key];
+            if (config.source === 'builtin' && !DEFAULT_MCP_CONFIGS[key]) {
+                console.log(`[MCP] Pruning obsolete built-in server: ${key}`);
+                delete masterConfig[key];
+            }
+        }
+
+        // 2. Add Missing Defaults
         for (const [key, defaultConfig] of Object.entries(DEFAULT_MCP_CONFIGS)) {
             if (!masterConfig[key]) {
                 masterConfig[key] = { ...defaultConfig };

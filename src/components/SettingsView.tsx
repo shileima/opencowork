@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Settings, FolderOpen, Server, Check, Plus, Trash2, Edit2, Zap, Eye, EyeOff, ExternalLink, AlertTriangle, ChevronDown, Loader2, Activity, Info } from 'lucide-react';
 
 import logo from '../assets/logo.png';
@@ -134,6 +134,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     });
 
     const [saved, setSaved] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const isFirstRender = useRef(true);
     const [activeTab, setActiveTab] = useState<'api' | 'folders' | 'mcp' | 'skills' | 'advanced' | 'about'>('api');
     const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
@@ -289,14 +291,30 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         window.ipcRenderer.invoke('skills:list').then(list => setSkills(list as SkillInfo[]));
     };
 
-    const handleSave = async () => {
-        await window.ipcRenderer.invoke('config:set-all', config);
-        setSaved(true);
-        setTimeout(() => {
-            setSaved(false);
-            onClose();
+    // Auto-save effect
+    useEffect(() => {
+        if (isFirstRender.current) {
+            isFirstRender.current = false;
+            return;
+        }
+
+        setIsSaving(true);
+        setSaved(false);
+
+        const timer = setTimeout(async () => {
+            try {
+                await window.ipcRenderer.invoke('config:set-all', config);
+                setIsSaving(false);
+                setSaved(true);
+                setTimeout(() => setSaved(false), 2000);
+            } catch (err) {
+                console.error('Auto-save failed:', err);
+                setIsSaving(false);
+            }
         }, 800);
-    };
+
+        return () => clearTimeout(timer);
+    }, [config]);
 
     const deleteSkill = async (filename: string) => {
         if (confirm(`确定要删除技能 "${filename}" 吗？`)) {
@@ -323,19 +341,20 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                 <div className="flex items-center justify-between p-4 border-b border-stone-100 dark:border-zinc-800 shrink-0">
                     <h2 className="text-lg font-semibold text-stone-800 dark:text-zinc-100">{t('settings')}</h2>
                     <div className="flex items-center gap-2">
-                        {activeTab === 'api' || activeTab === 'folders' || activeTab === 'advanced' ? (
-                            <button
-                                onClick={handleSave}
-                                disabled={saved}
-                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${saved
-                                    ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400'
-                                    : 'bg-orange-500 text-white hover:bg-orange-600'
-                                    }`}
-                            >
-                                {saved ? <Check size={14} /> : null}
-                                {saved ? t('saved') : t('save')}
-                            </button>
-                        ) : null}
+                        <div className="flex items-center gap-2 px-2">
+                            {isSaving && (
+                                <span className="text-xs text-stone-400 dark:text-zinc-500 flex items-center gap-1 bg-stone-100 dark:bg-zinc-800 px-2 py-1 rounded-full">
+                                    <Loader2 size={12} className="animate-spin" />
+                                    {t('saving') || 'Saving...'}
+                                </span>
+                            )}
+                            {saved && !isSaving && (
+                                <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1 animate-in fade-in slide-in-from-bottom-1 duration-300 bg-green-50 dark:bg-green-900/20 px-2 py-1 rounded-full border border-green-200 dark:border-green-800">
+                                    <Check size={12} />
+                                    {t('saved')}
+                                </span>
+                            )}
+                        </div>
                         <button
                             onClick={onClose}
                             className="p-1.5 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"

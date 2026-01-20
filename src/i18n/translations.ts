@@ -35,6 +35,7 @@ export const translations = {
         allowNetworkAccess: 'Allow Network Access',
         networkAccessHint: 'Enable Claude to make web requests (for MCP, research, etc.)',
         save: 'Save',
+        saving: 'Saving...',
         saved: 'Saved!',
 
         // Confirmation Dialog
@@ -250,6 +251,7 @@ export const translations = {
         allowNetworkAccess: '允许网络访问',
         networkAccessHint: '允许 Claude 进行网络请求（用于 MCP、研究等）',
         save: '保存',
+        saving: '保存中...',
         saved: '已保存！',
 
         // Confirmation Dialog
