@@ -219,6 +219,14 @@ export const translations = {
         newVersion: 'New version available: ',
 
         aboutDesc: 'Your intelligent work partner.',
+
+        // Max Tokens
+        maxTokens: 'Max Tokens',
+        maxTokensDesc: 'Default 131072, adjust based on API limits',
+
+        // Language names
+        simplifiedChinese: 'Simplified Chinese',
+        english: 'English',
     },
     zh: {
         // Navigation
@@ -434,6 +442,14 @@ export const translations = {
         newVersion: '发现新版本: ',
 
         aboutDesc: '你的智能工作伙伴。',
+
+        // Max Tokens
+        maxTokens: '最大 Token 数',
+        maxTokensDesc: '默认 131072，根据 API 限制调整',
+
+        // Language names
+        simplifiedChinese: '简体中文',
+        english: 'English',
     }
 };
 

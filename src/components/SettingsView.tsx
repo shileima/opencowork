@@ -21,6 +21,7 @@ interface ProviderConfig {
     apiKey: string;
     apiUrl: string;
     model: string;
+    maxTokens?: number;
     isCustom?: boolean;
     readonlyUrl?: boolean;
 }
@@ -467,8 +468,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                     className="w-full bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 appearance-none"
                                                 >
                                                     <option value="system">{t('system')}</option>
-                                                    <option value="zh">简体中文</option>
-                                                    <option value="en">English</option>
+                                                    <option value="zh">{t('simplifiedChinese')}</option>
+                                                    <option value="en">{t('english')}</option>
                                                 </select>
                                                 <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-stone-400 dark:text-zinc-500">
                                                     <Settings size={14} />
@@ -493,7 +494,6 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                             </div>
                                         </div>
                                     </div>
-                                    <div className="h-px bg-stone-100 dark:bg-zinc-800" />
                                 </div>
                                 {/* Provider Selection Custom Dropdown */}
                                 <div className="mb-4 relative z-10">
@@ -660,6 +660,35 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                     {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
                                                 </button>
                                             </div>
+
+                                            <div className="mt-3">
+                                                <div className="flex items-center justify-between mb-1.5">
+                                                    <label className="text-xs font-medium text-stone-500 dark:text-zinc-400">
+                                                        {t('maxTokens') || '最大 Token 数'}
+                                                    </label>
+                                                    <span className="text-[10px] text-stone-400 dark:text-zinc-500">
+                                                        {t('maxTokensDesc') || '默认 131072，根据 API 限制调整'}
+                                                    </span>
+                                                </div>
+                                                <input
+                                                    type="number"
+                                                    min="1"
+                                                    max="200000"
+                                                    value={config.providers[config.activeProviderId].maxTokens || 131072}
+                                                    onChange={(e) => {
+                                                        const value = parseInt(e.target.value) || 131072;
+                                                        const newProviders = { ...config.providers };
+                                                        newProviders[config.activeProviderId] = {
+                                                            ...newProviders[config.activeProviderId],
+                                                            maxTokens: value
+                                                        };
+                                                        setConfig({ ...config, providers: newProviders });
+                                                    }}
+                                                    onBlur={handleForceSave}
+                                                    className="w-full bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+                                                />
+                                            </div>
+
                                             <div className="flex justify-end items-center gap-2 mt-2">
                                                 {testResult && (
                                                     <span className={`text-xs ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>

@@ -308,7 +308,8 @@ ipcMain.handle('config:set-all', (_, cfg) => {
     agentInstance.updateConfig(
       configStore.getModel(),
       configStore.getApiUrl(),
-      configStore.getApiKey()
+      configStore.getApiKey(),
+      configStore.getMaxTokens()
     );
   });
 
@@ -718,7 +719,8 @@ function initializeAgent() {
     // Note: Don't dispose floatingBallAgent here as it will be created independently in createFloatingBallWindow
 
     // Create separate agent for main window only
-    mainAgent = new AgentRuntime(apiKey, mainWin, model, apiUrl);
+    const maxTokens = configStore.getMaxTokens();
+    mainAgent = new AgentRuntime(apiKey, mainWin, model, apiUrl, maxTokens);
 
     // Initialize the agent asynchronously
     mainAgent.initialize().then(() => {
@@ -983,7 +985,7 @@ function createFloatingBallWindow() {
       // Create floating ball agent with same config as main agent
       const apiKey = configStore.getApiKey() || process.env.ANTHROPIC_API_KEY
       if (apiKey && floatingBallWin) {
-        floatingBallAgent = new AgentRuntime(apiKey, floatingBallWin, configStore.getModel(), configStore.getApiUrl());
+        floatingBallAgent = new AgentRuntime(apiKey, floatingBallWin, configStore.getModel(), configStore.getApiUrl(), configStore.getMaxTokens());
 
         // Initialize the agent asynchronously
         floatingBallAgent.initialize().then(() => {

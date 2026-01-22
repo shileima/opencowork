@@ -12,6 +12,7 @@ export interface ProviderConfig {
     apiKey: string;
     apiUrl: string;
     model: string;
+    maxTokens?: number;
     isCustom?: boolean;
     readonlyUrl?: boolean;
 }
@@ -28,6 +29,8 @@ export interface AppConfig {
     providers: Record<string, ProviderConfig>;
 }
 
+const DEFAULT_MAX_TOKENS = 131072;
+
 // Default provider configurations
 const defaultProviders: Record<string, ProviderConfig> = {
     'glm': {
@@ -36,6 +39,7 @@ const defaultProviders: Record<string, ProviderConfig> = {
         apiKey: '',
         apiUrl: 'https://open.bigmodel.cn/api/anthropic',
         model: 'glm-4.7',
+        maxTokens: DEFAULT_MAX_TOKENS,
         readonlyUrl: true
     },
     'zai': {
@@ -44,6 +48,7 @@ const defaultProviders: Record<string, ProviderConfig> = {
         apiKey: '',
         apiUrl: 'https://api.z.ai/api/anthropic', // Placeholder, verify ZAI endpoint
         model: 'glm-4.7', // Assuming ZAI uses similar models or map later
+        maxTokens: DEFAULT_MAX_TOKENS,
         readonlyUrl: true
     },
     'minimax_cn': {
@@ -52,6 +57,7 @@ const defaultProviders: Record<string, ProviderConfig> = {
         apiKey: '',
         apiUrl: 'https://api.minimaxi.com/anthropic',
         model: 'MiniMax-M2.1',
+        maxTokens: DEFAULT_MAX_TOKENS,
         readonlyUrl: true
     },
     'minimax_intl': {
@@ -60,6 +66,7 @@ const defaultProviders: Record<string, ProviderConfig> = {
         apiKey: '',
         apiUrl: 'https://api.minimax.io/anthropic', // This uses Anthropic protocol
         model: 'MiniMax-M2.1',
+        maxTokens: DEFAULT_MAX_TOKENS,
         readonlyUrl: true
     },
     'custom': {
@@ -68,6 +75,7 @@ const defaultProviders: Record<string, ProviderConfig> = {
         apiKey: '',
         apiUrl: '',
         model: '',
+        maxTokens: DEFAULT_MAX_TOKENS,
         isCustom: true,
         readonlyUrl: false
     }
@@ -367,6 +375,25 @@ class ConfigStore {
 
     clearAllPermissions(): void {
         this.store.set('allowedPermissions', []);
+    }
+
+    // Max Tokens Configuration
+    getMaxTokens(): number {
+        const active = this.getActiveProviderId();
+        return this.getProvider(active)?.maxTokens || DEFAULT_MAX_TOKENS;
+    }
+
+    setMaxTokens(maxTokens: number): void {
+        const active = this.getActiveProviderId();
+        this.updateProvider(active, { maxTokens });
+    }
+
+    getProviderMaxTokens(providerId: string): number {
+        return this.getProvider(providerId)?.maxTokens || DEFAULT_MAX_TOKENS;
+    }
+
+    setProviderMaxTokens(providerId: string, maxTokens: number): void {
+        this.updateProvider(providerId, { maxTokens });
     }
 }
 

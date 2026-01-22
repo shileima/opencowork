@@ -28,11 +28,13 @@ export class AgentRuntime {
     private artifacts: { path: string; name: string; type: string }[] = [];
 
     private model: string;
+    private maxTokens: number;
     private lastProcessTime: number = 0;
 
-    constructor(apiKey: string, window: BrowserWindow, model: string = 'claude-3-5-sonnet-20241022', apiUrl: string = 'https://api.anthropic.com') {
+    constructor(apiKey: string, window: BrowserWindow, model: string = 'claude-3-5-sonnet-20241022', apiUrl: string = 'https://api.anthropic.com', maxTokens: number = 131072) {
         this.anthropic = new Anthropic({ apiKey, baseURL: apiUrl });
         this.model = model;
+        this.maxTokens = maxTokens;
         this.windows = [window];
         this.fsTools = new FileSystemTools();
         this.skillManager = new SkillManager();
@@ -62,10 +64,13 @@ export class AgentRuntime {
     }
 
     // Hot-Swap Configuration without reloading context
-    public updateConfig(model: string, apiUrl?: string, apiKey?: string) {
-        if (this.model === model && !apiUrl && !apiKey) return;
+    public updateConfig(model: string, apiUrl?: string, apiKey?: string, maxTokens?: number) {
+        if (this.model === model && !apiUrl && !apiKey && maxTokens === undefined) return;
 
         this.model = model;
+        if (maxTokens !== undefined) {
+            this.maxTokens = maxTokens;
+        }
         // Re-create Anthropic client if credentials change
         if (apiUrl || apiKey) {
             this.anthropic = new Anthropic({
@@ -73,7 +78,7 @@ export class AgentRuntime {
                 baseURL: apiUrl || this.anthropic.baseURL
             });
         }
-        console.log(`[Agent] Hot-Swap: Model updated to ${model}`);
+        console.log(`[Agent] Hot-Swap: Model updated to ${model}, maxTokens: ${this.maxTokens}`);
     }
 
     public removeWindow(win: BrowserWindow) {
@@ -296,7 +301,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                 // Pass abort signal to the API for true interruption
                 const stream: any = await this.anthropic.messages.create({
                     model: this.model,
-                    max_tokens: 131072,
+                    max_tokens: this.maxTokens,
                     system: systemPrompt,
                     messages: this.history,
                     stream: true,
