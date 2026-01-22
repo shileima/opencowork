@@ -737,9 +737,6 @@ function initializeAgent() {
   }
 }
 
-// Pre-compressed tray icon (16x16 PNG, base64 encoded) - Orange circle with "OC"
-const TRAY_ICON_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAHhJREFUOE+jtU1Ow0AMBue+b9J6Vd6AQBjK4WQgpOdQKjqGe6e0Hy+VL3y3c2dndmZmZkX1yCRbP80gnzMDNMgzDKK1/Wo4xigrlYpDAMI1o1jI2aUAJwzDmKYpRVEcx3mWZVhZWYNAv99f13UBKJXKMAwr+igCVFWVY8zyJEmff33P8xznPMN5nhKJRCgWi9i2zWq1otPpiEajQbPZRNf1RiAQIC0Wi7Esi5mYJMk0TVmW5bZtCCGQiGSYJkmSzWbDZrOhWCzCbreH1tYUpaO9DABmc/m+FqGfKwAAAABJRU5ErkJggg=='
-
 function createTray() {
   try {
     console.log('Creating system tray...')
@@ -750,50 +747,50 @@ function createTray() {
     tray = new Tray(iconPath);
     console.log('✅ System tray created successfully');
 
+    tray.setToolTip('OpenCowork')
+
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: '显示主窗口',
+        click: () => {
+          mainWin?.show()
+          mainWin?.focus()
+        }
+      },
+      {
+        label: '显示悬浮球',
+        click: () => {
+          floatingBallWin?.isVisible() ? floatingBallWin?.hide() : floatingBallWin?.show()
+        }
+      },
+      { type: 'separator' },
+      {
+        label: '退出',
+        click: () => {
+          app.isQuitting = true
+          app.quit()
+        }
+      }
+    ])
+
+    tray.setContextMenu(contextMenu)
+
+    tray.on('click', () => {
+      if (mainWin) {
+        if (mainWin.isVisible()) {
+          mainWin.hide()
+        } else {
+          mainWin.show()
+          mainWin.focus()
+        }
+      }
+    })
+
+    console.log('✅ Tray menu and click handlers configured')
+
   } catch (e) {
     console.error('❌ Failed to create system tray:', e)
   }
-
-  tray.setToolTip('OpenCowork')
-
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: '显示主窗口',
-      click: () => {
-        mainWin?.show()
-        mainWin?.focus()
-      }
-    },
-    {
-      label: '显示悬浮球',
-      click: () => {
-        floatingBallWin?.isVisible() ? floatingBallWin?.hide() : floatingBallWin?.show()
-      }
-    },
-    { type: 'separator' },
-    {
-      label: '退出',
-      click: () => {
-        app.isQuitting = true
-        app.quit()
-      }
-    }
-  ])
-
-  tray.setContextMenu(contextMenu)
-
-  tray.on('click', () => {
-    if (mainWin) {
-      if (mainWin.isVisible()) {
-        mainWin.hide()
-      } else {
-        mainWin.show()
-        mainWin.focus()
-      }
-    }
-  })
-
-  console.log('✅ Tray menu and click handlers configured')
 }
 
 function createMainWindow() {
