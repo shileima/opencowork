@@ -58,7 +58,7 @@ export interface MCPStatus {
 
 // --- Built-in Defaults ---
 const DEFAULT_MCP_CONFIGS: Record<string, MCPServerConfig> = {
-    // === 1. GLM (Zhipu) Suite (4) ===
+    // === 1. GLM (Zhipu) Suite ===
     "glm-mcp-server": {
         name: "glm-mcp-server",
         type: "stdio",
@@ -89,7 +89,7 @@ const DEFAULT_MCP_CONFIGS: Record<string, MCPServerConfig> = {
         source: 'builtin'
     },
 
-    // === 2. ZAI (Overseas) Suite (4) ===
+    // === 2. ZAI (Overseas) Suite ===
     "zai-mcp-server": {
         name: "zai-mcp-server",
         type: "stdio",
@@ -120,9 +120,9 @@ const DEFAULT_MCP_CONFIGS: Record<string, MCPServerConfig> = {
         source: 'builtin'
     },
 
-    // === 3. MiniMax Suite (2) ===
-    "minimax-cn": {
-        name: "minimax-cn",
+    // === 3. MiniMax Suite ===
+    "minimax-cn-mcp-server": {
+        name: "MiniMax-CN",
         type: "stdio",
         command: "uvx",
         args: ["minimax-coding-plan-mcp", "-y"],
@@ -130,11 +130,10 @@ const DEFAULT_MCP_CONFIGS: Record<string, MCPServerConfig> = {
             "MINIMAX_API_KEY": "{{MINIMAX_CN_API_KEY}}",
             "MINIMAX_API_HOST": "https://api.minimaxi.com"
         },
-        source: 'builtin',
-        disabled: true
+        source: 'builtin'
     },
-    "minimax-intl": {
-        name: "minimax-intl",
+    "minimax-intl-mcp-server": {
+        name: "MiniMax-INTL",
         type: "stdio",
         command: "uvx",
         args: ["minimax-coding-plan-mcp", "-y"],
@@ -142,8 +141,7 @@ const DEFAULT_MCP_CONFIGS: Record<string, MCPServerConfig> = {
             "MINIMAX_API_KEY": "{{MINIMAX_INTL_API_KEY}}",
             "MINIMAX_API_HOST": "https://api.minimax.io"
         },
-        source: 'builtin',
-        disabled: true
+        source: 'builtin'
     }
 };
 
@@ -152,6 +150,7 @@ export class MCPClientService {
     private clientStatus: Map<string, MCPStatus> = new Map();
     private activeConfigPath: string; // The standard mcp.json
     private storageConfigPath: string; // The internal storage (mcp_storage.json)
+    private toolNameMapping: Map<string, { serverName: string, originalToolName: string }> = new Map(); // Maps sanitized names to originals
 
     getActiveServers(): string[] {
         return Array.from(this.clients.keys());
@@ -295,8 +294,7 @@ export class MCPClientService {
 
         // 2. Add Missing Built-ins and Update Existing Built-ins
         // This ensures that built-in servers are always updated with the latest config
-        // For built-in servers, we ALWAYS use the builtin config's disabled status
-        // This allows developers to disable problematic servers via builtin-mcp.json
+        // CRITICAL: Preserve user's disabled setting for built-in servers
         let addedCount = 0;
         let updatedCount = 0;
         for (const [key, builtinConfig] of Object.entries(builtinConfigs)) {
@@ -307,25 +305,25 @@ export class MCPClientService {
                 addedCount++;
             } else {
                 // Server exists, UPDATE it with builtin config
-                // CRITICAL: For builtin servers, ALWAYS use builtin config's disabled status
-                // This allows us to disable problematic servers centrally
-                const oldDisabled = masterConfig[key].disabled;
-                const newDisabled = builtinConfig.disabled;
+                // PRESERVE user's disabled setting and name
+                const oldConfig = masterConfig[key];
+                const userDisabled = oldConfig.disabled;
+                const userName = oldConfig.name;
 
                 masterConfig[key] = {
                     ...builtinConfig,
-                    // Only preserve user-added data if it's not a builtin server
-                    ...(masterConfig[key].source === 'user' ? { name: masterConfig[key].name } : {})
+                    // Preserve user's custom name if they changed it
+                    name: userName || builtinConfig.name,
+                    // PRESERVE user's disabled setting - don't override it!
+                    disabled: userDisabled !== undefined ? userDisabled : builtinConfig.disabled,
+                    // Preserve user-added data if it's not a builtin server
+                    ...(oldConfig.source === 'user' ? { source: 'user' } : {})
                 };
 
-                if (oldDisabled !== newDisabled) {
-                    if (newDisabled) {
-                        console.log(`[MCP] ⚠️  Disabled built-in server: ${key}`);
-                    } else {
-                        console.log(`[MCP] ✓ Enabled built-in server: ${key}`);
-                    }
-                    updatedCount++;
+                if (builtinConfig.disabled !== userDisabled) {
+                    console.log(`[MCP] ℹ️  Built-in server ${key}: builtin disabled=${builtinConfig.disabled}, user disabled=${userDisabled}`);
                 }
+                updatedCount++;
             }
         }
 
@@ -348,9 +346,13 @@ export class MCPClientService {
             // Ensure name property exists or inject key
             if (!serverConfig.name) serverConfig.name = key;
 
+            // Debug log before checking disabled status
+            console.log(`[MCP] Checking ${key}: disabled=${serverConfig.disabled}`);
+
             this.updateStatus(key, 'stopped', undefined, serverConfig);
 
             if (!serverConfig.disabled) {
+                console.log(`[MCP] ${key} is ENABLED, attempting to connect...`);
                 // [Optimization] Push to array instead of awaiting sequentially
                 // Relaxed Timeout: Just log warning if slow, but don't fail.
                 // This allows background loading for slow servers without blocking.
@@ -375,6 +377,8 @@ export class MCPClientService {
                     }
                 };
                 connectionPromises.push(connectWithSafeTimeout());
+            } else {
+                console.log(`[MCP] ${key} is DISABLED, skipping connection.`);
             }
         }
 
@@ -403,6 +407,7 @@ export class MCPClientService {
     async getAllServers(): Promise<MCPStatus[]> {
         return Array.from(this.clientStatus.values());
     }
+
 
     // New Helper: Syncs Storage -> mcp.json
     private async syncActiveConfig(masterServers: Record<string, MCPServerConfig>) {
@@ -641,7 +646,7 @@ export class MCPClientService {
 
                 if (missingKey) {
                     console.log(`[MCP] Skipping connection to ${name}: Missing API Key.`);
-                    this.updateStatus(name, 'stopped', 'API Key not configured. Please check Settings.');
+                    this.updateStatus(name, 'error', 'Missing API Key: API Key not configured. Please check Settings.');
                     return;
                 }
 
@@ -771,7 +776,7 @@ export class MCPClientService {
 
                 if (missingKey) {
                     console.log(`[MCP] Skipping connection to ${name}: Missing API Key in ENV.`);
-                    this.updateStatus(name, 'stopped', 'API Key not configured in Settings.');
+                    this.updateStatus(name, 'error', 'Missing API Key: API Key not configured in Settings.');
                     return;
                 }
 
@@ -1011,8 +1016,53 @@ export class MCPClientService {
         }
     }
 
+    /**
+     * Sanitize tool name to comply with Anthropic API requirements.
+     * Tool names must match pattern: ^[a-zA-Z0-9_-]+$
+     * Converts Chinese and other non-ASCII characters to valid ASCII.
+     */
+    private sanitizeToolName(serverName: string, toolName: string): string {
+        // 1. Sanitize Server Name
+        let cleanServerName = serverName.replace(/[^a-zA-Z0-9_-]/g, '_');
+        if (!cleanServerName) cleanServerName = 'mcp_server';
+
+        // 2. Sanitize Tool Name
+        // Try to preserve original if valid
+        if (/^[a-zA-Z0-9_-]+$/.test(toolName)) {
+            // Ensure connection with server name doesn't create invalid sequence (e.g. empty server name)
+            return `${cleanServerName}__${toolName}`;
+        }
+
+        // 2b. If invalid, try to clean it up first (replace spaces/special chars with _)
+        let cleanToolName = toolName.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+        // Remove duplicate underscores for cleaner look
+        cleanToolName = cleanToolName.replace(/_+/g, '_');
+        // Remove leading/trailing underscores
+        cleanToolName = cleanToolName.replace(/^_+|_+$/g, '');
+
+        // If after cleaning it's valid and descriptive (length > 2), use it
+        if (/^[a-zA-Z0-9_-]+$/.test(cleanToolName) && cleanToolName.length > 2) {
+            return `${cleanServerName}__${cleanToolName}`;
+        }
+
+        // 3. Fallback: Hash-based name if cleaning failed or result too short
+        const hash = toolName.split('').reduce((acc, char) => {
+            return acc * 31 + char.charCodeAt(0);
+        }, 0);
+
+        const suffix = `tool_${Math.abs(hash).toString(16)}`;
+        return `${cleanServerName}__${suffix}`;
+    }
+
     async getTools(): Promise<{ name: string; description?: string; input_schema: Record<string, unknown> }[]> {
         const allTools: { name: string; description?: string; input_schema: Record<string, unknown> }[] = [];
+
+        // Clear and rebuild the mapping
+        this.toolNameMapping.clear();
+
+        console.log(`[MCP] Getting tools from ${this.clients.size} connected servers...`);
+        console.log(`[MCP] Connected servers: ${Array.from(this.clients.keys()).join(', ')}`);
 
         // Parallelize and timeout tool fetching
         const toolPromises = Array.from(this.clients.entries()).map(async ([name, client]) => {
@@ -1028,11 +1078,21 @@ export class MCPClientService {
                     timeoutPromise
                 ]);
 
-                return toolsList.tools.map(t => ({
-                    name: `${name}__${t.name}`,
-                    description: t.description || '',
-                    input_schema: t.inputSchema as Record<string, unknown>
-                }));
+                return toolsList.tools.map(t => {
+                    const sanitizedName = this.sanitizeToolName(name, t.name);
+
+                    // Store the mapping from sanitized name to original details
+                    this.toolNameMapping.set(sanitizedName, {
+                        serverName: name,
+                        originalToolName: t.name
+                    });
+
+                    return {
+                        name: sanitizedName,
+                        description: t.description || '',
+                        input_schema: t.inputSchema as Record<string, unknown>
+                    };
+                });
             } catch (e: any) {
                 console.error(`Error listing tools for ${name}: ${e.message}`);
                 // Update status if it looks like a connection drop
@@ -1046,16 +1106,34 @@ export class MCPClientService {
         const results = await Promise.all(toolPromises);
         results.forEach(tools => allTools.push(...tools));
 
+        console.log(`[MCP] Total tools loaded: ${allTools.length}`);
+        if (allTools.length > 0) {
+            console.log(`[MCP] Sample tools:`, allTools.slice(0, 3).map(t => t.name));
+
+            // Log all tool names to find the problematic one
+            console.log(`[MCP] All tool names:`);
+            allTools.forEach((tool, index) => {
+                const isValid = /^[a-zA-Z0-9_-]+$/.test(tool.name);
+                console.log(`  [${index}] ${tool.name} ${isValid ? '✓' : '❌ INVALID'}`);
+            });
+        }
+
         return allTools;
     }
 
     async callTool(name: string, args: Record<string, unknown>) {
-        const [serverName, toolName] = name.split('__');
+        // Look up the original tool name and server name from the mapping
+        const mapping = this.toolNameMapping.get(name);
+        if (!mapping) {
+            throw new Error(`Tool ${name} not found in mapping. The tool list may need to be refreshed.`);
+        }
+
+        const { serverName, originalToolName } = mapping;
         const client = this.clients.get(serverName);
         if (!client) throw new Error(`MCP Server ${serverName} is not connected`);
 
         const result = await client.callTool({
-            name: toolName,
+            name: originalToolName,
             arguments: args
         });
 

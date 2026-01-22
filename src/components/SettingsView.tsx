@@ -136,6 +136,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     const [saved, setSaved] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const isFirstRender = useRef(true);
+    // Track previous config to prevent redundant saves
+    const prevConfigRef = useRef<string>('');
     const [activeTab, setActiveTab] = useState<'api' | 'folders' | 'mcp' | 'skills' | 'advanced' | 'about'>('api');
     const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
@@ -143,7 +145,9 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
     const [appInfo, setAppInfo] = useState<{ name: string; version: string; author: string; homepage: string } | null>(null);
     const [checkingUpdate, setCheckingUpdate] = useState(false);
+
     const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean, latestVersion: string, releaseUrl: string } | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
         // Fetch app info
@@ -241,8 +245,28 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     }, []);
 
     useEffect(() => {
+        setIsLoading(true);
         window.ipcRenderer.invoke('config:get-all').then((cfg) => {
-            if (cfg) setConfig(cfg as Config);
+            if (cfg) {
+                const config = cfg as Config;
+                // Ensure all providers are initialized, including custom
+                const initializedProviders = { ...config.providers };
+                if (!initializedProviders['custom']) {
+                    initializedProviders['custom'] = {
+                        id: 'custom',
+                        name: '自定义',
+                        apiKey: '',
+                        apiUrl: '',
+                        model: '',
+                        isCustom: true
+                    };
+                }
+                setConfig({ ...config, providers: initializedProviders });
+                // Initialize baseline reference to avoid saving what we just loaded
+                prevConfigRef.current = JSON.stringify({ ...config, providers: initializedProviders });
+            }
+        }).finally(() => {
+            setIsLoading(false);
         });
     }, []);
 
@@ -283,9 +307,6 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         window.ipcRenderer.invoke('skills:list').then(list => setSkills(list as SkillInfo[]));
     };
 
-    // Track previous config to prevent redundant saves
-    const prevConfigRef = useRef<string>('');
-
     // Initialize prevConfigRef when config is first loaded
     useEffect(() => {
         if (config && prevConfigRef.current === '') {
@@ -293,37 +314,60 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         }
     }, [config]);
 
-    // Auto-save effect
+    // Reusable save function with force option
+    const saveConfig = async (cfg: Config, force: boolean = false) => {
+        // Prevent saving if still loading or if config is empty/default
+        if (isLoading) return;
+
+        const currentConfigStr = JSON.stringify(cfg);
+        if (!force && currentConfigStr === prevConfigRef.current) return;
+
+        setIsSaving(true);
+        setSaved(false);
+
+        try {
+            await window.ipcRenderer.invoke('config:set-all', cfg);
+            prevConfigRef.current = currentConfigStr;
+            setIsSaving(false);
+            setSaved(true);
+            setTimeout(() => setSaved(false), 2000);
+        } catch (err) {
+            console.error('Save failed:', err);
+            setIsSaving(false);
+        }
+    };
+
+    // Auto-save effect with reduced debounce
     useEffect(() => {
         if (isFirstRender.current) {
             isFirstRender.current = false;
             return;
         }
 
-        // Deep comparison to avoid false positives
-        const currentConfigStr = JSON.stringify(config);
-        if (currentConfigStr === prevConfigRef.current) {
-            return;
-        }
-
-        setIsSaving(true);
-        setSaved(false);
-
-        const timer = setTimeout(async () => {
-            try {
-                await window.ipcRenderer.invoke('config:set-all', config);
-                prevConfigRef.current = currentConfigStr; // Update ref only after successful save intent
-                setIsSaving(false);
-                setSaved(true);
-                setTimeout(() => setSaved(false), 2000);
-            } catch (err) {
-                console.error('Auto-save failed:', err);
-                setIsSaving(false);
-            }
-        }, 800);
+        const timer = setTimeout(() => {
+            saveConfig(config);
+        }, 500);
 
         return () => clearTimeout(timer);
     }, [config]);
+
+    // Force save on blur/close - saves immediately
+    const handleForceSave = async () => {
+        await saveConfig(config, true);
+    };
+
+    // Force save when switching tabs
+    useEffect(() => {
+        handleForceSave();
+    }, [activeTab]);
+
+    const handleClose = async () => {
+        // Force save before closing if pending
+        if (JSON.stringify(config) !== prevConfigRef.current) {
+            await saveConfig(config);
+        }
+        onClose();
+    };
 
     const deleteSkill = async (filename: string) => {
         if (confirm(`确定要删除技能 "${filename}" 吗？`)) {
@@ -345,7 +389,14 @@ export function SettingsView({ onClose }: SettingsViewProps) {
 
     return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-zinc-950 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col h-[85vh] border border-stone-200 dark:border-zinc-800">
+            <div className="bg-white dark:bg-zinc-950 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col h-[85vh] border border-stone-200 dark:border-zinc-800 relative">
+
+                {/* Loading Shield */}
+                {isLoading && (
+                    <div className="absolute inset-0 z-[60] bg-white/50 dark:bg-black/50 backdrop-blur-sm flex items-center justify-center">
+                        <Loader2 className="w-8 h-8 text-orange-500 animate-spin" />
+                    </div>
+                )}
                 {/* Header */}
                 <div className="flex items-center justify-between p-4 border-b border-stone-100 dark:border-zinc-800 shrink-0">
                     <h2 className="text-lg font-semibold text-stone-800 dark:text-zinc-100">{t('settings')}</h2>
@@ -365,7 +416,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                             )}
                         </div>
                         <button
-                            onClick={onClose}
+                            onClick={handleClose}
                             className="p-1.5 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
                         >
                             <X size={18} />
@@ -473,7 +524,9 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                     {Object.values(config.providers).map((provider) => (
                                                         <button
                                                             key={provider.id}
-                                                            onClick={() => {
+                                                            onClick={async () => {
+                                                                // Force save current provider config before switching
+                                                                await handleForceSave();
                                                                 setConfig({ ...config, activeProviderId: provider.id });
                                                                 setIsProviderOpen(false);
                                                             }}
@@ -511,6 +564,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                     setConfig({ ...config, providers: newProviders });
                                                 }}
                                                 readOnly={config.providers[config.activeProviderId].readonlyUrl}
+                                                onBlur={handleForceSave}
                                                 className={`w-full border border-stone-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 ${config.providers[config.activeProviderId].readonlyUrl ? 'bg-stone-50 dark:bg-zinc-800 text-stone-500 dark:text-zinc-500 cursor-not-allowed' : 'bg-white dark:bg-zinc-900'}`}
                                             />
                                         </div>
@@ -531,6 +585,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                         setConfig({ ...config, providers: newProviders });
                                                     }}
                                                     placeholder={t('inputModelName')}
+                                                    onBlur={handleForceSave}
                                                     className="w-full bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
                                                 />
                                             ) : (
@@ -593,6 +648,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                         setConfig({ ...config, providers: newProviders });
                                                     }}
                                                     placeholder={t('apiKeyPlaceholder')}
+                                                    onBlur={handleForceSave}
                                                     className="w-full bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 pr-9"
                                                 />
                                                 <button

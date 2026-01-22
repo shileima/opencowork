@@ -37,6 +37,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     const [streamingText, setStreamingText] = useState('');
     const [workingDir, setWorkingDir] = useState<string | null>(null);
     const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
+    const [error, setError] = useState<string | null>(null);
     const [showHistory, setShowHistory] = useState(false);
     const [sessions, setSessions] = useState<SessionSummary[]>([]);
     const [config, setConfig] = useState<any>(null);
@@ -62,6 +63,12 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
         const removeStreamListener = window.ipcRenderer.on('agent:stream-token', (_event, ...args) => {
             const token = args[0] as string;
             setStreamingText(prev => prev + token);
+        });
+
+        // Listen for config updates from main process (e.g. settings change)
+        const removeConfigListener = window.ipcRenderer.on('config:updated', (_event, newConfig) => {
+            console.log('[CoworkView] Config updated:', newConfig);
+            setConfig(newConfig);
         });
 
         // Clear streaming when history updates and save session
@@ -107,6 +114,13 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             setPermissionRequest(null);
         });
 
+        // Listen for error events
+        const removeErrorListener = window.ipcRenderer.on('agent:error', (_event, msg) => {
+            console.error('[CoworkView] Received agent error:', msg);
+            setError(msg as string);
+            setStreamingText(''); // Stop streaming effect on error
+        });
+
         return () => {
             // Save session on unmount to prevent data loss
             if (history && history.length > 0) {
@@ -130,9 +144,12 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             }
 
             removeStreamListener?.();
+            removeConfigListener?.();
             removeHistoryListener?.();
             removeConfirmListener?.();
+            removeConfirmListener?.();
             removeAbortListener?.();
+            removeErrorListener?.();
         };
     }, []);
 
@@ -238,6 +255,38 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                             >
                                 <Check size={16} />
                                 {t('allow')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+
+
+            {/* Error Dialog Overlay */}
+            {error && (
+                <div className="absolute inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-zinc-900 rounded-2xl p-6 w-full max-w-md shadow-xl animate-in fade-in zoom-in-95 duration-200 border border-red-200 dark:border-red-900/50">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                                <AlertTriangle size={24} className="text-red-600 dark:text-red-400" />
+                            </div>
+                            <div>
+                                <h3 className="font-semibold text-stone-800 dark:text-zinc-100 text-lg">{t('error') || 'Error'}</h3>
+                            </div>
+                        </div>
+
+                        <div className="text-stone-600 dark:text-zinc-300 mb-6 whitespace-pre-wrap text-sm max-h-[60vh] overflow-y-auto">
+                            {error}
+                        </div>
+
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setError(null)}
+                                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-stone-800 hover:bg-stone-900 dark:bg-zinc-700 dark:hover:bg-zinc-600 rounded-xl transition-colors"
+                            >
+                                <X size={16} />
+                                {t('close') || 'Close'}
                             </button>
                         </div>
                     </div>

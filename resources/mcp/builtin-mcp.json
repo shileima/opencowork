@@ -111,5 +111,5 @@
   },
   "version": "1.0.2",
   "lastUpdated": "2025-01-21",
-  "notes": "Updated API endpoints and npm package names for ZAI and MiniMax based on official documentation"
+  "notes": "Updated API endpoints and npm package names for ZAI and MiniMax based on official documentation. Tool name sanitization has been added to handle any non-ASCII characters in tool names."
 }

@@ -232,9 +232,19 @@ export class SkillManager {
             const instructions = parts.slice(2).join('---').trim();
 
             if (frontmatter && frontmatter.name && frontmatter.description) {
-                console.log(`[SkillManager] Successfully loaded ${frontmatter.name}`);
-                this.skills.set(frontmatter.name, {
-                    name: frontmatter.name,
+                // Sanitize name for API usage
+                const originalName = frontmatter.name;
+                const sanitizedName = this.sanitizeName(originalName);
+
+                if (sanitizedName !== originalName) {
+                    console.log(`[SkillManager] Sanitized skill name: "${originalName}" -> "${sanitizedName}"`);
+                }
+
+                console.log(`[SkillManager] Successfully loaded ${sanitizedName}`);
+
+                // Key map by sanitized name so the AgentRuntime can find it exactly as the model calls it
+                this.skills.set(sanitizedName, {
+                    name: sanitizedName, // This is what the model sees
                     description: frontmatter.description,
                     input_schema: frontmatter.input_schema || { type: 'object', properties: {} },
                     instructions: instructions
@@ -279,5 +289,28 @@ export class SkillManager {
             instructions: skill.instructions,
             skillDir: skillDir
         };
+    }
+
+
+    /**
+     * Sanitize skill name to comply with ^[a-zA-Z0-9_-]+$
+     */
+    private sanitizeName(name: string): string {
+        // 1. Replace invalid chars with underscore
+        let clean = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+        // 2. Remove duplicate underscores
+        clean = clean.replace(/_+/g, '_');
+
+        // 3. Remove leading/trailing underscores
+        clean = clean.replace(/^_+|_+$/g, '');
+
+        // 4. Fallback if empty
+        if (!clean) {
+            const hash = name.split('').reduce((acc, char) => acc * 31 + char.charCodeAt(0), 0);
+            return `skill_${Math.abs(hash).toString(16)}`;
+        }
+
+        return clean;
     }
 }

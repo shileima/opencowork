@@ -44,7 +44,14 @@ export function ChatInput({
     const getModelDisplayName = (cfg: any) => {
         if (!cfg || !cfg.activeProviderId || !cfg.providers) return 'Loading...';
         const p = cfg.providers[cfg.activeProviderId];
-        return p ? `${p.model}` : 'Unknown';
+        if (!p) return 'Unknown';
+
+        // For custom provider, display custom model name or 'Custom Model'
+        if (cfg.activeProviderId === 'custom') {
+            return p.model || 'Custom Model';
+        }
+
+        return p.model || 'Unknown';
     };
 
     const PROVIDER_NAMES: Record<string, string> = {
@@ -233,9 +240,29 @@ export function ChatInput({
                                             <div className="absolute bottom-full left-0 mb-2 w-48 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-xl shadow-xl z-20 max-h-64 overflow-y-auto py-1 animate-in slide-in-from-bottom-2 fade-in duration-200">
                                                 {Object.keys(PROVIDER_MODELS).map(providerId => {
                                                     const models = PROVIDER_MODELS[providerId];
-                                                    const providerName = config.providers[providerId]?.name || PROVIDER_NAMES[providerId] || providerId;
+                                                    const provider = config.providers[providerId];
 
-                                                    if (providerId === 'custom') {
+                                                    // Filter out providers that are not properly configured
+                                                    // For custom: require both apiKey and model
+                                                    // For others: require apiKey
+                                                    const isCustom = providerId === 'custom';
+                                                    const hasApiKey = provider?.apiKey && provider.apiKey.trim() !== '';
+                                                    const hasModel = provider?.model && provider.model.trim() !== '';
+                                                    const isConfigured = isCustom ? (hasApiKey && hasModel) : hasApiKey;
+
+                                                    if (!isConfigured) {
+                                                        return null;
+                                                    }
+
+                                                    // Use custom model name if available
+                                                    let providerName = PROVIDER_NAMES[providerId] || providerId;
+                                                    if (isCustom) {
+                                                        providerName = provider?.name || '自定义';
+                                                    } else {
+                                                        providerName = provider?.name || providerName;
+                                                    }
+
+                                                    if (isCustom) {
                                                         return (
                                                             <div key={providerId}>
                                                                 <div className="px-3 py-1.5 text-[10px] font-bold text-stone-400 dark:text-zinc-500 bg-stone-50/50 dark:bg-zinc-800/50 uppercase tracking-wider">
@@ -250,7 +277,7 @@ export function ChatInput({
                                                                     }}
                                                                     className={`w-full text-left px-3 py-1.5 text-xs hover:bg-orange-50 dark:hover:bg-orange-500/10 transition-colors truncate flex items-center justify-between group ${config.activeProviderId === providerId ? 'text-orange-600 dark:text-orange-400 bg-orange-50/50 dark:bg-orange-500/10' : 'text-stone-600 dark:text-zinc-300'}`}
                                                                 >
-                                                                    <span>{config.providers[providerId]?.model || 'Custom Model'}</span>
+                                                                    <span>{provider?.model || 'Custom Model'}</span>
                                                                     {config.activeProviderId === providerId && <Check size={12} />}
                                                                 </button>
                                                             </div>
@@ -288,6 +315,18 @@ export function ChatInput({
                                                         </div>
                                                     );
                                                 })}
+                                                {/* Show message if no providers are configured */}
+                                                {Object.keys(PROVIDER_MODELS).every(providerId => {
+                                                    const provider = config.providers[providerId];
+                                                    const isCustom = providerId === 'custom';
+                                                    const hasApiKey = provider?.apiKey && provider.apiKey.trim() !== '';
+                                                    const hasModel = provider?.model && provider.model.trim() !== '';
+                                                    return !(isCustom ? (hasApiKey && hasModel) : hasApiKey);
+                                                }) && (
+                                                    <div className="px-3 py-4 text-xs text-stone-400 dark:text-zinc-500 text-center">
+                                                        请先在设置中配置API Key
+                                                    </div>
+                                                )}
                                             </div>
                                         </>
                                     )}

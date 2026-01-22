@@ -312,6 +312,11 @@ ipcMain.handle('config:set-all', (_, cfg) => {
     );
   });
 
+  // [Fix] Broadcast config update to all windows so UI can refresh immediately
+  BrowserWindow.getAllWindows().forEach(win => {
+    win.webContents.send('config:updated', cfg);
+  });
+
   // If no agents exist, initialize them
   if (!mainAgent && !floatingBallAgent) {
     initializeAgent();
@@ -739,29 +744,14 @@ function createTray() {
   try {
     console.log('Creating system tray...')
 
-    // Use pre-compressed base64 icon (instant, no processing needed)
-    const trayIconBuffer = Buffer.from(TRAY_ICON_BASE64, 'base64')
-    const trayIcon = nativeImage.createFromBuffer(trayIconBuffer)
-
-    if (trayIcon.isEmpty()) {
-      throw new Error('Failed to create tray icon from buffer')
-    }
-
-    tray = new Tray(trayIcon)
-    console.log('✅ System tray created successfully')
+    // Use file path instead of base64 buffer to avoid "Failed to create tray icon from buffer" error
+    const iconPath = getIconPath();
+    console.log('Using tray icon path:', iconPath);
+    tray = new Tray(iconPath);
+    console.log('✅ System tray created successfully');
 
   } catch (e) {
     console.error('❌ Failed to create system tray:', e)
-    // Try fallback to file-based icon
-    try {
-      const iconPath = getIconPath()
-      console.log('Trying fallback icon:', iconPath)
-      tray = new Tray(iconPath)
-      console.log('✅ System tray created with fallback icon')
-    } catch (fallbackError) {
-      console.error('❌ All tray creation attempts failed:', fallbackError)
-      return
-    }
   }
 
   tray.setToolTip('OpenCowork')

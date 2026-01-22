@@ -112,6 +112,17 @@ export function FloatingBallPage() {
         const removeErrorListener = window.ipcRenderer.on('agent:error', (_event, ...args) => {
             const error = args[0] as string;
             console.error('Agent Error:', error);
+
+            // Add error message to chat so user can see it
+            const errorMessage: Message = {
+                role: 'assistant',
+                content: `⚠️ **错误发生**
+
+${error}
+
+请检查配置后重试。如果问题持续存在，请查看控制台日志获取更多信息。`
+            };
+            setMessages(prev => [...prev, errorMessage]);
             setIsProcessing(false);
             setStreamingText('');
         });

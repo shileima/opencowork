@@ -165,14 +165,32 @@ export class AgentRuntime {
             await this.runLoop();
 
         } catch (error: unknown) {
-            const err = error as { status?: number; message?: string };
+            const err = error as { status?: number; message?: string; error?: { message?: string; type?: string } };
             console.error('Agent Loop Error:', error);
 
             // [Fix] Handle MiniMax/provider sensitive content errors gracefully
             if (err.status === 500 && (err.message?.includes('sensitive') || JSON.stringify(error).includes('1027'))) {
                 this.broadcast('agent:error', 'AI Provider Error: The generated content was flagged as sensitive and blocked by the provider.');
+            } else if (err.error?.type === 'invalid_request_error' && err.error?.message?.includes('tools[')) {
+                // Tool name validation error - provide helpful message
+                this.broadcast('agent:error', `配置错误: MCP 工具名称格式不正确\n\n详细信息: ${err.error.message}\n\n这通常是因为 MCP 服务器返回的工具名称包含了特殊字符（如中文）。请尝试：\n1. 禁用有问题的 MCP 服务器\n2. 或联系开发者修复此问题\n\n错误代码: ${err.status || 400}`);
+            } else if (err.status === 400) {
+                // Generic 400 error with details
+                const details = err.error?.message || err.message || 'Unknown error';
+                this.broadcast('agent:error', `请求错误 (400): ${details}\n\n请检查：\n- API Key 是否正确\n- API 地址是否有效\n- 模型名称是否正确`);
+            } else if (err.status === 401) {
+                this.broadcast('agent:error', `认证失败 (401): API Key 无效或已过期\n\n请检查您的 API Key 配置。`);
+            } else if (err.status === 429) {
+                this.broadcast('agent:error', `请求过多 (429): API 调用频率超限\n\n请稍后再试或升级您的 API 套餐。`);
+            } else if (err.status === 500) {
+                this.broadcast('agent:error', `服务器错误 (500): AI 服务提供商出现问题\n\n${err.message || '请稍后再试。'}`);
+            } else if (err.status === 503) {
+                this.broadcast('agent:error', `服务不可用 (503): AI 服务暂时无法访问\n\n请稍后再试或检查服务状态。`);
             } else {
-                this.broadcast('agent:error', err.message || 'An unknown error occurred');
+                // Generic error with full details
+                const errorMsg = err.message || err.error?.message || 'An unknown error occurred';
+                const statusInfo = err.status ? `[${err.status}] ` : '';
+                this.broadcast('agent:error', `${statusInfo}${errorMsg}`);
             }
         } finally {
             // Force reload MCP clients on next run if we had an error, to ensure fresh connection

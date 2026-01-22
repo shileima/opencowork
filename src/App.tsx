@@ -25,6 +25,17 @@ function App() {
     const removeErrorListener = window.ipcRenderer.on('agent:error', (_event, ...args) => {
       const err = args[0] as string;
       console.error("Agent Error:", err);
+
+      // Add error message to chat history so user can see it
+      const errorMessage: Anthropic.MessageParam = {
+        role: 'assistant',
+        content: `⚠️ **错误发生**
+
+${err}
+
+请检查配置后重试。如果问题持续存在，请查看控制台日志获取更多信息。`
+      };
+      setHistory(prev => [...prev, errorMessage]);
       setIsProcessing(false);
     });
 
