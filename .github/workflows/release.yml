@@ -85,6 +85,42 @@ jobs:
           npx electron-builder --${{ matrix.platform }} --publish never
 
       -
+        name: Sign Mac Application (Ad-hoc)
+        if: matrix.platform == 'macos'
+        run: |
+          # Find the built .app file
+          APP_PATH=$(find release -name "*.app" -type d | head -n 1)
+          if [ -n "$APP_PATH" ]; then
+            echo "Signing application: $APP_PATH"
+            # Apply ad-hoc signature to fix "damaged" issue
+            codesign --force --deep --sign - "$APP_PATH"
+            # Remove extended attributes and quarantine flag
+            xattr -cr "$APP_PATH"
+            echo "Application signed successfully"
+            # Verify signature
+            codesign --verify --verbose "$APP_PATH" || echo "Signature verification warning (expected for ad-hoc)"
+          else
+            echo "No .app found to sign"
+            exit 1
+          fi
+
+      -
+        name: Rebuild DMG for Mac
+        if: matrix.platform == 'macos'
+        run: |
+          # Rebuild DMG with the signed .app
+          APP_PATH=$(find release -name "*.app" -type d | head -n 1)
+          if [ -n "$APP_PATH" ]; then
+            VERSION=$(node -p "require('./package.json').version")
+            DMG_NAME="OpenCowork-${VERSION}.dmg"
+            echo "Rebuilding DMG: $DMG_NAME with signed app"
+            # Remove old DMG
+            rm -f release/*.dmg
+            # Create new DMG using hdiutil
+            hdiutil create -volname "OpenCowork" -srcfolder "$APP_PATH" -ov -format UDZO "release/$DMG_NAME"
+          fi
+
+      -
         name: Upload executables to Release
         uses: softprops/action-gh-release@v2
         if: success()

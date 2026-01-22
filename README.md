@@ -98,6 +98,36 @@ Special thanks to our partners for their support:
 
 ---
 
+## Installation
+
+### macOS Users Notice
+
+Due to macOS security mechanisms, you may see a "damaged" or "unidentified developer" warning when first opening the app. Follow these steps:
+
+**Method 1: Right-click to Open (Recommended)**
+1. Right-click on `OpenCowork.app`
+2. Select "Open"
+3. Click "Open" in the dialog
+
+**Method 2: System Settings**
+1. Open "System Settings" → "Privacy & Security"
+2. Find the message about OpenCowork being blocked
+3. Click "Open Anyway"
+
+**Method 3: Command Line (Advanced Users)**
+```bash
+# Remove quarantine attribute
+sudo xattr -rd com.apple.quarantine /Applications/OpenCowork.app
+```
+
+> **Note:** This warning appears because the app is not officially signed by Apple (requires a paid developer account). The app is safe and the code is fully open source - you can build it yourself.
+
+### Windows and Linux
+
+Simply download and install the appropriate package for your platform.
+
+---
+
 ## Documentation
 
 - [Configuration Guide](./docs/configuration.md)
