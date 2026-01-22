@@ -100,27 +100,41 @@ Special thanks to our partners for their support:
 
 ## Installation
 
-### macOS Users Notice
+### ⚠️ macOS Users - Important Notice
 
-Due to macOS security mechanisms, you may see a "damaged" or "unidentified developer" warning when first opening the app. Follow these steps:
+**The app may show as "damaged" on first launch**
 
-**Method 1: Right-click to Open (Recommended)**
-1. Right-click on `OpenCowork.app`
-2. Select "Open"
-3. Click "Open" in the dialog
+**Why:** macOS blocks unsigned apps from the internet. This app is not signed with an official Apple developer certificate (requires paid account).
 
-**Method 2: System Settings**
-1. Open "System Settings" → "Privacy & Security"
-2. Find the message about OpenCowork being blocked
-3. Click "Open Anyway"
+**Solutions (choose one):**
 
-**Method 3: Command Line (Advanced Users)**
+**Method 1: Process DMG after Download (Recommended)**
 ```bash
-# Remove quarantine attribute
+# Run in terminal after downloading DMG (before installing)
+xattr -cr ~/Downloads/OpenCowork*.dmg
+
+# Then install normally (drag to Applications)
+```
+
+**Method 2: Right-click to Open**
+```bash
+Right-click OpenCowork.app → Select "Open" → Click "Open"
+```
+
+**Method 3: System Settings**
+```bash
+System Settings → Privacy & Security → Click "Open Anyway"
+```
+
+**Method 4: Command Line (if already installed)**
+```bash
 sudo xattr -rd com.apple.quarantine /Applications/OpenCowork.app
 ```
 
-> **Note:** This warning appears because the app is not officially signed by Apple (requires a paid developer account). The app is safe and the code is fully open source - you can build it yourself.
+> **Safety Guarantee:** The app is completely safe and open-source:
+> - View source code: [github.com/Safphere/opencowork](https://github.com/Safphere/opencowork)
+> - Build it yourself: `npm install && npm run build`
+> - Join our community to ask other users
 
 ### Windows and Linux
 

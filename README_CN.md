@@ -102,25 +102,42 @@ OpenCowork 允许 AI 操作本地文件系统和终端，使用前请注意：
 
 ### macOS 用户注意事项
 
-由于 macOS 的安全机制，首次打开应用时可能会提示"已损坏"或"来自身份不明开发者"。请按以下步骤操作：
+⚠️ **重要：应用可能会提示"已损坏"**
 
-**方法一：右键打开（推荐）**
-1. 右键点击 `OpenCowork.app`
-2. 选择"打开"
-3. 在弹出对话框中点击"打开"
+**原因：** macOS 会阻止来自互联网的未签名应用运行。由于本应用未进行 Apple 官方签名（需要付费开发者账号），首次打开时需要您手动允许。
 
-**方法二：系统设置**
-1. 打开"系统设置" → "隐私与安全性"
-2. 找到"OpenCowork"被阻止的消息
-3. 点击"仍要打开"
+**解决方法（任选其一）：**
 
-**方法三：命令行（高级用户）**
+**方法一：下载后立即处理（推荐，一劳永逸）**
+
+下载 DMG 后，在安装前先运行：
 ```bash
-# 移除隔离属性
+# 1. 下载 DMG 后，在终端运行（替换 YOUR_USERNAME 为你的用户名）
+xattr -cr ~/Downloads/OpenCowork*.dmg
+
+# 2. 然后正常安装（拖拽到 Applications）
+```
+
+**方法二：右键打开应用**
+```bash
+# 右键点击 OpenCowork.app → 选择"打开" → 点击"打开"
+```
+
+**方法三：系统设置允许**
+```bash
+# 系统设置 → 隐私与安全性 → 点击"仍要打开"
+```
+
+**方法四：命令行移除隔离**
+```bash
+# 如果已安装到 Applications，运行：
 sudo xattr -rd com.apple.quarantine /Applications/OpenCowork.app
 ```
 
-> **说明：** 该提示是因为应用未进行 Apple 官方签名（需要付费开发者账号）。应用本身是安全的，代码完全开源，您可以自行构建。
+> **安全说明：** 应用本身完全安全，代码已开源。您可以：
+> - 查看完整源代码：[github.com/Safphere/opencowork](https://github.com/Safphere/opencowork)
+> - 自行构建：`npm install && npm run build`
+> - 加入交流群咨询其他用户
 
 ### Windows 和 Linux
 
