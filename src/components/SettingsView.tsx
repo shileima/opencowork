@@ -996,7 +996,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                 </div>
                                 <div className="space-y-2">
                                     <h3 className="text-xl font-bold text-stone-800 dark:text-zinc-100">
-                                        {appInfo?.name || 'OpenCowork'}
+                                        {appInfo?.name || '测试助手'}
                                     </h3>
                                     <p className="text-sm font-mono text-stone-500 dark:text-zinc-500">
                                         v{appInfo?.version || '1.0.0'}
@@ -1024,7 +1024,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                     >
                                         <span className="text-sm text-stone-500 dark:text-zinc-400">{t('homepage') || 'Homepage'}</span>
                                         <div className="flex items-center gap-1.5">
-                                            <span className="text-sm font-medium text-stone-700 dark:text-zinc-200 group-hover:text-orange-500 transition-colors">Safphere/opencowork</span>
+                                            <span className="text-sm font-medium text-stone-700 dark:text-zinc-200 group-hover:text-orange-500 transition-colors">Safphere/qacowork</span>
                                             <ExternalLink size={14} className="text-stone-400 dark:text-zinc-500 group-hover:text-orange-500 transition-colors" />
                                         </div>
                                     </a>

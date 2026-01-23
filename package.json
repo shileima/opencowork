@@ -1,19 +1,11 @@
 {
-  "name": "opencowork",
+  "name": "qacowork",
   "private": true,
-  "version": "1.1.6",
-  "description": "open cowork - 你的数字同事",
+  "version": "0.0.1",
+  "description": "qa cowork - 你的数字测试同事",
   "author": {
     "name": "Safphere",
     "email": "a976466014@gmail.com"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Safphere/opencowork.git"
-  },
-  "homepage": "https://github.com/Safphere/opencowork#readme",
-  "bugs": {
-    "url": "https://github.com/Safphere/opencowork/issues"
   },
   "license": "Apache-2.0",
   "type": "module",

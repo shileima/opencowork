@@ -91,7 +91,7 @@ ${err}
       >
         <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <img src="./icon.png" alt="Logo" className="w-6 h-6 rounded-md object-cover" />
-          <span className="font-medium text-stone-700 dark:text-zinc-200 text-sm">OpenCowork</span>
+          <span className="font-medium text-stone-700 dark:text-zinc-200 text-sm">测试助手</span>
         </div>
 
         {!navigator.userAgent.includes('Mac') && (
