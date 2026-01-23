@@ -4,6 +4,7 @@ import { ChatInput } from './ChatInput';
 import { useI18n } from '../i18n/I18nContext';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import Anthropic from '@anthropic-ai/sdk';
+import { CopyButton } from './CopyButton';
 
 type Mode = 'chat' | 'work';
 
@@ -459,8 +460,13 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                             {streamingText && (
                                 <div className="animate-in fade-in duration-200">
                                     <div className="text-stone-700 dark:text-zinc-300 text-[15px] leading-7 max-w-none">
-                                        <MarkdownRenderer content={streamingText} isDark={true} />
-                                        <span className="inline-block w-2 h-5 bg-orange-500 ml-0.5 animate-pulse" />
+                                        <div className="relative group">
+                                            <MarkdownRenderer content={streamingText} isDark={true} />
+                                            <span className="inline-block w-2 h-5 bg-orange-500 ml-0.5 animate-pulse" />
+                                            <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <CopyButton content={streamingText} size="sm" />
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             )}
@@ -543,8 +549,13 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
                     </div>
                 )}
                 {text && (
-                    <div className="user-bubble inline-block">
-                        {text}
+                    <div className="relative group inline-block">
+                        <div className="user-bubble">
+                            {text}
+                        </div>
+                        <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <CopyButton content={text} size="sm" />
+                        </div>
                     </div>
                 )}
             </div>
@@ -580,7 +591,12 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
                 if (block.type === 'text' && block.text) {
                     return (
                         <div key={i} className="text-stone-700 dark:text-zinc-300 text-[15px] leading-7 max-w-none">
-                            <MarkdownRenderer content={block.text} isDark={true} />
+                            <div className="relative group">
+                                <MarkdownRenderer content={block.text} isDark={true} />
+                                <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <CopyButton content={block.text} size="sm" />
+                                </div>
+                            </div>
                         </div>
                     );
                 }

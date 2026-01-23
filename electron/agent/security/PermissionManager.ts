@@ -38,7 +38,7 @@ export class PermissionManager {
     }
 
     getAuthorizedFolders(): string[] {
-        return configStore.getAuthorizedFolders().map(f => path.resolve(f));
+        return configStore.getAuthorizedFolders().map(f => path.resolve(f.path));
     }
 
     setNetworkAccess(enabled: boolean): void {

@@ -7,6 +7,61 @@ import { MCPClientService } from './mcp/MCPClientService';
 import { permissionManager } from './security/PermissionManager';
 import { configStore } from '../config/ConfigStore';
 import os from 'os';
+import fs from 'fs';
+
+// Safe commands that can be auto-approved in standard/trust modes
+const SAFE_COMMANDS = [
+    'python', 'python3', 'node', 'npm', 'pip', 'pip3', 'git', 'ls', 'cat', 'head', 'tail',
+    'grep', 'find', 'echo', 'pwd', 'cd', 'ls -la', 'ls -l', 'ls -a', 'tree', 'wc', 'sort',
+    'uniq', 'diff', 'patch', 'tar', 'unzip', 'zip', 'gzip', 'gunzip', 'bunzip2',
+    'curl', 'wget', 'ping', 'traceroute', 'netstat', 'ps', 'top', 'htop'
+];
+
+// Dangerous patterns that always require confirmation
+const DANGEROUS_PATTERNS = [
+    /rm\s+-rf\s+/i, /rm\s+-r\s+/i, /del\s+\/s\s+\/q/i, /rd\s+\/s\s+\/q/i,
+    /format\s+/i, /mkfs/i, /dd\s+if=/i, /shred/i,
+    />\s*\/?dev\/(null|sda|sdb)/i, /2>\s*&1\s*>\s*\/dev\/null/i,
+    /chmod\s+777/i, /chmod\s+-R\s+777/i, /chown\s+-R/i
+];
+
+// Check if a command is considered safe
+function isSafeCommand(command: string): boolean {
+    const trimmedCmd = command.trim();
+    const baseCmd = trimmedCmd.split(' ')[0].toLowerCase();
+
+    // Check if base command is in safe list
+    if (SAFE_COMMANDS.some(safe => baseCmd === safe || trimmedCmd.startsWith(safe + ' '))) {
+        return true;
+    }
+
+    // Check for dangerous patterns
+    if (DANGEROUS_PATTERNS.some(pattern => pattern.test(trimmedCmd))) {
+        return false;
+    }
+
+    // Read-only git commands are safe
+    if (/^git\s+(log|show|diff|status|branch|remote|ls-files)/i.test(trimmedCmd)) {
+        return true;
+    }
+
+    // Python/node with script files are generally safe
+    if ((baseCmd === 'python' || baseCmd === 'python3' || baseCmd === 'node') &&
+        (trimmedCmd.endsWith('.py') || trimmedCmd.endsWith('.js') || trimmedCmd.endsWith('.ts'))) {
+        return true;
+    }
+
+    return false;
+}
+
+// Check if a write operation is potentially dangerous (overwriting existing file)
+function isDangerousWrite(path: string): boolean {
+    try {
+        return fs.existsSync(path);
+    } catch {
+        return false;
+    }
+}
 
 
 export type AgentMessage = {
@@ -431,7 +486,24 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     if (!permissionManager.isPathAuthorized(args.path)) {
                                         result = `Error: Path ${args.path} is not in an authorized folder.`;
                                     } else {
-                                        const approved = await this.requestConfirmation(toolUse.name, `Write to file: ${args.path}`, args);
+                                        // Check trust level for write operations
+                                        const trustLevel = configStore.getFileTrustLevel(args.path);
+                                        const isNewFile = !isDangerousWrite(args.path);
+
+                                        let approved = false;
+
+                                        if (trustLevel === 'trust') {
+                                            // Trust mode: auto-approve all writes
+                                            approved = true;
+                                        } else if (trustLevel === 'standard') {
+                                            // Standard mode: first write needs confirmation, subsequent auto-approved
+                                            // For simplicity: new files auto, existing files need confirm
+                                            approved = isNewFile || await this.requestConfirmation(toolUse.name, `Write to file: ${args.path}`, args);
+                                        } else {
+                                            // Strict mode: always confirm
+                                            approved = await this.requestConfirmation(toolUse.name, `Write to file: ${args.path}`, args);
+                                        }
+
                                         if (approved) {
                                             result = await this.fsTools.writeFile(args);
                                             const fileName = args.path.split(/[\\/]/).pop() || 'file';
@@ -452,8 +524,43 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     const args = toolUse.input as { command: string, cwd?: string };
                                     const defaultCwd = authorizedFolders[0] || process.cwd();
 
-                                    // Require confirmation for command execution
-                                    const approved = await this.requestConfirmation(toolUse.name, `Execute command: ${args.command}`, args);
+                                    // Determine trust level from the working directory
+                                    const trustLevel = args.cwd
+                                        ? configStore.getFileTrustLevel(args.cwd)
+                                        : configStore.getFileTrustLevel(defaultCwd);
+
+                                    // Check if command is dangerous (always requires confirmation)
+                                    const isDangerous = DANGEROUS_PATTERNS.some(pattern => pattern.test(args.command.trim()));
+                                    if (isDangerous) {
+                                        // Dangerous commands always need confirmation
+                                        const approved = await this.requestConfirmation(toolUse.name, `Execute command: ${args.command}`, args);
+                                        if (approved) {
+                                            result = await this.fsTools.runCommand(args, defaultCwd);
+                                        } else {
+                                            result = 'User denied the command execution.';
+                                        }
+                                        return;
+                                    }
+
+                                    // Check if command is safe
+                                    const isSafe = isSafeCommand(args.command);
+
+                                    let approved = false;
+
+                                    if (trustLevel === 'trust') {
+                                        // Trust mode: auto-approve safe commands
+                                        approved = true;
+                                    } else if (trustLevel === 'standard') {
+                                        // Standard mode: auto-approve safe commands
+                                        approved = isSafe;
+                                        if (!approved) {
+                                            approved = await this.requestConfirmation(toolUse.name, `Execute command: ${args.command}`, args);
+                                        }
+                                    } else {
+                                        // Strict mode: always confirm
+                                        approved = await this.requestConfirmation(toolUse.name, `Execute command: ${args.command}`, args);
+                                    }
+
                                     if (approved) {
                                         result = await this.fsTools.runCommand(args, defaultCwd);
                                     } else {
@@ -481,6 +588,34 @@ ${skillInfo.instructions}
 ---`;
                                     } else if (toolUse.name.includes('__')) {
                                         result = await this.mcpService.callTool(toolUse.name, toolUse.input as Record<string, unknown>);
+                                    } else if (toolUse.name.startsWith('mcp_')) {
+                                        // Handle MCP Management Skill Tools
+                                        const args = toolUse.input as any;
+                                        if (toolUse.name === 'mcp_get_all_servers') {
+                                            result = JSON.stringify(await this.mcpService.getAllServers(), null, 2);
+                                        } else if (toolUse.name === 'mcp_add_server') {
+                                            result = JSON.stringify(await this.mcpService.addServer(args.json_config), null, 2);
+                                        } else if (toolUse.name === 'mcp_remove_server') {
+                                            result = JSON.stringify(await this.mcpService.removeServer(args.name), null, 2);
+                                        } else if (toolUse.name === 'mcp_toggle_server') {
+                                            result = JSON.stringify(await this.mcpService.toggleServer(args.name, args.enabled), null, 2);
+                                        } else if (toolUse.name === 'mcp_diagnose_server') {
+                                            const status = (await this.mcpService.getAllServers()).find(s => s.name === args.name);
+                                            if (status) {
+                                                result = JSON.stringify(await this.mcpService.diagnoseServer(args.name, status.config), null, 2);
+                                            } else {
+                                                result = JSON.stringify({ success: false, message: "Server not found" });
+                                            }
+                                        } else if (toolUse.name === 'mcp_retry_connection') {
+                                            // Force reconnect
+                                            const status = (await this.mcpService.getAllServers()).find(s => s.name === args.name);
+                                            if (status) {
+                                                await this.mcpService['connectToServer'](status.name, status.config);
+                                                result = `Retry initiated for ${args.name}`;
+                                            } else {
+                                                result = `Server ${args.name} not found`;
+                                            }
+                                        }
                                     }
                                 }
                                 // Check if input has parse error

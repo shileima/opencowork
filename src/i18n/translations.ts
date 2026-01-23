@@ -227,6 +227,36 @@ export const translations = {
         // Language names
         simplifiedChinese: 'Simplified Chinese',
         english: 'English',
+
+        // Trust Levels
+        trustTrust: 'Trust',
+        trustStrict: 'Strict',
+        trustStandard: 'Standard',
+        trustLevelInfo: 'Trust Level Settings',
+        removeFolder: 'Remove folder',
+        trustStrictDesc: 'All operations require confirmation. Maximum security, more prompts.',
+        trustStandardDesc: 'Safe ops auto-approved, danger confirms. Balanced security and convenience.',
+        trustTrustDesc: 'All operations auto-approved. Suitable for trusted environments.',
+        trustLevelSetting: 'Trust Level',
+        trustLevelSettingDesc: 'Set trust level for this folder',
+
+        // Trust Level Columns
+        trustColRead: 'Read File',
+        trustColList: 'List Dir',
+        trustColWrite: 'Write File',
+        trustColSafeCmd: 'Safe Command',
+        trustColDangerCmd: 'Danger Command',
+        trustColAuto: 'Auto',
+        trustColConfirm: 'Confirm',
+        trustColDeny: 'Deny',
+
+        // Trust Level Warning
+        trustDangerWarning: 'Dangerous commands (rm -rf, format, dd) always require confirmation regardless of trust level',
+
+        // Trust Level Short Labels
+        trustStrictShort: 'All Confirm',
+        trustStandardShort: 'Safe Auto',
+        trustTrustShort: 'All Auto',
     },
     zh: {
         // Navigation
@@ -450,6 +480,36 @@ export const translations = {
         // Language names
         simplifiedChinese: '简体中文',
         english: 'English',
+
+        // Trust Levels
+        trustTrust: '信任',
+        trustStrict: '严格',
+        trustStandard: '标准',
+        trustLevelInfo: '信任级别设置',
+        removeFolder: '移除文件夹',
+        trustStrictDesc: '所有操作都需要确认。最高安全性，但提示较多。',
+        trustStandardDesc: '安全操作自动批准，危险命令需确认。安全与便利的平衡。',
+        trustTrustDesc: '所有操作自动批准。适用于受信任的环境。',
+        trustLevelSetting: '信任等级',
+        trustLevelSettingDesc: '设置此文件夹的信任等级',
+
+        // Trust Level Columns
+        trustColRead: '读取文件',
+        trustColList: '列目录',
+        trustColWrite: '写入文件',
+        trustColSafeCmd: '安全命令',
+        trustColDangerCmd: '危险命令',
+        trustColAuto: '自动',
+        trustColConfirm: '确认',
+        trustColDeny: '拒绝',
+
+        // Trust Level Warning
+        trustDangerWarning: '危险命令（rm -rf、format、dd）无论信任级别如何都需要确认',
+
+        // Trust Level Short Labels
+        trustStrictShort: '全部确认',
+        trustStandardShort: '安全自动',
+        trustTrustShort: '全部自动',
     }
 };
 

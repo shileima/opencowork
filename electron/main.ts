@@ -5,7 +5,7 @@ import os from 'node:os'
 import fs from 'node:fs'
 import dotenv from 'dotenv'
 import { AgentRuntime } from './agent/AgentRuntime'
-import { configStore } from './config/ConfigStore'
+import { configStore, TrustLevel } from './config/ConfigStore'
 import { sessionStore } from './config/SessionStore'
 import Anthropic from '@anthropic-ai/sdk'
 
@@ -264,8 +264,8 @@ ipcMain.handle('session:current', () => {
 
 ipcMain.handle('agent:authorize-folder', (_, folderPath: string) => {
   const folders = configStore.getAll().authorizedFolders || []
-  if (!folders.includes(folderPath)) {
-    folders.push(folderPath)
+  if (!folders.some(f => f.path === folderPath)) {
+    folders.push({ path: folderPath, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() })
     configStore.set('authorizedFolders', folders)
   }
   return true
@@ -273,6 +273,16 @@ ipcMain.handle('agent:authorize-folder', (_, folderPath: string) => {
 
 ipcMain.handle('agent:get-authorized-folders', () => {
   return configStore.getAll().authorizedFolders || []
+})
+
+// Folder Trust Level Management
+ipcMain.handle('folder:trust:set', (_, { folderPath, level }: { folderPath: string, level: 'strict' | 'standard' | 'trust' }) => {
+  configStore.setFolderTrustLevel(folderPath, level)
+  return { success: true }
+})
+
+ipcMain.handle('folder:trust:get', (_, folderPath: string) => {
+  return configStore.getFileTrustLevel(folderPath)
 })
 
 // Permission Management
@@ -293,7 +303,9 @@ ipcMain.handle('permissions:clear', () => {
 ipcMain.handle('agent:set-working-dir', (_, folderPath: string) => {
   // Set as first (primary) in the list
   const folders = configStore.getAll().authorizedFolders || []
-  const newFolders = [folderPath, ...folders.filter(f => f !== folderPath)]
+  const existing = folders.find(f => f.path === folderPath)
+  const otherFolders = folders.filter(f => f.path !== folderPath)
+  const newFolders = existing ? [existing, ...otherFolders] : [{ path: folderPath, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() }, ...otherFolders]
   configStore.set('authorizedFolders', newFolders)
   return true
 })
