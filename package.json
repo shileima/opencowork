@@ -10,7 +10,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
-    "dev": "chcp 65001 && vite",
+    "dev": "vite",
     "build": "node scripts/verify-builtin-resources.cjs && tsc && vite build && electron-builder",
     "build:dir": "node scripts/verify-builtin-resources.cjs && tsc && vite build && electron-builder --dir",
     "build:icons": "node scripts/build-icons.mjs",

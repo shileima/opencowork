@@ -431,15 +431,11 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     if (!permissionManager.isPathAuthorized(args.path)) {
                                         result = `Error: Path ${args.path} is not in an authorized folder.`;
                                     } else {
-                                        const approved = await this.requestConfirmation(toolUse.name, `Write to file: ${args.path}`, args);
-                                        if (approved) {
-                                            result = await this.fsTools.writeFile(args);
-                                            const fileName = args.path.split(/[\\/]/).pop() || 'file';
-                                            this.artifacts.push({ path: args.path, name: fileName, type: 'file' });
-                                            this.broadcast('agent:artifact-created', { path: args.path, name: fileName, type: 'file' });
-                                        } else {
-                                            result = 'User denied the write operation.';
-                                        }
+                                        // 如果路径在已授权的文件夹中，直接写入，无需确认
+                                        result = await this.fsTools.writeFile(args);
+                                        const fileName = args.path.split(/[\\/]/).pop() || 'file';
+                                        this.artifacts.push({ path: args.path, name: fileName, type: 'file' });
+                                        this.broadcast('agent:artifact-created', { path: args.path, name: fileName, type: 'file' });
                                     }
                                 } else if (toolUse.name === 'list_dir') {
                                     const args = toolUse.input as { path: string };
