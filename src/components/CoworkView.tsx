@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, memo, useCallback } from 'react';
-import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, ChevronUp, MessageCircle, Download } from 'lucide-react';
+import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, ChevronUp, MessageCircle, Download, Play } from 'lucide-react';
 import { ChatInput } from './ChatInput';
 import { useI18n } from '../i18n/I18nContext';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import Anthropic from '@anthropic-ai/sdk';
 
-type Mode = 'chat' | 'work';
+type Mode = 'chat' | 'work' | 'automation';
 
 interface PermissionRequest {
     id: string;
@@ -17,6 +17,14 @@ interface PermissionRequest {
 interface SessionSummary {
     id: string;
     title: string;
+    createdAt: number;
+    updatedAt: number;
+}
+
+interface Script {
+    id: string;
+    name: string;
+    filePath: string;
     createdAt: number;
     updatedAt: number;
 }
@@ -40,10 +48,13 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     const [error, setError] = useState<string | null>(null);
     const [showHistory, setShowHistory] = useState(false);
     const [sessions, setSessions] = useState<SessionSummary[]>([]);
+    const [showScripts, setShowScripts] = useState(false);
+    const [scripts, setScripts] = useState<Script[]>([]);
     const [config, setConfig] = useState<any>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
+    const isLoadingSessionRef = useRef(false);
 
     const scrollToBottom = () => {
         if (scrollRef.current) {
@@ -75,6 +86,13 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
         const removeHistoryListener = window.ipcRenderer.on('agent:history-update', async (_event, ...args) => {
             const newHistory = args[0] as Anthropic.MessageParam[];
             setStreamingText('');
+            
+            // 如果正在加载会话，不自动保存（避免覆盖已加载的会话）
+            if (isLoadingSessionRef.current) {
+                isLoadingSessionRef.current = false;
+                return;
+            }
+            
             // Auto-save session only if there's meaningful content
             if (newHistory && newHistory.length > 0) {
                 const hasRealContent = newHistory.some(msg => {
@@ -94,6 +112,17 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                         const result = await window.ipcRenderer.invoke('session:save', newHistory) as { success: boolean; sessionId?: string; error?: string };
                         if (!result.success) {
                             console.error('[CoworkView] Failed to save session:', result.error);
+                        } else {
+                            // 无论历史任务列表是否打开，都刷新列表（如果列表打开的话）
+                            // 这样可以确保新保存的会话能及时显示
+                            if (showHistory) {
+                                // 延迟一下，确保会话已保存到存储
+                                setTimeout(() => {
+                                    window.ipcRenderer.invoke('session:list').then((list) => {
+                                        setSessions(list as SessionSummary[]);
+                                    });
+                                }, 300);
+                            }
                         }
                     } catch (error) {
                         console.error('[CoworkView] Error saving session:', error);
@@ -161,6 +190,28 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             });
         }
     }, [showHistory]);
+
+    // 定期刷新历史任务列表（当列表打开时）
+    useEffect(() => {
+        if (!showHistory) return;
+        
+        const interval = setInterval(() => {
+            window.ipcRenderer.invoke('session:list').then((list) => {
+                setSessions(list as SessionSummary[]);
+            });
+        }, 2000); // 每2秒刷新一次
+        
+        return () => clearInterval(interval);
+    }, [showHistory]);
+
+    // Fetch scripts list when scripts panel is opened
+    useEffect(() => {
+        if (showScripts) {
+            window.ipcRenderer.invoke('script:list').then((list) => {
+                setScripts(list as Script[]);
+            });
+        }
+    }, [showScripts]);
 
     useEffect(() => {
         scrollToBottom();
@@ -334,6 +385,17 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                             <Zap size={14} />
                             {t('cowork')}
                         </button>
+                        <button
+                            onClick={() => {
+                                setMode('automation');
+                                setShowScripts(true);
+                            }}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'automation' ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm' : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
+                                }`}
+                        >
+                            <Play size={14} />
+                            {t('automation')}
+                        </button>
                     </div>
                 </div>
 
@@ -346,7 +408,17 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                     )}
                     <div className="flex items-center gap-1">
                         <button
-                            onClick={() => window.ipcRenderer.invoke('agent:new-session')}
+                            onClick={async () => {
+                                await window.ipcRenderer.invoke('agent:new-session');
+                                // 刷新历史任务列表（如果打开的话）
+                                if (showHistory) {
+                                    setTimeout(() => {
+                                        window.ipcRenderer.invoke('session:list').then((list) => {
+                                            setSessions(list as SessionSummary[]);
+                                        });
+                                    }, 100);
+                                }
+                            }}
                             className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded-lg transition-colors"
                             title={t('newSession')}
                         >
@@ -372,70 +444,201 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
 
             {/* History Panel - Floating Popover */}
             {showHistory && (
-                <div className="absolute top-12 right-6 z-20 w-80 bg-white dark:bg-zinc-900 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-800 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100 dark:border-zinc-800 bg-stone-50/50 dark:bg-zinc-800/50">
-                        <div className="flex items-center gap-2">
-                            <History size={14} className="text-orange-500" />
-                            <span className="text-sm font-semibold text-stone-700 dark:text-zinc-200">{t('taskHistory')}</span>
-                        </div>
-                        <button
-                            onClick={() => setShowHistory(false)}
-                            className="p-1 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
-                        >
-                            <X size={14} />
-                        </button>
-                    </div>
-
-                    <div className="max-h-[320px] overflow-y-auto p-2">
-                        {sessions.length === 0 ? (
-                            <div className="py-8 text-center">
-                                <p className="text-sm text-stone-400 dark:text-zinc-500">{t('noHistorySessions')}</p>
+                <>
+                    {/* Backdrop - 点击外部关闭 */}
+                    <div
+                        className="fixed inset-0 z-10"
+                        onClick={() => setShowHistory(false)}
+                    />
+                    {/* History Panel */}
+                    <div 
+                        className="absolute top-12 right-6 z-20 w-80 bg-white dark:bg-zinc-900 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-800 overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100 dark:border-zinc-800 bg-stone-50/50 dark:bg-zinc-800/50">
+                            <div className="flex items-center gap-2">
+                                <History size={14} className="text-orange-500" />
+                                <span className="text-sm font-semibold text-stone-700 dark:text-zinc-200">{t('taskHistory')}</span>
                             </div>
-                        ) : (
-                            <div className="space-y-1">
-                                {sessions.map((session) => (
-                                    <div
-                                        key={session.id}
-                                        className="group relative p-3 rounded-lg hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors border border-transparent hover:border-stone-100 dark:hover:border-zinc-700"
-                                    >
-                                        <p className="text-xs font-medium text-stone-700 dark:text-zinc-300 line-clamp-2 leading-relaxed">
-                                            {session.title}
-                                        </p>
-                                        <p className="text-[10px] text-stone-400 mt-1">
-                                            {new Date(session.updatedAt).toLocaleString('zh-CN', {
-                                                month: 'short',
-                                                day: 'numeric',
-                                                hour: '2-digit',
-                                                minute: '2-digit'
-                                            })}
-                                        </p>
-                                        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                                onClick={() => setShowHistory(false)}
+                                className="p-1 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+
+                        <div className="max-h-[320px] overflow-y-auto p-2">
+                            {sessions.length === 0 ? (
+                                <div className="py-8 text-center">
+                                    <p className="text-sm text-stone-400 dark:text-zinc-500">{t('noHistorySessions')}</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-1">
+                                    {sessions.map((session) => (
+                                        <div
+                                            key={session.id}
+                                            className="group relative p-3 rounded-lg hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors border border-transparent hover:border-stone-100 dark:hover:border-zinc-700"
+                                        >
+                                            <p className="text-xs font-medium text-stone-700 dark:text-zinc-300 line-clamp-2 leading-relaxed">
+                                                {session.title}
+                                            </p>
+                                            <p className="text-[10px] text-stone-400 mt-1">
+                                                {new Date(session.updatedAt).toLocaleString('zh-CN', {
+                                                    month: 'short',
+                                                    day: 'numeric',
+                                                    hour: '2-digit',
+                                                    minute: '2-digit'
+                                                })}
+                                            </p>
+                                            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <button
+                                                    onClick={async () => {
+                                                        // 标记正在加载会话，避免自动保存覆盖
+                                                        isLoadingSessionRef.current = true;
+                                                        const result = await window.ipcRenderer.invoke('session:load', session.id) as { success: boolean; error?: string };
+                                                        if (result.success) {
+                                                            setShowHistory(false);
+                                                        } else {
+                                                            isLoadingSessionRef.current = false;
+                                                            console.error('[CoworkView] Failed to load session:', result.error);
+                                                        }
+                                                    }}
+                                                    className="text-[10px] flex items-center gap-1 text-orange-500 hover:text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full"
+                                                >
+                                                    {t('load')}
+                                                </button>
+                                                <button
+                                                    onClick={async (e) => {
+                                                        e.stopPropagation();
+                                                        await window.ipcRenderer.invoke('session:delete', session.id);
+                                                        setSessions(sessions.filter(s => s.id !== session.id));
+                                                    }}
+                                                    className="p-1 text-stone-400 hover:text-red-500 transition-colors"
+                                                >
+                                                    <Trash2 size={12} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </>
+            )}
+
+            {/* Scripts Panel - Floating Popover */}
+            {showScripts && (
+                <>
+                    {/* Backdrop - 点击外部关闭 */}
+                    <div
+                        className="fixed inset-0 z-10"
+                        onClick={() => {
+                            setShowScripts(false);
+                            if (mode === 'automation') {
+                                setMode('work');
+                            }
+                        }}
+                    />
+                    {/* Scripts Panel */}
+                    <div 
+                        className="absolute top-12 right-6 z-20 w-80 bg-white dark:bg-zinc-900 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-800 overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100 dark:border-zinc-800 bg-stone-50/50 dark:bg-zinc-800/50">
+                            <div className="flex items-center gap-2">
+                                <Play size={14} className="text-orange-500" />
+                                <span className="text-sm font-semibold text-stone-700 dark:text-zinc-200">{t('automationScripts')}</span>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    setShowScripts(false);
+                                    if (mode === 'automation') {
+                                        setMode('work');
+                                    }
+                                }}
+                                className="p-1 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+
+                        <div className="max-h-[320px] overflow-y-auto p-2">
+                            {scripts.length === 0 ? (
+                                <div className="py-8 text-center">
+                                    <p className="text-sm text-stone-400 dark:text-zinc-500">{t('noScripts')}</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-1">
+                                    {scripts.map((script) => (
+                                        <div
+                                            key={script.id}
+                                            className="group relative p-3 rounded-lg hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors border border-transparent hover:border-stone-100 dark:hover:border-zinc-700"
+                                        >
+                                            <p className="text-xs font-medium text-stone-700 dark:text-zinc-300 line-clamp-2 leading-relaxed">
+                                                {script.name}
+                                            </p>
+                                            <p className="text-[10px] text-stone-400 mt-1">
+                                                {new Date(script.updatedAt).toLocaleString('zh-CN', {
+                                                    month: 'short',
+                                                    day: 'numeric',
+                                                    hour: '2-digit',
+                                                    minute: '2-digit'
+                                                })}
+                                            </p>
+                                            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                             <button
-                                                onClick={() => {
-                                                    window.ipcRenderer.invoke('session:load', session.id);
-                                                    setShowHistory(false);
+                                                onClick={async () => {
+                                                    // 立即关闭浮层
+                                                    setShowScripts(false);
+                                                    setMode('work');
+                                                    
+                                                    try {
+                                                        // 执行脚本（script:execute 内部会创建新会话）
+                                                        const result = await window.ipcRenderer.invoke('script:execute', script.id) as { success: boolean; error?: string; sessionId?: string };
+                                                        if (!result.success) {
+                                                            setError(result.error || '执行脚本失败');
+                                                        }
+                                                        // 注意：会话会在 agent:history-update 事件触发时自动保存和刷新列表
+                                                    } catch (err) {
+                                                        setError('执行脚本时出错');
+                                                        console.error(err);
+                                                    }
                                                 }}
                                                 className="text-[10px] flex items-center gap-1 text-orange-500 hover:text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full"
                                             >
-                                                {t('load')}
+                                                {t('execute')}
                                             </button>
-                                            <button
-                                                onClick={async (e) => {
-                                                    e.stopPropagation();
-                                                    await window.ipcRenderer.invoke('session:delete', session.id);
-                                                    setSessions(sessions.filter(s => s.id !== session.id));
-                                                }}
-                                                className="p-1 text-stone-400 hover:text-red-500 transition-colors"
-                                            >
-                                                <Trash2 size={12} />
-                                            </button>
+                                                <button
+                                                    onClick={async (e) => {
+                                                        e.stopPropagation();
+                                                        // 确认删除
+                                                        const confirmMessage = script.name === 'index' 
+                                                            ? `确定要删除脚本 "${script.name}" 吗？\n\n注意：index.js 可能是系统文件，删除后可能影响功能。`
+                                                            : `确定要删除脚本 "${script.name}" 吗？\n\n此操作将永久删除文件，无法恢复。`;
+                                                        
+                                                        if (window.confirm(confirmMessage)) {
+                                                            const result = await window.ipcRenderer.invoke('script:delete', script.id) as { success: boolean };
+                                                            if (result.success) {
+                                                                setScripts(scripts.filter(s => s.id !== script.id));
+                                                            } else {
+                                                                setError('删除脚本失败，请检查文件权限');
+                                                            }
+                                                        }
+                                                    }}
+                                                    className="p-1 text-stone-400 hover:text-red-500 transition-colors"
+                                                >
+                                                    <Trash2 size={12} />
+                                                </button>
+                                            </div>
                                         </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
-                </div>
+                </>
             )}
 
             {/* Messages Area - Narrower for better readability */}
@@ -657,14 +860,16 @@ function EmptyState({ mode, workingDir }: { mode: Mode, workingDir: string | nul
             </div>
             <div className="space-y-2">
                 <h2 className="text-xl font-semibold text-stone-800 dark:text-zinc-100">
-                    {mode === 'chat' ? '测试助手' : '测试助手'}
+                    {mode === 'chat' ? '测试助手' : mode === 'automation' ? '自动化脚本' : '测试助手'}
                 </h2>
                 <p className="text-stone-500 dark:text-zinc-400 text-sm max-w-xs">
                     {mode === 'work' && !workingDir
                         ? '请先选择一个工作目录来开始任务'
                         : mode === 'work' && workingDir
                             ? `工作目录: ${workingDir.split(/[\\/]/).pop()}`
-                            : t('startByDescribing')
+                            : mode === 'automation'
+                                ? '点击上方"自动化"标签查看可用脚本'
+                                : t('startByDescribing')
                     }
                 </p>
             </div>
