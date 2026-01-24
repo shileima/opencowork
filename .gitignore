@@ -31,3 +31,6 @@ build
 !build/entitlements.mac.plist
 .qa-cowork
 .opencowork
+
+# Built-in Playwright (large files)
+resources/playwright/

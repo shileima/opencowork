@@ -3,6 +3,7 @@ import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getBuiltinNodePath } from '../../utils/NodePath';
+import { getPlaywrightEnvVars } from '../../utils/PlaywrightPath';
 
 const execAsync = promisify(exec);
 
@@ -101,16 +102,28 @@ export class FileSystemTools {
             // 匹配：node 前后是空白字符、引号、行首或行尾
             const nodeRegex = /(^|\s|["'])\bnode\b(\s|$|["'])/g;
             const nodeCommand = builtinNodePath.includes(' ') ? `"${builtinNodePath}"` : builtinNodePath;
-            command = command.replace(nodeRegex, (match, before, after) => {
+            command = command.replace(nodeRegex, (_match, before, after) => {
                 // 保留前后的空白字符或引号
                 return `${before}${nodeCommand}${after}`;
             });
         }
 
         try {
+            // 获取 Playwright 环境变量
+            const playwrightEnv = getPlaywrightEnvVars();
+            const env = {
+                ...process.env,
+                ...playwrightEnv
+            };
+            
             console.log(`[FileSystemTools] Executing command: ${command} in ${workingDir}`);
+            if (Object.keys(playwrightEnv).length > 0) {
+                console.log(`[FileSystemTools] Playwright env vars: ${JSON.stringify(playwrightEnv)}`);
+            }
+            
             const { stdout, stderr } = await execAsync(command, {
                 cwd: workingDir,
+                env: env,
                 timeout: timeout,
                 maxBuffer: 1024 * 1024 * 10, // 10MB buffer
                 encoding: 'utf-8',

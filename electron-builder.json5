@@ -41,6 +41,11 @@
       "from": "resources/node",
       "to": "node",
       "filter": ["**/*"]
+    },
+    {
+      "from": "resources/playwright",
+      "to": "playwright",
+      "filter": ["**/*"]
     }
   ],
   "mac": {
