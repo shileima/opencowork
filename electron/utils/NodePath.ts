@@ -69,8 +69,8 @@ export function getBuiltinNodePath(): string {
 /**
  * 获取内置 npm 可执行文件路径
  * 
- * npm 通常位于 Node.js 安装目录的 lib/node_modules/npm/bin/npm
- * 或者与 node 在同一目录下（某些发行版）
+ * 注意：npm 脚本会在 process.execPath 的目录下查找 node_modules/npm/bin/npm-cli.js
+ * 但我们的 npm 模块在 lib/node_modules/npm，所以需要特殊处理
  * 
  * 开发环境：返回 'npm'（使用系统安装的 npm）
  * 生产环境：返回内置 npm 的完整路径，如果不存在则回退到 'npm'
@@ -98,7 +98,7 @@ export function getBuiltinNpmPath(): string {
     path.join(nodeDir, 'lib', 'node_modules', 'npm', 'bin', platform === 'win32' ? 'npm.cmd' : 'npm'),
     // 方式3: npm 在父目录的 lib/node_modules/npm/bin/ 目录
     path.join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', platform === 'win32' ? 'npm.cmd' : 'npm'),
-    // 方式4: npm 在 node_modules/npm/bin/ 目录
+    // 方式4: npm 在 node_modules/npm/bin/ 目录（npm 脚本期望的位置）
     path.join(nodeDir, 'node_modules', 'npm', 'bin', platform === 'win32' ? 'npm.cmd' : 'npm'),
   ];
 
@@ -119,6 +119,33 @@ export function getBuiltinNpmPath(): string {
   // 如果内置 npm 不存在，回退到系统 npm
   console.warn(`[NodePath] Built-in npm not found, falling back to system npm`);
   return 'npm';
+}
+
+/**
+ * 获取 npm-cli.js 路径（用于直接使用 node 执行）
+ * 
+ * 当 npm 脚本无法正常工作时，可以直接使用 node 执行 npm-cli.js
+ * 
+ * @returns npm-cli.js 路径，如果不存在则返回 null
+ */
+export function getBuiltinNpmCliJsPath(): string | null {
+  if (!app.isPackaged) {
+    return null;
+  }
+
+  const nodeDir = getBuiltinNodeDir();
+  if (!nodeDir) {
+    return null;
+  }
+
+  // npm-cli.js 在 lib/node_modules/npm/bin/npm-cli.js
+  const npmCliJsPath = path.join(nodeDir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  
+  if (fs.existsSync(npmCliJsPath)) {
+    return npmCliJsPath;
+  }
+
+  return null;
 }
 
 /**

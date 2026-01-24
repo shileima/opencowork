@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { getBuiltinNodePath, getBuiltinNpmPath, getNpmEnvVars } from '../../utils/NodePath';
+import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from '../../utils/NodePath';
 import { getPlaywrightEnvVars } from '../../utils/PlaywrightPath';
 
 const execAsync = promisify(exec);
@@ -111,14 +111,32 @@ export class FileSystemTools {
         }
         
         if (builtinNpmPath && builtinNpmPath !== 'npm') {
-            // 使用正则表达式替换独立的 'npm' 命令（避免替换其他单词中的 npm）
-            // 匹配：npm 前后是空白字符、引号、行首或行尾
-            const npmRegex = /(^|\s|["'])\bnpm\b(\s|$|["'])/g;
-            const npmCommand = builtinNpmPath.includes(' ') ? `"${builtinNpmPath}"` : builtinNpmPath;
-            command = command.replace(npmRegex, (_match, before, after) => {
-                // 保留前后的空白字符或引号
-                return `${before}${npmCommand}${after}`;
-            });
+            // npm 脚本会在 process.execPath 的目录下查找 node_modules/npm/bin/npm-cli.js
+            // 但我们的 npm 在 lib/node_modules/npm，所以直接使用 node 执行 npm-cli.js 更可靠
+            const npmCliJsPath = getBuiltinNpmCliJsPath();
+            const builtinNodePath = getBuiltinNodePath();
+            
+            if (npmCliJsPath && builtinNodePath && builtinNodePath !== 'node') {
+                // 使用 node 直接执行 npm-cli.js，避免 npm 脚本的路径问题
+                const nodeCommand = builtinNodePath.includes(' ') ? `"${builtinNodePath}"` : builtinNodePath;
+                const npmCliCommand = npmCliJsPath.includes(' ') ? `"${npmCliJsPath}"` : npmCliJsPath;
+                
+                // 替换 npm 命令为: node npm-cli.js [args]
+                const npmRegex = /(^|\s|["'])\bnpm\b(\s+)([^"'\s]+|"[^"]*"|'[^']*')?/g;
+                command = command.replace(npmRegex, (match, before, space, args) => {
+                    // 提取 npm 后的参数
+                    const npmArgs = args ? ` ${args}` : '';
+                    return `${before}${nodeCommand} ${npmCliCommand}${npmArgs}`;
+                });
+            } else {
+                // 回退到使用 npm 脚本
+                const npmRegex = /(^|\s|["'])\bnpm\b(\s|$|["'])/g;
+                const npmCommand = builtinNpmPath.includes(' ') ? `"${builtinNpmPath}"` : builtinNpmPath;
+                command = command.replace(npmRegex, (_match, before, after) => {
+                    // 保留前后的空白字符或引号
+                    return `${before}${npmCommand}${after}`;
+                });
+            }
         }
 
         try {
