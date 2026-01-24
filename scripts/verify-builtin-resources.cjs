@@ -111,6 +111,12 @@ if (builderConfig.includes('resources/mcp')) {
     console.error('❌ MCP directory NOT included in extraResources');
 }
 
+if (builderConfig.includes('resources/playwright')) {
+    console.log('✅ Playwright directory included in extraResources');
+} else {
+    console.warn('⚠️  Playwright directory NOT included in extraResources');
+}
+
 // Check SkillManager implementation
 console.log('\n🔍 Checking SkillManager implementation...');
 
@@ -141,6 +147,52 @@ for (const check of checks) {
 }
 
 console.log(`\n✅ SkillManager checks: ${skillManagerChecks}/${checks.length}`);
+
+// Check Playwright browsers
+console.log('\n🌐 Checking Playwright browsers...');
+
+const playwrightBrowsersPath = path.join(__dirname, '../resources/playwright/browsers');
+
+function getDirSize(dirPath) {
+    let totalSize = 0;
+    try {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        for (const entry of entries) {
+            const entryPath = path.join(dirPath, entry.name);
+            if (entry.isDirectory()) {
+                totalSize += getDirSize(entryPath);
+            } else {
+                totalSize += fs.statSync(entryPath).size;
+            }
+        }
+    } catch (error) {
+        // 忽略错误
+    }
+    return totalSize;
+}
+
+if (fs.existsSync(playwrightBrowsersPath)) {
+    try {
+        const entries = fs.readdirSync(playwrightBrowsersPath, { withFileTypes: true });
+        const chromiumDirs = entries
+            .filter(d => d.isDirectory() && d.name.includes('chromium'))
+            .map(d => d.name);
+        
+        if (chromiumDirs.length > 0) {
+            console.log(`✅ Found Playwright Chromium browsers: ${chromiumDirs.join(', ')}`);
+            const size = getDirSize(playwrightBrowsersPath);
+            console.log(`   Size: ${(size / 1024 / 1024).toFixed(2)} MB`);
+        } else {
+            console.warn('⚠️  Warning: Playwright browsers directory exists but no Chromium found');
+            console.warn('   Run: npm run prepare:playwright');
+        }
+    } catch (error) {
+        console.warn('⚠️  Warning: Error checking Playwright browsers:', error.message);
+    }
+} else {
+    console.warn('⚠️  Warning: Playwright browsers directory not found');
+    console.warn('   Run: npm run prepare:playwright');
+}
 
 // Summary
 console.log('\n' + '='.repeat(60));
