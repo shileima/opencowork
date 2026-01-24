@@ -183,6 +183,10 @@ export const translations = {
         stop: 'Stop',
         path: 'Path:',
         skillLoaded: 'Skill loaded into context',
+        automation: 'Automation',
+        automationScripts: 'Automation Scripts',
+        noScripts: 'No scripts found',
+        execute: 'Execute',
 
         // Floating Ball
         home: 'Home',
@@ -240,6 +244,10 @@ export const translations = {
         describeTask: '描述一个任务或变更...',
         noMessagesYet: '暂无消息',
         startByDescribing: '开始描述你想要完成的任务',
+        automation: '自动化',
+        automationScripts: '自动化脚本',
+        noScripts: '暂无脚本',
+        execute: '执行',
 
         // Settings
         apiConfiguration: 'API 配置',

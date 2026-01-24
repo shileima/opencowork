@@ -7,6 +7,7 @@ import dotenv from 'dotenv'
 import { AgentRuntime } from './agent/AgentRuntime'
 import { configStore } from './config/ConfigStore'
 import { sessionStore } from './config/SessionStore'
+import { scriptStore } from './config/ScriptStore'
 import Anthropic from '@anthropic-ai/sdk'
 
 // Extend App type to include isQuitting property
@@ -200,7 +201,10 @@ ipcMain.handle('agent:confirm-response', (_, { id, approved, remember, tool, pat
 ipcMain.handle('agent:new-session', (event) => {
   // Determine which agent to use based on sender window
   const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
   targetAgent?.clearHistory()
+  // 清除当前会话ID，确保下次保存时创建新会话
+  sessionStore.setSessionId(null, isFloatingBall)
   // Don't create session immediately - wait for actual messages
   // This prevents empty sessions from cluttering the history
   return { success: true, sessionId: null }
@@ -219,9 +223,12 @@ ipcMain.handle('session:load', (event, id: string) => {
   const session = sessionStore.getSession(id)
   // Determine which agent to use based on sender window
   const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
   if (session && targetAgent) {
+    // 设置当前会话ID（在加载历史之前设置，确保后续保存使用正确的会话ID）
+    sessionStore.setSessionId(id, isFloatingBall)
+    // 加载历史（这会触发 agent:history-update 事件）
     targetAgent.loadHistory(session.messages)
-    sessionStore.setCurrentSession(id)
     return { success: true }
   }
   return { error: 'Session not found' }
@@ -260,6 +267,60 @@ ipcMain.handle('session:delete', (_, id: string) => {
 ipcMain.handle('session:current', () => {
   const id = sessionStore.getCurrentSessionId()
   return id ? sessionStore.getSession(id) : null
+})
+
+// Script Management
+ipcMain.handle('script:list', () => {
+  return scriptStore.getScripts()
+})
+
+ipcMain.handle('script:delete', (_, id: string) => {
+  const success = scriptStore.deleteScript(id)
+  return { success }
+})
+
+ipcMain.handle('script:execute', async (event, scriptId: string) => {
+  const script = scriptStore.getScript(scriptId)
+  if (!script) {
+    return { success: false, error: 'Script not found' }
+  }
+
+  // 确定使用哪个 agent
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  if (!targetAgent) {
+    return { success: false, error: 'Agent not initialized' }
+  }
+
+  try {
+    // 确定是浮动球窗口还是主窗口
+    const isFloatingBall = event.sender === floatingBallWin?.webContents
+    
+    // 创建新会话，使用脚本名称作为标题
+    const sessionTitle = `执行脚本: ${script.name}`
+    const newSession = sessionStore.createSession(sessionTitle)
+    
+    // 设置当前会话ID，这样后续保存时会使用这个会话
+    sessionStore.setSessionId(newSession.id, isFloatingBall)
+    
+    // 清空 agent 历史
+    targetAgent.clearHistory()
+    
+    // 构建执行命令
+    const scriptDir = path.dirname(script.filePath)
+    const scriptName = path.basename(script.filePath)
+    const command = `cd "${scriptDir}" && node "${scriptName}"`
+    
+    // 发送消息给 agent 执行脚本
+    const executeMessage = `请执行以下 chrome-agent 脚本：\n\n\`\`\`bash\n${command}\n\`\`\`\n\n脚本路径：${script.filePath}`
+    
+    // 使用 agent 的 processUserMessage 方法
+    await targetAgent.processUserMessage(executeMessage)
+    
+    return { success: true, sessionId: newSession.id }
+  } catch (error) {
+    console.error('[Script] Error executing script:', error)
+    return { success: false, error: (error as Error).message }
+  }
 })
 
 ipcMain.handle('agent:authorize-folder', (_, folderPath: string) => {
