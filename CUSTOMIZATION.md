@@ -190,6 +190,7 @@ resources/skills/chrome-agent/
 |---------|------------|---------|---------|
 | 0.0.3 | - | 2026-01-23 | 添加官方脚本标签机制 |
 | 0.0.4 | - | 2026-01-23 | 实现超级管理员权限系统、预设管理员机制、用户账户信息获取 |
+| 0.0.7 | - | 2026-01-25 | 内置 npm 支持、完善 Node.js 和 npm 环境 |
 | 0.0.6 | - | 2026-01-25 | 内置 Playwright 浏览器支持、自动化脚本可直接使用 Playwright |
 | 0.0.5 | - | 2026-01-24 | 自动化脚本规范检查、Playwright 框架约束、预设管理员修复、Commit 规范 |
 
@@ -205,6 +206,40 @@ resources/skills/chrome-agent/
 - 更新 UI 显示官方标签
 
 ---
+
+## v0.0.7 (2026-01-25)
+
+### 新增功能
+
+- **内置 npm 支持**：
+  - 将 npm 可执行文件和模块目录内置到应用中
+  - 用户安装应用后即可直接使用 npm，无需单独安装
+  - 支持完整的 npm 功能（install、run、publish 等）
+  - 自动设置环境变量，脚本可直接使用 `npm` 命令
+
+- **npm 路径管理工具**：
+  - 在 `electron/utils/NodePath.ts` 中添加 `getBuiltinNpmPath()` 函数
+  - 支持多个可能的 npm 路径查找
+  - 自动设置执行权限
+
+- **npm 准备脚本**：
+  - 创建 `scripts/prepare-node-npm.mjs` 用于从系统复制 npm
+  - 支持复制 npm 可执行文件和完整的 npm 模块目录
+  - 添加 `npm run prepare:node-npm` 命令
+
+- **npm 功能测试**：
+  - 创建 `scripts/test-builtin-npm.mjs` 验证 npm 功能
+  - 测试结果显示 npm 版本 10.2.4 可以正常执行
+
+### 技术改进
+
+- **命令执行增强**：
+  - `FileSystemTools.ts` 在执行命令时自动替换 `npm` 为内置路径
+  - 与 node 命令替换逻辑保持一致
+
+- **npm 模块完整性**：
+  - 复制完整的 `lib/node_modules/npm` 目录（约 15MB）
+  - 确保所有 npm 功能可用
 
 ## v0.0.6 (2026-01-25)
 
