@@ -10,7 +10,6 @@ import { scriptStore } from './config/ScriptStore'
 import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
 import { getBuiltinNodePath } from './utils/NodePath'
-import { getPlaywrightEnvVars } from './utils/PlaywrightPath'
 import Anthropic from '@anthropic-ai/sdk'
 
 // Extend App type to include isQuitting property
