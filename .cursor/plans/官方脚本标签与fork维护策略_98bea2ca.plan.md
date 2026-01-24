@@ -4,22 +4,22 @@ overview: 设计自动化脚本的官方标签机制，支持标记共享脚本�
 todos:
   - id: "1"
     content: 创建 resources/skills/chrome-agent/ 目录和 official-scripts.json 清单文件
-    status: pending
+    status: completed
   - id: "2"
     content: 修改 ScriptStore.ts，添加官方脚本同步逻辑和 isOfficial 字段
-    status: pending
+    status: completed
   - id: "3"
     content: 修改 electron-builder.json5，在 extraResources 中添加 chrome-agent 目录
-    status: pending
+    status: completed
   - id: "4"
     content: 修改 CoworkView.tsx，在脚本列表中显示官方标签和区分操作权限
-    status: pending
+    status: completed
   - id: "5"
     content: 创建 docs/FORK_MAINTENANCE.md 文档，编写详细的fork维护指南
-    status: pending
+    status: completed
   - id: "6"
     content: 创建 CUSTOMIZATION.md，记录所有定制化点和文件清单
-    status: pending
+    status: completed
 isProject: false
 ---
 
