@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Settings, FolderOpen, Server, Check, Plus, Trash2, Edit2, Zap, Eye, EyeOff, ExternalLink, AlertTriangle, ChevronDown, Loader2, Activity, Info } from 'lucide-react';
+import { X, Settings, FolderOpen, Server, Check, Plus, Trash2, Edit2, Zap, Eye, EyeOff, ExternalLink, AlertTriangle, ChevronDown, Loader2, Activity, Info, Shield } from 'lucide-react';
 
 import logo from '../assets/logo.png';
 import logoGlm from '../assets/logo-glm.png';
@@ -32,9 +32,15 @@ interface Config {
     providers: Record<string, ProviderConfig>;
 
     // Global
-    authorizedFolders: string[];
+    authorizedFolders: FolderAuth[];
     networkAccess: boolean;
     shortcut: string;
+}
+
+interface FolderAuth {
+    path: string;
+    trustLevel: 'strict' | 'standard' | 'trust';
+    addedAt: number;
 }
 
 interface SkillInfo {
@@ -379,13 +385,19 @@ export function SettingsView({ onClose }: SettingsViewProps) {
 
     const addFolder = async () => {
         const result = await window.ipcRenderer.invoke('dialog:select-folder') as string | null;
-        if (result && !config.authorizedFolders.includes(result)) {
-            setConfig({ ...config, authorizedFolders: [...config.authorizedFolders, result] });
+        if (result && !config.authorizedFolders.some(f => f.path === result)) {
+            setConfig({
+                ...config,
+                authorizedFolders: [
+                    ...config.authorizedFolders,
+                    { path: result, trustLevel: 'strict', addedAt: Date.now() }
+                ]
+            });
         }
     };
 
-    const removeFolder = (folder: string) => {
-        setConfig({ ...config, authorizedFolders: config.authorizedFolders.filter(f => f !== folder) });
+    const removeFolder = (folderPath: string) => {
+        setConfig({ ...config, authorizedFolders: config.authorizedFolders.filter(f => f.path !== folderPath) });
     };
 
     return (
@@ -720,6 +732,98 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                     {t('folderPermissionDesc') || 'AI can only access authorized folders for security.'}
                                 </div>
 
+                                {/* Trust Level Info Section - 3 Column Grid */}
+                                <div className="mb-3">
+                                    <p className="text-xs font-medium text-stone-500 dark:text-zinc-400 mb-2">{t('trustLevelInfo')}</p>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {/* Strict Column */}
+                                        <div className="p-3 bg-stone-50 dark:bg-zinc-800/50 rounded-lg border border-stone-200 dark:border-zinc-700">
+                                            <div className="flex items-center gap-1.5 mb-2">
+                                                <Shield size={14} className="text-stone-400" />
+                                                <span className="text-xs font-medium text-stone-600 dark:text-zinc-300">{t('trustStrict')}</span>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-stone-400">{t('trustColRead')}/{t('trustColList')}</span>
+                                                    <span className="text-green-500 font-medium">{t('trustColAuto')}</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-stone-400">{t('trustColWrite')}</span>
+                                                    <span className="text-red-500 font-medium">{t('trustColConfirm')}</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-stone-400">{t('trustColSafeCmd')}</span>
+                                                    <span className="text-red-500 font-medium">{t('trustColConfirm')}</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-stone-400">{t('trustColDangerCmd')}</span>
+                                                    <span className="text-red-500 font-medium">{t('trustColConfirm')}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Standard Column */}
+                                        <div className="p-3 bg-amber-50/50 dark:bg-amber-900/10 rounded-lg border border-amber-200 dark:border-amber-700/50">
+                                            <div className="flex items-center gap-1.5 mb-2">
+                                                <Check size={14} className="text-amber-500" />
+                                                <span className="text-xs font-medium text-amber-700 dark:text-amber-400">{t('trustStandard')}</span>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-amber-600/70 dark:text-amber-400/70">{t('trustColRead')}/{t('trustColList')}</span>
+                                                    <span className="text-green-500 font-medium">{t('trustColAuto')}</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-amber-600/70 dark:text-amber-400/70">{t('trustColWrite')}</span>
+                                                    <span className="text-amber-600 font-medium">{t('trustColConfirm')}</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-amber-600/70 dark:text-amber-400/70">{t('trustColSafeCmd')}</span>
+                                                    <span className="text-green-500 font-medium">{t('trustColAuto')}</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-amber-600/70 dark:text-amber-400/70">{t('trustColDangerCmd')}</span>
+                                                    <span className="text-red-500 font-medium">{t('trustColConfirm')}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Trust Column */}
+                                        <div className="p-3 bg-green-50/50 dark:bg-green-900/10 rounded-lg border border-green-200 dark:border-green-700/50">
+                                            <div className="flex items-center gap-1.5 mb-2">
+                                                <Zap size={14} className="text-green-500" />
+                                                <span className="text-xs font-medium text-green-700 dark:text-green-400">{t('trustTrust')}</span>
+                                            </div>
+                                            <div className="space-y-1">
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-green-600/70 dark:text-green-400/70">{t('trustColRead')}/{t('trustColList')}</span>
+                                                    <span className="text-green-500 font-medium">{t('trustColAuto')}</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-green-600/70 dark:text-green-400/70">{t('trustColWrite')}</span>
+                                                    <span className="text-green-500 font-medium">{t('trustColAuto')}</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-green-600/70 dark:text-green-400/70">{t('trustColSafeCmd')}</span>
+                                                    <span className="text-green-500 font-medium">{t('trustColAuto')}</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <span className="text-green-600/70 dark:text-green-400/70">{t('trustColDangerCmd')}</span>
+                                                    <span className="text-red-500 font-medium">{t('trustColConfirm')}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Danger Warning */}
+                                    <div className="mt-2 flex items-start gap-1.5 p-2 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800/50">
+                                        <AlertTriangle size={12} className="text-red-500 mt-0.5 shrink-0" />
+                                        <p className="text-[10px] text-red-600 dark:text-red-400 leading-relaxed">
+                                            {t('trustDangerWarning')}
+                                        </p>
+                                    </div>
+                                </div>
+
                                 {config.authorizedFolders.length === 0 ? (
                                     <div className="text-center py-8 text-stone-400 dark:text-muted-foreground border-2 border-dashed border-stone-200 dark:border-border rounded-xl">
                                         <p className="text-sm">{t('noAuthorizedFolders') || 'No authorized folders'}</p>
@@ -729,20 +833,83 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                         {config.authorizedFolders.map((folder, idx) => (
                                             <div
                                                 key={idx}
-                                                className="flex items-center justify-between p-3 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-lg group"
+                                                className={`p-3 bg-white dark:bg-zinc-900 border rounded-lg group transition-all ${
+                                                    folder.trustLevel === 'trust'
+                                                        ? 'border-green-300 dark:border-green-600 bg-green-50/50 dark:bg-green-900/10'
+                                                        : folder.trustLevel === 'strict'
+                                                            ? 'border-stone-300 dark:border-zinc-600'
+                                                            : 'border-amber-300 dark:border-amber-600 bg-amber-50/50 dark:bg-amber-900/10'
+                                                }`}
                                             >
-                                                <div className="flex items-center gap-3 overflow-hidden">
-                                                    <FolderOpen size={16} className="text-stone-400 dark:text-zinc-500 shrink-0" />
-                                                    <span className="text-sm font-mono text-stone-600 dark:text-zinc-200 truncate">
-                                                        {folder}
-                                                    </span>
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div className="flex items-center gap-3 min-w-0">
+                                                        <FolderOpen size={16} className={
+                                                            folder.trustLevel === 'trust' ? 'text-green-500 shrink-0' :
+                                                            folder.trustLevel === 'strict' ? 'text-stone-400 shrink-0' :
+                                                            'text-amber-500 shrink-0'
+                                                        } />
+                                                        <div className="flex-1 min-w-0">
+                                                            <span className="text-sm font-mono text-stone-600 dark:text-zinc-200 truncate block">
+                                                                {folder.path}
+                                                            </span>
+                                                            <span className={`text-[10px] flex items-center gap-1 mt-0.5 ${
+                                                                folder.trustLevel === 'trust' ? 'text-green-600 dark:text-green-400' :
+                                                                folder.trustLevel === 'strict' ? 'text-stone-500 dark:text-zinc-400' :
+                                                                'text-amber-600 dark:text-amber-400'
+                                                            }`}>
+                                                                {folder.trustLevel === 'trust' && <Zap size={10} />}
+                                                                {folder.trustLevel === 'strict' && <Shield size={10} />}
+                                                                {folder.trustLevel === 'standard' && <Check size={10} />}
+                                                                {folder.trustLevel === 'trust' ? t('trustTrust') :
+                                                                 folder.trustLevel === 'strict' ? t('trustStrict') :
+                                                                 t('trustStandard')}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Trust Level Pills */}
+                                                    <div className="flex items-center gap-1 shrink-0">
+                                                        {(['strict', 'standard', 'trust'] as const).map((level) => (
+                                                            <button
+                                                                key={level}
+                                                                onClick={() => {
+                                                                    const newFolders = [...config.authorizedFolders];
+                                                                    newFolders[idx] = { ...folder, trustLevel: level };
+                                                                    setConfig({ ...config, authorizedFolders: newFolders });
+                                                                    window.ipcRenderer.invoke('folder:trust:set', {
+                                                                        folderPath: folder.path,
+                                                                        level
+                                                                    });
+                                                                }}
+                                                                className={`px-2 py-1 text-[10px] rounded-md transition-all ${
+                                                                    folder.trustLevel === level
+                                                                        ? level === 'trust' ? 'bg-green-500 text-white' :
+                                                                          level === 'strict' ? 'bg-stone-500 text-white' :
+                                                                          'bg-amber-500 text-white'
+                                                                        : level === 'trust' ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400' :
+                                                                          level === 'strict' ? 'bg-stone-100 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400' :
+                                                                          'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'
+                                                                }`}
+                                                            >
+                                                                {level === 'strict' && <Shield size={10} className="inline mr-0.5" />}
+                                                                {level === 'standard' && <Check size={10} className="inline mr-0.5" />}
+                                                                {level === 'trust' && <Zap size={10} className="inline mr-0.5" />}
+                                                                {level === 'strict' ? t('trustStrict') :
+                                                                 level === 'standard' ? t('trustStandard') :
+                                                                 t('trustTrust')}
+                                                            </button>
+                                                        ))}
+                                                        <div className="w-px h-4 bg-stone-200 dark:bg-zinc-700 mx-1" />
+                                                        {/* Remove Button */}
+                                                        <button
+                                                            onClick={() => removeFolder(folder.path)}
+                                                            className="p-1.5 text-stone-300 dark:text-zinc-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-all"
+                                                            title={t('removeFolder') || 'Remove folder'}
+                                                        >
+                                                            <X size={14} />
+                                                        </button>
+                                                    </div>
                                                 </div>
-                                                <button
-                                                    onClick={() => removeFolder(folder)}
-                                                    className="p-1 text-stone-300 dark:text-muted-foreground hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-all"
-                                                >
-                                                    <X size={16} />
-                                                </button>
                                             </div>
                                         ))}
                                     </div>

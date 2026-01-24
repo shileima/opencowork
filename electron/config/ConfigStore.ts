@@ -17,9 +17,17 @@ export interface ProviderConfig {
     readonlyUrl?: boolean;
 }
 
+export type TrustLevel = 'strict' | 'standard' | 'trust';
+
+export interface FolderAuthorization {
+    path: string;
+    trustLevel: TrustLevel;
+    addedAt: number;
+}
+
 export interface AppConfig {
     // Global/Legacy
-    authorizedFolders: string[];
+    authorizedFolders: FolderAuthorization[];
     networkAccess: boolean;
     shortcut: string;
     allowedPermissions: ToolPermission[];
@@ -130,6 +138,27 @@ class ConfigStore {
             this.store.delete('apiKey');
             this.store.delete('apiUrl');
             this.store.delete('model');
+        }
+
+        // Migrate authorizedFolders from string[] to FolderAuthorization[]
+        const oldFolders = this.store.get('authorizedFolders');
+        if (oldFolders && oldFolders.length > 0) {
+            const newFolders: FolderAuthorization[] = (oldFolders as any[]).map(item => {
+                // Handle old string format
+                if (typeof item === 'string') {
+                    return { path: item, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() };
+                }
+                // Handle old format with yoloMode
+                if ('yoloMode' in item) {
+                    return {
+                        path: item.path,
+                        trustLevel: item.yoloMode ? 'trust' : 'strict' as TrustLevel,
+                        addedAt: item.addedAt || Date.now()
+                    };
+                }
+                return item;
+            });
+            this.store.set('authorizedFolders', newFolders);
         }
     }
 
@@ -308,21 +337,61 @@ class ConfigStore {
     // ... Keep Permissions methods
 
     // Authorized Folders
-    getAuthorizedFolders(): string[] {
+    getAuthorizedFolders(): FolderAuthorization[] {
         return this.store.get('authorizedFolders') || [];
     }
 
-    addAuthorizedFolder(folder: string): void {
+    // Get just the folder paths (for backward compatibility)
+    getAuthorizedFolderPaths(): string[] {
+        return this.getAuthorizedFolders().map(f => f.path);
+    }
+
+    addAuthorizedFolder(folder: string, trustLevel: TrustLevel = 'strict'): void {
         const folders = this.getAuthorizedFolders();
-        if (!folders.includes(folder)) {
-            folders.push(folder);
+        const exists = folders.some(f => f.path === folder);
+        if (!exists) {
+            folders.push({
+                path: folder,
+                trustLevel,
+                addedAt: Date.now()
+            });
             this.store.set('authorizedFolders', folders);
         }
     }
 
     removeAuthorizedFolder(folder: string): void {
-        const folders = this.getAuthorizedFolders().filter(f => f !== folder);
+        const folders = this.getAuthorizedFolders().filter(f => f.path !== folder);
         this.store.set('authorizedFolders', folders);
+    }
+
+    // Set trust level for a specific folder
+    setFolderTrustLevel(folderPath: string, level: TrustLevel): void {
+        const folders = this.getAuthorizedFolders();
+        const updated = folders.map(f =>
+            f.path === folderPath ? { ...f, trustLevel: level } : f
+        );
+        this.store.set('authorizedFolders', updated);
+    }
+
+    // Get trust level for a specific folder
+    getFolderTrustLevel(folderPath: string): TrustLevel {
+        const folder = this.getAuthorizedFolders().find(f => f.path === folderPath);
+        return folder?.trustLevel ?? 'strict';
+    }
+
+    // Check if any parent folder has trust level (for nested paths)
+    getFileTrustLevel(filePath: string): TrustLevel {
+        const folders = this.getAuthorizedFolders();
+        // Find the most specific (longest path) matching folder
+        let bestMatch: FolderAuthorization | null = null;
+        for (const folder of folders) {
+            if (filePath.startsWith(folder.path)) {
+                if (!bestMatch || folder.path.length > bestMatch.path.length) {
+                    bestMatch = folder;
+                }
+            }
+        }
+        return bestMatch?.trustLevel ?? 'strict';
     }
 
     // Network Access
