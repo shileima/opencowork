@@ -209,7 +209,7 @@ resources/skills/chrome-agent/
 
 ### 新增功能
 - **自动化脚本规范检查**：添加自动化脚本规范验证机制
-  - 检查脚本文件是否在正确的目录下（`~/.opencowork/skills/chrome-agent/`）
+  - 检查脚本文件是否在正确的目录下（`~/.qa-cowork/skills/chrome-agent/`）
   - 检查文件扩展名是否为 `.js`
   - 检查文件权限
   - 自动刷新脚本列表（每5秒）

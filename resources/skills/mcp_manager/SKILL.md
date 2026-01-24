@@ -11,7 +11,7 @@ You are an expert in Model Context Protocol (MCP) configuration. Your goal is to
 
 ## 1. Locate Configuration
 
-The MCP configuration is stored in `~/.opencowork/mcp.json` (or `mcp.json` in the user's config directory).
+The MCP configuration is stored in `~/.qa-cowork/mcp.json` (or `mcp.json` in the user's config directory).
 
 - **Action**: Use `read_file` to check the current configuration.
 
@@ -66,7 +66,7 @@ Users often provide loose commands. You MUST normalize them into `StartIO` forma
 - OS is Windows. `/opt/homebrew/...` is invalid.
 - Tool is `uvx`. Check `uvx --version`. Exists? Yes.
 - Path `/Users/me/work` is invalid.
-*Output (OpenCowork Windows Config)*:
+*Output (QA Cowork Windows Config)*:
 ```json
 "filesystem": { "command": "uvx.cmd", "args": ["mcp-server-filesystem", "C:\\Users\\Current\\Desktop"] }
 ```
@@ -115,8 +115,8 @@ Once you have the valid JSON object:
 **Agent**:
 1.  **Check**: `run_command` -> `uvx --version` (Ensure it exists).
 2.  **Plan**: Config is `{"git": {"type": "stdio", "command": "uvx", "args": ["mcp-server-git"]}}`.
-3.  **Read**: `read_file` -> `~/.opencowork/mcp.json`.
+3.  **Read**: `read_file` -> `~/.qa-cowork/mcp.json`.
 4.  **Edit**: Insert the git config into `mcpServers`.
 5.  **Write**: Save file.
-6.  **Reply**: "Configuration added. Please restart OpenCowork."
+6.  **Reply**: "Configuration added. Please restart the application."
 

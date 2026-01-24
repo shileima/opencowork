@@ -4,8 +4,8 @@
 
 自动化脚本存储在以下目录：
 
-**macOS/Linux**: `~/.opencowork/skills/chrome-agent/`  
-**Windows**: `%USERPROFILE%\.opencowork\skills\chrome-agent\`
+**macOS/Linux**: `~/.qa-cowork/skills/chrome-agent/`  
+**Windows**: `%USERPROFILE%\.qa-cowork\skills\chrome-agent\`
 
 ## 如何添加新脚本
 
@@ -13,7 +13,7 @@
 
 1. **打开脚本目录**：
    - 在自动化脚本下拉列表中，点击文件夹图标（📁）打开脚本目录
-   - 或者手动导航到 `~/.opencowork/skills/chrome-agent/`
+   - 或者手动导航到 `~/.qa-cowork/skills/chrome-agent/`
 
 2. **创建脚本文件**：
    - 在目录中创建新的 `.js` 文件
@@ -26,7 +26,7 @@
 
 ### 方法2：通过代码生成
 
-使用 AI 助手生成脚本后，确保脚本文件保存在 `~/.opencowork/skills/chrome-agent/` 目录下。
+使用 AI 助手生成脚本后，确保脚本文件保存在 `~/.qa-cowork/skills/chrome-agent/` 目录下。
 
 ## 脚本命名规则
 
@@ -55,7 +55,7 @@
 **可能原因和解决方法**：
 
 1. **脚本文件位置不正确**
-   - ✅ 确保脚本文件在 `~/.opencowork/skills/chrome-agent/` 目录下
+   - ✅ 确保脚本文件在 `~/.qa-cowork/skills/chrome-agent/` 目录下
    - ✅ 点击文件夹图标打开目录，检查文件位置
 
 2. **文件扩展名不正确**
@@ -80,14 +80,14 @@
 
 **正确位置**：
 ```
-~/.opencowork/skills/chrome-agent/my_script.js
+~/.qa-cowork/skills/chrome-agent/my_script.js
 ```
 
 **错误位置**（不会被识别）：
 ```
-~/.opencowork/skills/my_script.js          ❌ 应该在 chrome-agent 子目录
+~/.qa-cowork/skills/my_script.js          ❌ 应该在 chrome-agent 子目录
 ~/Desktop/my_script.js                    ❌ 不在应用目录
-~/.opencowork/my_script.js                ❌ 不在正确的子目录
+~/.qa-cowork/my_script.js                ❌ 不在正确的子目录
 ```
 
 ### Q: 如何验证脚本是否被识别？

@@ -171,7 +171,7 @@ if (percentage === 100) {
 }
 
 console.log('\n📝 Expected behavior:');
-console.log('   • Skills will be copied to ~/.opencowork/skills on first run');
+console.log('   • Skills will be copied to ~/.qa-cowork/skills on first run');
 console.log('   • MCP servers will be loaded from resources/mcp/builtin-mcp.json');
 console.log('   • Built-in MCP servers are automatically added/updated on each startup');
 console.log('   • User-disabled servers will be preserved, but configs are updated');
