@@ -152,8 +152,11 @@ export function getNpmEnvVars(): Record<string, string> {
   const npmBinDir = path.dirname(npmPath);
   
   // 合并 PATH，优先使用内置的 node 和 npm
+  // 注意：npm 脚本会查找 node，所以 node 的目录必须在 PATH 中
   const existingPath = process.env.PATH || '';
   const pathSeparator = platform === 'win32' ? ';' : ':';
+  
+  // 重要：node 目录必须在最前面，这样 npm 脚本能找到它
   env.PATH = `${nodeBinDir}${pathSeparator}${npmBinDir}${pathSeparator}${existingPath}`;
   
   // 设置 NODE_PATH，让 npm 能找到自己的模块
@@ -165,9 +168,19 @@ export function getNpmEnvVars(): Record<string, string> {
       : npmModuleDir;
   }
   
-  // 设置 npm 配置目录
+  // npm 脚本会通过 node 来查找自己的位置
+  // 它使用 process.execPath 来找到 Node.js 安装目录
+  // 然后在该目录下查找 node_modules/npm/bin/npm-cli.js
+  
+  // 设置 npm 配置前缀（npm 的安装位置）
+  // 这应该指向包含 lib/node_modules/npm 的目录
   const npmPrefix = nodeDir;
   env.NPM_CONFIG_PREFIX = npmPrefix;
+  
+  // 重要：npm 脚本会查找 node_modules/npm/bin/npm-cli.js
+  // 相对于 Node.js 安装目录（process.execPath 的目录）
+  // 由于我们的 node 在 nodeDir 中，npm 模块在 nodeDir/lib/node_modules/npm
+  // npm 脚本应该能找到它，因为它是相对于 node 的位置查找的
   
   return env;
 }
