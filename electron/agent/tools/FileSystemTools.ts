@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { getBuiltinNodePath } from '../../utils/NodePath';
+import { getBuiltinNodePath, getBuiltinNpmPath } from '../../utils/NodePath';
 import { getPlaywrightEnvVars } from '../../utils/PlaywrightPath';
 
 const execAsync = promisify(exec);
@@ -94,9 +94,11 @@ export class FileSystemTools {
         const workingDir = args.cwd || defaultCwd;
         const timeout = 60000; // 60 second timeout
 
-        // 如果命令包含 'node'，替换为内置的 node 路径
+        // 如果命令包含 'node' 或 'npm'，替换为内置的路径
         let command = args.command;
         const builtinNodePath = getBuiltinNodePath();
+        const builtinNpmPath = getBuiltinNpmPath();
+        
         if (builtinNodePath && builtinNodePath !== 'node') {
             // 使用正则表达式替换独立的 'node' 命令（避免替换其他单词中的 node）
             // 匹配：node 前后是空白字符、引号、行首或行尾
@@ -105,6 +107,17 @@ export class FileSystemTools {
             command = command.replace(nodeRegex, (_match, before, after) => {
                 // 保留前后的空白字符或引号
                 return `${before}${nodeCommand}${after}`;
+            });
+        }
+        
+        if (builtinNpmPath && builtinNpmPath !== 'npm') {
+            // 使用正则表达式替换独立的 'npm' 命令（避免替换其他单词中的 npm）
+            // 匹配：npm 前后是空白字符、引号、行首或行尾
+            const npmRegex = /(^|\s|["'])\bnpm\b(\s|$|["'])/g;
+            const npmCommand = builtinNpmPath.includes(' ') ? `"${builtinNpmPath}"` : builtinNpmPath;
+            command = command.replace(npmRegex, (_match, before, after) => {
+                // 保留前后的空白字符或引号
+                return `${before}${npmCommand}${after}`;
             });
         }
 

@@ -19,7 +19,8 @@
     "verify:resources": "node scripts/verify-builtin-resources.cjs",
     "verify:mac": "node scripts/check-mac-compatibility.cjs",
     "verify:all": "node scripts/verify-builtin-resources.cjs && node scripts/check-mac-compatibility.cjs",
-    "prepare:playwright": "node scripts/prepare-playwright.mjs"
+    "prepare:playwright": "node scripts/prepare-playwright.mjs",
+    "prepare:node-npm": "node scripts/prepare-node-npm.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
