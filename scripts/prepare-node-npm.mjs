@@ -111,7 +111,7 @@ try {
 }
 
 // 复制 npm-cli.js（npm 的主脚本）
-const npmCliJsPath = path.join(path.dirname(npmRealPath), 'npm-cli.js');
+const npmCliJsPath = path.join(path.dirname(sourceNpmPath), 'npm-cli.js');
 if (fs.existsSync(npmCliJsPath)) {
   const targetNpmCliJsPath = path.join(targetDir, 'npm-cli.js');
   try {
