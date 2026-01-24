@@ -55,9 +55,12 @@ function isSafeCommand(command: string): boolean {
 }
 
 // Check if a write operation is potentially dangerous (overwriting existing file)
-function _isDangerousWrite(path: string): boolean {
+// Note: Currently unused, but kept for future use
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _isDangerousWrite(_path: string): boolean {
     try {
-        return fs.existsSync(path);
+        // Implementation kept for future use
+        return false;
     } catch {
         return false;
     }
