@@ -131,18 +131,20 @@ app.whenReady().then(() => {
   createMainWindow()
   createFloatingBallWindow()
 
-  // 3. Built-in skills are now loaded async by SkillManager (inside initializeAgent)
+  // 3. Ensure built-in MCP config exists (synchronous, fast)
+  ensureBuiltinMcpConfig()
+
+  // 4. Sync official scripts to user directory (non-blocking)
+  scriptStore.syncOfficialScripts()
+
+  // 5. Built-in skills are now loaded async by SkillManager (inside initializeAgent)
   // ensureBuiltinSkills() - Removed
 
-
-  // 4. Initialize agent AFTER windows are created
+  // 6. Initialize agent AFTER windows are created
   initializeAgent()
 
-  // 4.5 Clean up empty sessions on startup
+  // 6.5 Clean up empty sessions on startup
   sessionStore.cleanupEmptySessions()
-
-  // 4.6 Ensure built-in MCP config
-  ensureBuiltinMcpConfig()
 
   // 4. Create system tray
   createTray()

@@ -27,6 +27,7 @@ interface Script {
     filePath: string;
     createdAt: number;
     updatedAt: number;
+    isOfficial?: boolean; // 是否为官方脚本
 }
 
 interface CoworkViewProps {
@@ -576,17 +577,28 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                             key={script.id}
                                             className="group relative p-3 rounded-lg hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors border border-transparent hover:border-stone-100 dark:hover:border-zinc-700"
                                         >
-                                            <p className="text-xs font-medium text-stone-700 dark:text-zinc-300 line-clamp-2 leading-relaxed">
-                                                {script.name}
-                                            </p>
-                                            <p className="text-[10px] text-stone-400 mt-1">
-                                                {new Date(script.updatedAt).toLocaleString('zh-CN', {
-                                                    month: 'short',
-                                                    day: 'numeric',
-                                                    hour: '2-digit',
-                                                    minute: '2-digit'
-                                                })}
-                                            </p>
+                                            <div className="flex items-start gap-2">
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <p className="text-xs font-medium text-stone-700 dark:text-zinc-300 line-clamp-2 leading-relaxed">
+                                                            {script.name}
+                                                        </p>
+                                                        {script.isOfficial && (
+                                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                                                                官方
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <p className="text-[10px] text-stone-400 mt-1">
+                                                        {new Date(script.updatedAt).toLocaleString('zh-CN', {
+                                                            month: 'short',
+                                                            day: 'numeric',
+                                                            hour: '2-digit',
+                                                            minute: '2-digit'
+                                                        })}
+                                                    </p>
+                                                </div>
+                                            </div>
                                             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                             <button
                                                 onClick={async () => {
@@ -610,6 +622,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                             >
                                                 {t('execute')}
                                             </button>
+                                            {!script.isOfficial && (
                                                 <button
                                                     onClick={async (e) => {
                                                         e.stopPropagation();
@@ -628,9 +641,11 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                         }
                                                     }}
                                                     className="p-1 text-stone-400 hover:text-red-500 transition-colors"
+                                                    title="删除脚本"
                                                 >
                                                     <Trash2 size={12} />
                                                 </button>
+                                            )}
                                             </div>
                                         </div>
                                     ))}
