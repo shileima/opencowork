@@ -35,6 +35,9 @@ export interface AppConfig {
     // Multi-Provider
     activeProviderId: string;
     providers: Record<string, ProviderConfig>;
+
+    // User Role
+    userRole?: 'user' | 'admin'; // 用户角色：普通用户或超级管理员
 }
 
 const DEFAULT_MAX_TOKENS = 131072;

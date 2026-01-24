@@ -5,8 +5,10 @@ import { configStore } from '../../config/ConfigStore';
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import path from 'path';
 import fs from 'fs/promises';
-import os from 'os';
+import fsSync from 'fs';
 import { ipcMain, app } from 'electron';
+import { directoryManager } from '../../config/DirectoryManager';
+import { permissionService } from '../../config/PermissionService';
 
 // Polyfill EventSource for Node environment to support headers in SSE
 
@@ -157,9 +159,10 @@ export class MCPClientService {
     }
 
     constructor() {
-        const configDir = path.join(os.homedir(), '.opencowork');
-        this.activeConfigPath = path.join(configDir, 'mcp.json');
-        this.storageConfigPath = path.join(configDir, 'mcp_storage.json');
+        // 使用 DirectoryManager 获取MCP配置目录
+        const mcpDir = directoryManager.getMcpDir();
+        this.activeConfigPath = directoryManager.getUserMcpConfigPath();
+        this.storageConfigPath = directoryManager.getUserMcpStoragePath();
         this.registerIPC();
     }
 
@@ -174,7 +177,15 @@ export class MCPClientService {
 
         ipcMain.handle('mcp:get-all', () => this.getAllServers());
         ipcMain.handle('mcp:add-server', (_, jsonConfig) => this.addServer(jsonConfig));
-        ipcMain.handle('mcp:remove-server', (_, name) => this.removeServer(name));
+        ipcMain.handle('mcp:remove-server', async (_, name) => {
+            try {
+                await this.removeServer(name);
+                return { success: true };
+            } catch (error) {
+                return { success: false, error: (error as Error).message };
+            }
+        });
+        ipcMain.handle('mcp:mark-builtin', (_, name) => this.markAsBuiltin(name));
         ipcMain.handle('mcp:toggle-server', (_, name, enabled) => this.toggleServer(name, enabled));
         ipcMain.handle('mcp:retry-connection', (_, name) => this.connectToServer(name, this.clientStatus.get(name)!.config));
         ipcMain.handle('mcp:analyze-config', (_, input) => this.analyzeConfig(input));
@@ -203,44 +214,24 @@ export class MCPClientService {
      */
     private async loadBuiltinMCPConfig(): Promise<Record<string, MCPServerConfig>> {
         console.log('[MCP] Loading built-in MCP configuration...');
-        console.log(`[MCP] App packaged: ${app.isPackaged}`);
-        console.log(`[MCP] Resources path: ${app.isPackaged ? process.resourcesPath : 'N/A (dev mode)'}`);
-        console.log(`[MCP] CWD: ${process.cwd()}`);
+        
+        // 使用 DirectoryManager 获取内置MCP配置文件路径
+        const builtinConfigPath = directoryManager.getBuiltinMcpConfigPath();
+        console.log(`[MCP] Built-in config path: ${builtinConfigPath}`);
 
-        const possiblePaths: string[] = [];
-
-        if (app.isPackaged) {
-            // In production, try multiple possible locations
-            possiblePaths.push(
-                path.join(process.resourcesPath, 'mcp', 'builtin-mcp.json'),  // Our electron-builder config
-                path.join(process.resourcesPath, 'resources', 'mcp', 'builtin-mcp.json'),  // Alternative layout
-                path.join(process.resourcesPath, 'app.asar.unpacked', 'mcp', 'builtin-mcp.json')  // Unpacked asar
-            );
-        } else {
-            // In development
-            possiblePaths.push(
-                path.join(process.cwd(), 'resources', 'mcp', 'builtin-mcp.json'),
-                path.join(process.cwd(), 'resources', 'mcp', 'builtin-mcp.json')
-            );
+        try {
+            await fs.access(builtinConfigPath);
+            const content = await fs.readFile(builtinConfigPath, 'utf-8');
+            const config = JSON.parse(content);
+            console.log(`[MCP] ✓ Found built-in MCP config at: ${builtinConfigPath}`);
+            console.log(`[MCP] Built-in servers: ${Object.keys(config.mcpServers || {}).join(', ')}`);
+            return config.mcpServers || {};
+        } catch (error) {
+            console.log(`[MCP] ✗ Built-in config not found at: ${builtinConfigPath}`);
+            console.warn('[MCP] ⚠️  Could not find built-in MCP configuration, using hardcoded defaults');
+            console.log(`[MCP] Default servers: ${Object.keys(DEFAULT_MCP_CONFIGS).join(', ')}`);
+            return DEFAULT_MCP_CONFIGS;
         }
-
-        for (const testPath of possiblePaths) {
-            console.log(`[MCP] Checking built-in config path: ${testPath}`);
-            try {
-                await fs.access(testPath);
-                const content = await fs.readFile(testPath, 'utf-8');
-                const config = JSON.parse(content);
-                console.log(`[MCP] ✓ Found built-in MCP config at: ${testPath}`);
-                console.log(`[MCP] Built-in servers: ${Object.keys(config.mcpServers || {}).join(', ')}`);
-                return config.mcpServers || {};
-            } catch {
-                console.log(`[MCP] ✗ Built-in config not found at: ${testPath}`);
-            }
-        }
-
-        console.warn('[MCP] ⚠️  Could not find built-in MCP configuration, using hardcoded defaults');
-        console.log(`[MCP] Default servers: ${Object.keys(DEFAULT_MCP_CONFIGS).join(', ')}`);
-        return DEFAULT_MCP_CONFIGS;
     }
 
     async loadClients(force = false) {
@@ -503,6 +494,16 @@ export class MCPClientService {
     }
 
     async removeServer(name: string) {
+        // 权限检查：只有管理员可以删除MCP服务器，且内置MCP不能被删除
+        const status = this.clientStatus.get(name);
+        const isBuiltin = status?.config.source === 'builtin';
+        
+        if (!permissionService.canDeleteMCP(name, isBuiltin)) {
+            throw new Error(isBuiltin 
+                ? 'Cannot delete built-in MCP servers' 
+                : 'Permission denied: Only administrators can delete MCP servers');
+        }
+
         // 1. Disconnect
         const client = this.clients.get(name);
         if (client) {
@@ -523,6 +524,72 @@ export class MCPClientService {
         await this.syncActiveConfig(masterConfig.mcpServers || {});
 
         return true;
+    }
+
+    async markAsBuiltin(serverName: string): Promise<{ success: boolean; error?: string }> {
+        // 权限检查：只有管理员可以标记MCP为内置
+        if (!permissionService.canMarkMCPBuiltin(serverName)) {
+            return { success: false, error: 'Permission denied: Only administrators can mark MCP servers as built-in' };
+        }
+
+        try {
+            // 获取MCP配置
+            const status = this.clientStatus.get(serverName);
+            if (!status) {
+                return { success: false, error: 'MCP server not found' };
+            }
+
+            // 检查是否已经是内置MCP
+            if (status.config.source === 'builtin') {
+                return { success: false, error: 'MCP server is already built-in' };
+            }
+
+            const config = status.config;
+
+            // 读取内置MCP配置文件
+            const builtinConfigPath = directoryManager.getBuiltinMcpConfigPath();
+            let builtinConfig: { mcpServers: Record<string, MCPServerConfig> } = { mcpServers: {} };
+
+            if (fsSync.existsSync(builtinConfigPath)) {
+                const content = await fs.readFile(builtinConfigPath, 'utf-8');
+                builtinConfig = JSON.parse(content);
+            }
+
+            // 检查是否已存在同名内置MCP
+            if (builtinConfig.mcpServers[serverName]) {
+                return { success: false, error: 'Built-in MCP server with same name already exists' };
+            }
+
+            // 添加到内置MCP配置
+            builtinConfig.mcpServers[serverName] = {
+                ...config,
+                source: 'builtin',
+                disabled: config.disabled || false
+            };
+
+            // 保存内置MCP配置文件
+            await fs.writeFile(builtinConfigPath, JSON.stringify(builtinConfig, null, 2), 'utf-8');
+            console.log(`[MCP] Marked server as built-in: ${serverName}`);
+
+            // 更新存储配置中的 source
+            const storageContent = await fs.readFile(this.storageConfigPath, 'utf-8');
+            const masterConfig = JSON.parse(storageContent);
+            if (masterConfig.mcpServers?.[serverName]) {
+                masterConfig.mcpServers[serverName].source = 'builtin';
+                await this.writeStorageConfig(masterConfig);
+            }
+
+            // 更新状态
+            this.updateStatus(serverName, status.status, status.error, {
+                ...config,
+                source: 'builtin'
+            });
+
+            return { success: true };
+        } catch (error) {
+            console.error(`[MCP] Error marking server as built-in:`, error);
+            return { success: false, error: (error as Error).message };
+        }
     }
 
     async toggleServer(name: string, enabled: boolean) {

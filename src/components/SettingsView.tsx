@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Settings, FolderOpen, Server, Check, Plus, Trash2, Edit2, Zap, Eye, EyeOff, ExternalLink, AlertTriangle, ChevronDown, Loader2, Activity, Info, Shield } from 'lucide-react';
+import { X, Settings, FolderOpen, Server, Check, Plus, Trash2, Edit2, Zap, Eye, EyeOff, ExternalLink, AlertTriangle, ChevronDown, Loader2, Activity, Info, Shield, FolderTree, UserCog, Star } from 'lucide-react';
 
 import logo from '../assets/logo.png';
 import logoGlm from '../assets/logo-glm.png';
@@ -145,7 +145,21 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     const isFirstRender = useRef(true);
     // Track previous config to prevent redundant saves
     const prevConfigRef = useRef<string>('');
-    const [activeTab, setActiveTab] = useState<'api' | 'folders' | 'mcp' | 'skills' | 'advanced' | 'about'>('api');
+    const [activeTab, setActiveTab] = useState<'api' | 'folders' | 'mcp' | 'skills' | 'directories' | 'admin' | 'advanced' | 'about'>('api');
+    const [directoryPaths, setDirectoryPaths] = useState<Record<string, string> | null>(null);
+    const [userRole, setUserRole] = useState<'user' | 'admin'>('user');
+    const [userIdentifier, setUserIdentifier] = useState<string>('');
+    const [presetAdmins, setPresetAdmins] = useState<string[]>([]);
+    const [userAccountInfo, setUserAccountInfo] = useState<{
+        username: string;
+        uid: number;
+        gid: number;
+        homedir: string;
+        shell: string;
+        hostname: string;
+        platform: string;
+        arch: string;
+    } | null>(null);
     const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
     const [testing, setTesting] = useState(false);
@@ -242,7 +256,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     // Listen for tab switch events
     useEffect(() => {
         const handleSwitch = (e: CustomEvent) => {
-            const validTabs = ['api', 'folders', 'mcp', 'skills', 'advanced', 'about'];
+            const validTabs = ['api', 'folders', 'mcp', 'skills', 'directories', 'admin', 'advanced', 'about'];
             if (e.detail && validTabs.includes(e.detail)) {
                 setActiveTab(e.detail as any);
             }
@@ -253,6 +267,25 @@ export function SettingsView({ onClose }: SettingsViewProps) {
 
     useEffect(() => {
         setIsLoading(true);
+        // 获取用户角色和标识符
+        window.ipcRenderer.invoke('permission:get-role').then((role) => {
+            setUserRole(role as 'user' | 'admin');
+        });
+        window.ipcRenderer.invoke('permission:get-user-identifier').then((identifier) => {
+            setUserIdentifier(identifier as string);
+        });
+        // 获取完整的用户账户信息
+        window.ipcRenderer.invoke('permission:get-user-account-info').then((info) => {
+            setUserAccountInfo(info as any);
+        });
+        // 如果是管理员，加载预设管理员列表
+        window.ipcRenderer.invoke('permission:is-admin').then((isAdmin) => {
+            if (isAdmin) {
+                window.ipcRenderer.invoke('permission:get-preset-admins').then((admins) => {
+                    setPresetAdmins(admins as string[]);
+                });
+            }
+        });
         window.ipcRenderer.invoke('config:get-all').then((cfg) => {
             if (cfg) {
                 const config = cfg as Config;
@@ -280,6 +313,10 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     useEffect(() => {
         if (activeTab === 'skills') {
             refreshSkills();
+        } else if (activeTab === 'directories') {
+            window.ipcRenderer.invoke('directory:get-all-paths').then((paths) => {
+                setDirectoryPaths(paths as Record<string, string>);
+            });
         } else if (activeTab === 'advanced') {
             loadPermissions();
         }
@@ -444,9 +481,11 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                         { id: 'folders' as const, label: t('tabPermissions'), icon: <FolderOpen size={14} /> },
                         { id: 'mcp' as const, label: t('tabMCP'), icon: <Server size={14} /> },
                         { id: 'skills' as const, label: t('tabSkills'), icon: <Zap size={14} /> },
+                        { id: 'directories' as const, label: (t('tabDirectories' as any) as string) || '目录管理', icon: <FolderTree size={14} /> },
+                        { id: 'admin' as const, label: (t('tabAdmin' as any) as string) || '管理员', icon: <UserCog size={14} />, adminOnly: true },
                         { id: 'advanced' as const, label: t('tabAdvanced'), icon: <Settings size={14} /> },
                         { id: 'about' as const, label: t('tabAbout'), icon: <Info size={14} /> },
-                    ].map(tab => (
+                    ].filter(tab => !(tab as any).adminOnly || userRole === 'admin').map(tab => (
                         <button
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
@@ -977,6 +1016,25 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                             </div>
                                                         </div>
                                                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            {userRole === 'admin' && (
+                                                                <button
+                                                                    onClick={async () => {
+                                                                        if (window.confirm(`确定要将技能 "${skill.name}" 标记为内置吗？\n\n标记后，该技能将随应用分发给所有用户。`)) {
+                                                                            const result = await window.ipcRenderer.invoke('skill:mark-builtin', skill.id) as { success: boolean; error?: string };
+                                                                            if (result.success) {
+                                                                                // 刷新技能列表
+                                                                                refreshSkills();
+                                                                            } else {
+                                                                                alert(result.error || '标记失败');
+                                                                            }
+                                                                        }
+                                                                    }}
+                                                                    className="p-1.5 text-stone-400 dark:text-muted-foreground hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/20 rounded"
+                                                                    title={(t('markAsBuiltin' as any) as string) || '标记为内置'}
+                                                                >
+                                                                    <Star size={14} />
+                                                                </button>
+                                                            )}
                                                             <button
                                                                 onClick={() => {
                                                                     setEditingSkill(skill.id);
@@ -988,13 +1046,15 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                             >
                                                                 <Edit2 size={14} />
                                                             </button>
-                                                            <button
-                                                                onClick={() => deleteSkill(skill.id)}
-                                                                className="p-1.5 text-stone-400 dark:text-muted-foreground hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
-                                                                title={t('delete')}
-                                                            >
-                                                                <Trash2 size={14} />
-                                                            </button>
+                                                            {userRole === 'admin' && (
+                                                                <button
+                                                                    onClick={() => deleteSkill(skill.id)}
+                                                                    className="p-1.5 text-stone-400 dark:text-muted-foreground hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                                                                    title={t('delete')}
+                                                                >
+                                                                    <Trash2 size={14} />
+                                                                </button>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 ))}
@@ -1069,6 +1129,246 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                         <FolderOpen size={10} />
                                         {t('openSkillsFolder')}
                                     </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'directories' && (
+                            <div className="space-y-4 animate-in fade-in duration-300">
+                                <div className="mb-4">
+                                    <h3 className="text-sm font-semibold text-stone-700 dark:text-zinc-200 mb-2">
+                                                        {(t('directoryManagement' as any) as string) || '目录管理'}
+                                    </h3>
+                                    <p className="text-xs text-stone-500 dark:text-zinc-400 mb-4">
+                                        {(t('directoryManagementDesc' as any) as string) || '查看和管理应用使用的所有目录路径'}
+                                    </p>
+                                </div>
+
+                                {directoryPaths && (
+                                    <div className="space-y-3">
+                                        {Object.entries(directoryPaths).map(([key, path]) => (
+                                            <div
+                                                key={key}
+                                                className="p-3 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-lg hover:border-orange-200 dark:hover:border-zinc-700 transition-colors group"
+                                            >
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2 mb-1">
+                                                            <FolderTree size={14} className="text-stone-400 dark:text-zinc-500 shrink-0" />
+                                                            <span className="text-xs font-medium text-stone-600 dark:text-zinc-300 capitalize">
+                                                                {key.replace(/([A-Z])/g, ' $1').trim()}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-[10px] font-mono text-stone-500 dark:text-zinc-400 break-all mt-1">
+                                                            {path}
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => window.ipcRenderer.invoke('directory:open-path', path)}
+                                                        className="p-1.5 text-stone-400 hover:text-orange-500 dark:text-zinc-500 dark:hover:text-orange-400 transition-colors opacity-0 group-hover:opacity-100"
+                                                        title={(t('openFolder' as any) as string) || '打开文件夹'}
+                                                    >
+                                                        <ExternalLink size={12} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {!directoryPaths && (
+                                    <div className="text-center py-8 text-stone-400 dark:text-zinc-500">
+                                        <Loader2 size={16} className="animate-spin mx-auto mb-2" />
+                                        <p className="text-xs">{(t('loading' as any) as string) || '加载中...'}</p>
+                                    </div>
+                                )}
+
+                                <div className="pt-4 border-t border-stone-200 dark:border-zinc-800">
+                                    <div className="flex items-center gap-2 text-xs text-stone-500 dark:text-zinc-400">
+                                        <Info size={12} />
+                                        <span>
+                                            {(t('directoryInfo' as any) as string) || '这些目录由应用自动管理，通常不需要手动修改。'}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'admin' && (
+                            <div className="space-y-4 animate-in fade-in duration-300">
+                                <div className="mb-4">
+                                    <h3 className="text-sm font-semibold text-stone-700 dark:text-zinc-200 mb-2">
+                                        {(t('adminSettings' as any) as string) || '管理员设置'}
+                                    </h3>
+                                    <p className="text-xs text-stone-500 dark:text-zinc-400 mb-4">
+                                        {(t('adminSettingsDesc' as any) as string) || '管理用户角色和权限设置'}
+                                    </p>
+                                </div>
+
+                                <div className="p-4 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-lg">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <div>
+                                            <p className="text-sm font-medium text-stone-700 dark:text-zinc-200">
+                                                {(t('currentRole' as any) as string) || '当前角色'}
+                                            </p>
+                                            <p className="text-xs text-stone-500 dark:text-zinc-400 mt-1">
+                                                {userRole === 'admin' 
+                                                    ? ((t('roleAdmin' as any) as string) || '超级管理员')
+                                                    : ((t('roleUser' as any) as string) || '普通用户')}
+                                            </p>
+                                            {userAccountInfo && (
+                                                <div className="mt-2 space-y-1">
+                                                    <p className="text-[10px] text-stone-400 dark:text-zinc-500 font-mono">
+                                                        {(t('currentUser' as any) as string) || '当前用户'}: {userAccountInfo.username}
+                                                    </p>
+                                                    <details className="text-[10px] text-stone-400 dark:text-zinc-500">
+                                                        <summary className="cursor-pointer hover:text-stone-600 dark:hover:text-zinc-300">
+                                                            {(t('viewAccountDetails' as any) as string) || '查看账户详情'}
+                                                        </summary>
+                                                        <div className="mt-1 pl-2 space-y-0.5 font-mono text-[9px]">
+                                                            <div>UID: {userAccountInfo.uid !== -1 ? userAccountInfo.uid : 'N/A'}</div>
+                                                            <div>GID: {userAccountInfo.gid !== -1 ? userAccountInfo.gid : 'N/A'}</div>
+                                                            <div>Home: {userAccountInfo.homedir}</div>
+                                                            {userAccountInfo.shell && <div>Shell: {userAccountInfo.shell}</div>}
+                                                            <div>Hostname: {userAccountInfo.hostname}</div>
+                                                            <div>Platform: {userAccountInfo.platform}</div>
+                                                            <div>Arch: {userAccountInfo.arch}</div>
+                                                        </div>
+                                                    </details>
+                                                </div>
+                                            )}
+                                        </div>
+                                        {userRole === 'admin' && (
+                                            <span className="px-2 py-1 text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 rounded-full">
+                                                {(t('admin' as any) as string) || '管理员'}
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            onClick={async () => {
+                                                const newRole = userRole === 'admin' ? 'user' : 'admin';
+                                                if (window.confirm(`确定要切换为${newRole === 'admin' ? '超级管理员' : '普通用户'}吗？`)) {
+                                                    const result = await window.ipcRenderer.invoke('permission:set-role', newRole) as { success: boolean };
+                                                    if (result.success) {
+                                                        setUserRole(newRole);
+                                                        // 刷新页面以更新UI
+                                                        window.location.reload();
+                                                    }
+                                                }
+                                            }}
+                                            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                                                userRole === 'admin'
+                                                    ? 'bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-zinc-400 hover:bg-stone-200 dark:hover:bg-zinc-700'
+                                                    : 'bg-orange-500 text-white hover:bg-orange-600'
+                                            }`}
+                                        >
+                                            {userRole === 'admin' 
+                                                ? ((t('switchToUser' as any) as string) || '切换为普通用户')
+                                                : ((t('switchToAdmin' as any) as string) || '切换为超级管理员')}
+                                        </button>
+                                    </div>
+
+                                    <div className="mt-4 pt-4 border-t border-stone-200 dark:border-zinc-800">
+                                        <p className="text-xs text-stone-500 dark:text-zinc-400 mb-2">
+                                            {(t('adminPermissions' as any) as string) || '超级管理员权限：'}
+                                        </p>
+                                        <ul className="mb-4 space-y-1 text-xs text-stone-600 dark:text-zinc-300 list-disc list-inside">
+                                            <li>{(t('adminPerm1' as any) as string) || '可以重命名和删除脚本'}</li>
+                                            <li>{(t('adminPerm2' as any) as string) || '可以标记脚本为官方'}</li>
+                                            <li>{(t('adminPerm3' as any) as string) || '可以标记技能为内置'}</li>
+                                            <li>{(t('adminPerm4' as any) as string) || '可以标记MCP为内置'}</li>
+                                            <li>{(t('adminPerm5' as any) as string) || '可以删除用户技能和MCP'}</li>
+                                        </ul>
+
+                                        {userRole === 'admin' && (
+                                            <div className="mt-4 pt-4 border-t border-stone-200 dark:border-zinc-800">
+                                                <p className="text-xs font-medium text-stone-700 dark:text-zinc-200 mb-2">
+                                                    {(t('presetAdmins' as any) as string) || '预设管理员列表'}
+                                                </p>
+                                                {presetAdmins.length > 0 ? (
+                                                    <div className="space-y-2">
+                                                        {presetAdmins.map((admin, index) => (
+                                                            <div key={index} className="flex items-center justify-between p-2 bg-stone-50 dark:bg-zinc-800 rounded text-xs">
+                                                                <span className="text-stone-700 dark:text-zinc-200 font-mono">{admin}</span>
+                                                                {admin.toLowerCase() === userIdentifier.toLowerCase() && (
+                                                                    <span className="px-1.5 py-0.5 text-[10px] bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 rounded">
+                                                        {(t('currentUser' as any) as string) || '当前用户'}
+                                                                    </span>
+                                                                )}
+                                                                <button
+                                                                    onClick={async () => {
+                                                                        if (window.confirm(`确定要从预设管理员列表中移除 "${admin}" 吗？`)) {
+                                                                            const result = await window.ipcRenderer.invoke('permission:remove-preset-admin', admin) as { success: boolean; error?: string };
+                                                                            if (result.success) {
+                                                                                setPresetAdmins(await window.ipcRenderer.invoke('permission:get-preset-admins') as string[]);
+                                                                            } else {
+                                                                                alert(result.error || '移除失败');
+                                                                            }
+                                                                        }
+                                                                    }}
+                                                                    className="p-1 text-stone-400 hover:text-red-500 transition-colors"
+                                                                    title="移除预设管理员"
+                                                                >
+                                                                    <Trash2 size={10} />
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <p className="text-xs text-stone-400 dark:text-zinc-500">
+                                                        {(t('noPresetAdmins' as any) as string) || '暂无预设管理员'}
+                                                    </p>
+                                                )}
+                                                <div className="mt-3 flex items-center gap-2">
+                                                    <input
+                                                        type="text"
+                                                        placeholder={(t('addPresetAdminPlaceholder' as any) as string) || '输入系统用户名'}
+                                                        onKeyDown={async (e) => {
+                                                            if (e.key === 'Enter') {
+                                                                const input = e.currentTarget as HTMLInputElement;
+                                                                const username = input.value.trim();
+                                                                if (username) {
+                                                                    const result = await window.ipcRenderer.invoke('permission:add-preset-admin', username) as { success: boolean; error?: string };
+                                                                    if (result.success) {
+                                                                        input.value = '';
+                                                                        setPresetAdmins(await window.ipcRenderer.invoke('permission:get-preset-admins') as string[]);
+                                                                    } else {
+                                                                        alert(result.error || '添加失败');
+                                                                    }
+                                                                }
+                                                            }
+                                                        }}
+                                                        className="flex-1 text-xs px-2 py-1 border border-stone-200 dark:border-zinc-700 rounded bg-white dark:bg-zinc-800 text-stone-700 dark:text-zinc-200"
+                                                    />
+                                                    <button
+                                                        onClick={async () => {
+                                                            const input = document.querySelector('input[placeholder*="系统用户名"]') as HTMLInputElement;
+                                                            if (input) {
+                                                                const username = input.value.trim();
+                                                                if (username) {
+                                                                    const result = await window.ipcRenderer.invoke('permission:add-preset-admin', username) as { success: boolean; error?: string };
+                                                                    if (result.success) {
+                                                                        input.value = '';
+                                                                        setPresetAdmins(await window.ipcRenderer.invoke('permission:get-preset-admins') as string[]);
+                                                                    } else {
+                                                                        alert(result.error || '添加失败');
+                                                                    }
+                                                                }
+                                                            }
+                                                        }}
+                                                        className="px-2 py-1 text-xs bg-orange-500 text-white rounded hover:bg-orange-600 transition-colors"
+                                                    >
+                                                        {(t('add' as any) as string) || '添加'}
+                                                    </button>
+                                                </div>
+                                                <p className="mt-2 text-[10px] text-stone-400 dark:text-zinc-500">
+                                                    {(t('presetAdminHint' as any) as string) || '预设管理员会在首次启动时自动获得管理员权限'}
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         )}

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
     Plus, Trash2, AlertCircle, CheckCircle, RefreshCw, Terminal,
-    Loader2, Settings2, FolderOpen, ChevronDown
+    Loader2, Settings2, FolderOpen, ChevronDown, Star
 } from 'lucide-react';
 import logo from '../assets/logo.png';
 import { useI18n } from '../i18n/I18nContext';
@@ -38,6 +38,7 @@ export function MCPSettings({ config: _config }: MCPSettingsProps) {
     const [servers, setServers] = useState<MCPStatus[]>([]);
     const [loading, setLoading] = useState(false);
     const [isAdding, setIsAdding] = useState(false);
+    const [userRole, setUserRole] = useState<'user' | 'admin'>('user');
 
     // Add Mode State
     const [jsonInput, setJsonInput] = useState('');
@@ -51,6 +52,10 @@ export function MCPSettings({ config: _config }: MCPSettingsProps) {
     const [editingServer, setEditingServer] = useState<string | null>(null);
 
     useEffect(() => {
+        // 获取用户角色
+        window.ipcRenderer.invoke('permission:get-role').then((role) => {
+            setUserRole(role as 'user' | 'admin');
+        });
         loadServers();
         const timer = setInterval(loadServers, 5000);
         return () => clearInterval(timer);
@@ -74,9 +79,22 @@ export function MCPSettings({ config: _config }: MCPSettingsProps) {
 
 
     const handleDelete = async (name: string) => {
-        if (confirm(`${t('confirmDeleteMCP')} ${name}?`)) {
-            await window.ipcRenderer.invoke('mcp:remove-server', name);
+        const result = await window.ipcRenderer.invoke('mcp:remove-server', name) as { success: boolean; error?: string };
+        if (result.success) {
             loadServers();
+        } else {
+            alert(result.error || '删除失败');
+        }
+    };
+
+    const handleMarkBuiltin = async (name: string) => {
+        if (confirm(`确定要将MCP服务器 "${name}" 标记为内置吗？\n\n标记后，该MCP将随应用分发给所有用户。`)) {
+            const result = await window.ipcRenderer.invoke('mcp:mark-builtin', name) as { success: boolean; error?: string };
+            if (result.success) {
+                loadServers();
+            } else {
+                alert(result.error || '标记失败');
+            }
         }
     };
 
@@ -258,10 +276,28 @@ export function MCPSettings({ config: _config }: MCPSettingsProps) {
                                             </div>
                                         </label>
 
-                                        {/* Delete (Only for user added) */}
-                                        {server.config.source !== 'builtin' && (
+                                        {/* Mark as Built-in (Admin only, for user-added servers) */}
+                                        {userRole === 'admin' && server.config.source !== 'builtin' && (
                                             <button
-                                                onClick={() => handleDelete(server.name)}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleMarkBuiltin(server.name);
+                                                }}
+                                                className="p-1.5 text-stone-300 hover:text-yellow-500 hover:bg-yellow-50 dark:text-zinc-600 dark:hover:text-yellow-400 dark:hover:bg-yellow-950/30 rounded transition-all"
+                                                title={(t('markAsBuiltin' as any) as string) || '标记为内置'}
+                                            >
+                                                <Star size={14} />
+                                            </button>
+                                        )}
+                                        {/* Delete (Admin only, for user added) */}
+                                        {userRole === 'admin' && server.config.source !== 'builtin' && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (confirm(`${t('confirmDeleteMCP')} ${server.name}?`)) {
+                                                        handleDelete(server.name);
+                                                    }
+                                                }}
                                                 className="p-1.5 text-stone-300 hover:text-red-500 hover:bg-red-50 dark:text-zinc-600 dark:hover:text-red-400 dark:hover:bg-red-950/30 rounded transition-all"
                                                 title={t('removeService')}
                                             >
