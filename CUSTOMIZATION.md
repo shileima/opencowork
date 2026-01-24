@@ -190,6 +190,7 @@ resources/skills/chrome-agent/
 |---------|------------|---------|---------|
 | 0.0.3 | - | 2026-01-23 | 添加官方脚本标签机制 |
 | 0.0.4 | - | 2026-01-23 | 实现超级管理员权限系统、预设管理员机制、用户账户信息获取 |
+| 0.0.6 | - | 2026-01-25 | 内置 Playwright 浏览器支持、自动化脚本可直接使用 Playwright |
 | 0.0.5 | - | 2026-01-24 | 自动化脚本规范检查、Playwright 框架约束、预设管理员修复、Commit 规范 |
 
 ---
@@ -204,6 +205,45 @@ resources/skills/chrome-agent/
 - 更新 UI 显示官方标签
 
 ---
+
+## v0.0.6 (2026-01-25)
+
+### 新增功能
+
+- **内置 Playwright 浏览器支持**：
+  - 将 Playwright npm 包和浏览器二进制文件内置到应用中
+  - 用户安装应用后即可直接使用 Playwright，无需单独安装
+  - 支持 Chromium 浏览器（约 731MB）
+  - 自动设置环境变量，脚本可直接使用 `require('playwright')`
+
+- **Playwright 路径管理工具**：
+  - 创建 `electron/utils/PlaywrightPath.ts` 工具函数
+  - 自动检测开发/生产环境
+  - 提供环境变量配置函数
+
+- **浏览器下载脚本**：
+  - 创建 `scripts/prepare-playwright.mjs` 用于下载浏览器
+  - 支持重试机制和缓存检查
+  - 添加 `npm run prepare:playwright` 命令
+
+- **构建验证增强**：
+  - 在 `verify-builtin-resources.cjs` 中添加 Playwright 浏览器检查
+  - 验证浏览器版本和文件大小
+
+### 技术改进
+
+- **环境变量自动设置**：
+  - `FileSystemTools.ts` 在执行命令时自动设置 `PLAYWRIGHT_BROWSERS_PATH` 和 `NODE_PATH`
+  - 确保脚本能找到内置的 Playwright 包和浏览器
+
+- **打包配置**：
+  - 更新 `electron-builder.json5`，将 Playwright 资源包含到安装包中
+  - 更新 `.gitignore`，忽略 Playwright 资源文件
+
+### 文档更新
+
+- 创建 `docs/PLAYWRIGHT_BROWSER.md`：说明 Playwright 浏览器的必要性和工作原理
+- 创建 `docs/PLAYWRIGHT_DOWNLOAD.md`：提供浏览器下载指南
 
 ## v0.0.5 (2026-01-24)
 
