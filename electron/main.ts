@@ -912,9 +912,12 @@ ipcMain.handle('permission:get-role', () => {
 });
 
 ipcMain.handle('permission:set-role', (_, role: 'user' | 'admin') => {
-  // 权限检查：只有当前管理员可以设置角色
+  // 权限检查：只有当前管理员或预设管理员可以设置角色为管理员
   if (!permissionService.isAdmin() && role === 'admin') {
-    return { success: false, error: 'Permission denied: Only administrators can grant admin role' };
+    // 检查是否为预设管理员
+    if (!permissionService.isCurrentUserPresetAdmin()) {
+      return { success: false, error: 'Permission denied: Only administrators or preset admins can grant admin role' };
+    }
   }
   permissionService.setUserRole(role);
   return { success: true };

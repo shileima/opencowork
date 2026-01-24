@@ -204,6 +204,43 @@ resources/skills/chrome-agent/
 
 ---
 
+## v0.0.5 (2026-01-24)
+
+### 新增功能
+- **自动化脚本规范检查**：添加自动化脚本规范验证机制
+  - 检查脚本文件是否在正确的目录下（`~/.opencowork/skills/chrome-agent/`）
+  - 检查文件扩展名是否为 `.js`
+  - 检查文件权限
+  - 自动刷新脚本列表（每5秒）
+  - 手动刷新按钮和打开脚本文件夹按钮
+
+- **Playwright 框架约束**：强制使用 Playwright 进行浏览器自动化
+  - 禁止使用 Selenium 和 Puppeteer
+  - 在执行脚本前检查脚本内容
+  - 在安装包时检查是否安装禁止的框架
+  - 提供详细的错误提示和修复建议
+
+- **预设管理员角色切换**：修复预设管理员无法切换角色的问题
+  - 添加 `isCurrentUserPresetAdmin()` 公共方法
+  - 允许预设管理员切换为管理员角色
+  - 解决循环依赖问题
+
+- **Commit 规范**：添加项目 commit 规范文档
+  - 创建 `.cursor/COMMIT_CONVENTION.md`
+  - 创建 `.cursor/rules/COMMIT.md`
+  - 规范 commit message 格式和类型
+
+### 优化改进
+- 优化自动化脚本检测逻辑，避免误判 Playwright 为 Puppeteer
+- 改进错误提示信息，提供更清晰的修复建议
+- 更新 `agent-browser` 技能文档，添加详细的规范说明和示例
+
+### 文档更新
+- 创建 `docs/AUTOMATION_SCRIPTS.md`：自动化脚本使用指南
+- 更新 `agent-browser` 技能文档：添加 Playwright 约束说明
+
+---
+
 ## 相关文档
 
 - [Fork 维护指南](./docs/FORK_MAINTENANCE.md)

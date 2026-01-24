@@ -163,6 +163,13 @@ export class PermissionService {
     }
 
     /**
+     * 检查当前用户是否为预设管理员（公共方法）
+     */
+    public isCurrentUserPresetAdmin(): boolean {
+        return this.isPresetAdmin();
+    }
+
+    /**
      * 获取预设管理员列表（仅管理员可见）
      */
     public getPresetAdminUsers(): string[] {

@@ -6,7 +6,10 @@ import { SkillManager } from './skills/SkillManager';
 import { MCPClientService } from './mcp/MCPClientService';
 import { permissionManager } from './security/PermissionManager';
 import { configStore } from '../config/ConfigStore';
-import os from 'os';
+import { directoryManager } from '../config/DirectoryManager';
+import * as os from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Safe commands that can be auto-approved in standard/trust modes
 const SAFE_COMMANDS = [
@@ -23,6 +26,170 @@ const DANGEROUS_PATTERNS = [
     />\s*\/?dev\/(null|sda|sdb)/i, /2>\s*&1\s*>\s*\/dev\/null/i,
     /chmod\s+777/i, /chmod\s+-R\s+777/i, /chown\s+-R/i
 ];
+
+/**
+ * 检查命令是否为自动化脚本相关命令
+ */
+function isAutomationScriptCommand(command: string): boolean {
+    const cmd = command.trim().toLowerCase();
+    // 检查是否包含 node 执行 .js 文件，或者包含 chrome-agent、自动化等关键词
+    const automationKeywords = [
+        'chrome-agent',
+        'automation',
+        '自动化',
+        'ui自动化',
+        'ui测试',
+        'browser automation',
+        'web automation'
+    ];
+    
+    // 检查是否执行 .js 文件
+    const jsFilePattern = /node\s+.*\.js|\.js\s*$/;
+    
+    // 检查是否在 chrome-agent 目录下执行
+    const chromeAgentPathPattern = /chrome-agent/;
+    
+    return jsFilePattern.test(cmd) && 
+           (chromeAgentPathPattern.test(cmd) || automationKeywords.some(keyword => cmd.includes(keyword)));
+}
+
+/**
+ * 验证自动化脚本是否符合规范
+ */
+function validateAutomationScript(command: string, cwd: string): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+    
+    try {
+        // 提取脚本文件路径
+        const scriptPathMatch = command.match(/node\s+["']?([^"'\s]+\.js)["']?/i) || 
+                               command.match(/([^\s]+\.js)/);
+        
+        if (!scriptPathMatch) {
+            // 如果不是直接执行脚本文件，可能是通过其他方式，跳过检查
+            return { valid: true, errors: [] };
+        }
+        
+        let scriptPath = scriptPathMatch[1];
+        
+        // 如果是相对路径，转换为绝对路径
+        if (!path.isAbsolute(scriptPath)) {
+            scriptPath = path.resolve(cwd, scriptPath);
+        }
+        
+        // 规范化路径
+        scriptPath = path.normalize(scriptPath);
+        
+        // 获取标准脚本目录
+        const scriptsDir = directoryManager.getScriptsDir();
+        const normalizedScriptsDir = path.normalize(scriptsDir);
+        
+        // 检查1: 文件是否在正确的目录下
+        if (!scriptPath.startsWith(normalizedScriptsDir)) {
+            errors.push(`脚本文件不在正确的目录下\n  当前路径: ${scriptPath}\n  应该位于: ${scriptsDir}`);
+        }
+        
+        // 检查2: 文件扩展名是否为 .js
+        if (!scriptPath.toLowerCase().endsWith('.js')) {
+            errors.push(`文件扩展名必须为 .js\n  当前文件: ${scriptPath}`);
+        }
+        
+        // 检查3: 文件是否存在
+        if (!fs.existsSync(scriptPath)) {
+            errors.push(`脚本文件不存在\n  路径: ${scriptPath}`);
+        } else {
+            // 检查4: 文件是否有读取权限
+            try {
+                fs.accessSync(scriptPath, fs.constants.R_OK);
+            } catch {
+                errors.push(`脚本文件没有读取权限\n  路径: ${scriptPath}`);
+            }
+            
+            // 检查5: 脚本内容是否使用了禁止的自动化框架
+            try {
+                const scriptContent = fs.readFileSync(scriptPath, 'utf-8');
+                const forbiddenFrameworks = checkForbiddenFrameworks(scriptContent);
+                if (forbiddenFrameworks.length > 0) {
+                    errors.push(`脚本使用了禁止的自动化框架：${forbiddenFrameworks.join(', ')}\n  只允许使用 Playwright 进行浏览器自动化\n  请移除 Selenium 或 Puppeteer 相关代码，改用 Playwright`);
+                }
+            } catch (readError) {
+                // 如果无法读取文件内容，记录警告但不阻止（可能权限问题）
+                console.warn(`[AgentRuntime] Could not read script content for validation: ${readError instanceof Error ? readError.message : String(readError)}`);
+            }
+        }
+        
+    } catch (error) {
+        errors.push(`验证脚本时出错: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    
+    return {
+        valid: errors.length === 0,
+        errors
+    };
+}
+
+/**
+ * 检查脚本内容是否使用了禁止的自动化框架（Selenium 或 Puppeteer）
+ */
+function checkForbiddenFrameworks(scriptContent: string): string[] {
+    const forbidden: string[] = [];
+    const content = scriptContent.toLowerCase();
+    
+    // 检查 Selenium 相关导入和使用
+    const seleniumPatterns = [
+        /require\s*\(\s*['"]selenium-webdriver['"]/,
+        /require\s*\(\s*['"]webdriverio['"]/,
+        /from\s+['"]selenium['"]/,
+        /from\s+['"]selenium\.webdriver['"]/,
+        /import\s+.*from\s+['"]selenium['"]/,
+        /import\s+.*from\s+['"]selenium\.webdriver['"]/,
+        /selenium-webdriver/,
+        /webdriverio/,
+        /\.getDriver\(\)/,
+        /new\s+webdriver\./,
+        /Builder\(\)/,
+        /\.findElement\(/,
+        /\.findElements\(/
+    ];
+    
+    // 检查 Puppeteer 相关导入和使用（只检查包名和特定 API，不检查通用方法）
+    // 注意：Playwright 和 Puppeteer 的 API 很相似，所以主要依赖包名检测
+    const puppeteerPackagePatterns = [
+        /require\s*\(\s*['"]puppeteer['"]/,
+        /require\s*\(\s*['"]puppeteer-core['"]/,
+        /from\s+['"]puppeteer['"]/,
+        /from\s+['"]puppeteer-core['"]/,
+        /import\s+.*from\s+['"]puppeteer['"]/,
+        /import\s+.*from\s+['"]puppeteer-core['"]/,
+    ];
+    
+    // Puppeteer 特有的 API 调用（这些是 Playwright 没有的）
+    const puppeteerSpecificPatterns = [
+        /puppeteer\.launch\(/,
+        /puppeteer-core\.launch\(/,
+        /const\s+puppeteer\s*=/,
+        /let\s+puppeteer\s*=/,
+        /var\s+puppeteer\s*=/
+    ];
+    
+    // 检查是否使用了 Selenium
+    const hasSelenium = seleniumPatterns.some(pattern => pattern.test(content));
+    if (hasSelenium) {
+        forbidden.push('Selenium');
+    }
+    
+    // 检查是否使用了 Puppeteer（但要排除 Playwright）
+    // 如果脚本中同时包含 playwright，则可能是误判，跳过检查
+    const hasPlaywright = content.includes('playwright') || content.includes('@playwright');
+    const hasPuppeteerPackage = puppeteerPackagePatterns.some(pattern => pattern.test(content));
+    const hasPuppeteerSpecific = puppeteerSpecificPatterns.some(pattern => pattern.test(content));
+    
+    // 只有当明确检测到 Puppeteer 包名或特定 API，且没有 Playwright 时才标记为禁止
+    if ((hasPuppeteerPackage || hasPuppeteerSpecific) && !hasPlaywright) {
+        forbidden.push('Puppeteer');
+    }
+    
+    return forbidden;
+}
 
 // Check if a command is considered safe
 function isSafeCommand(command: string): boolean {
@@ -493,6 +660,26 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                 } else if (toolUse.name === 'run_command') {
                                     const args = toolUse.input as { command: string, cwd?: string };
                                     const defaultCwd = authorizedFolders[0] || process.cwd();
+
+                                    // 检查是否为自动化脚本相关命令
+                                    const isAutomationScript = isAutomationScriptCommand(args.command);
+                                    if (isAutomationScript) {
+                                        // 检查命令中是否包含禁止的框架安装
+                                        const cmdLower = args.command.toLowerCase();
+                                        if (cmdLower.includes('npm install') || cmdLower.includes('npm i') || cmdLower.includes('yarn add')) {
+                                            if (cmdLower.includes('selenium') || cmdLower.includes('webdriverio') || cmdLower.includes('puppeteer')) {
+                                                result = `❌ 禁止安装 Selenium 或 Puppeteer 相关包\n\n自动化脚本只能使用 Playwright 进行浏览器自动化\n\n✅ 正确做法：\n  npm install playwright\n  npx playwright install\n\n❌ 禁止的做法：\n  npm install selenium-webdriver\n  npm install puppeteer\n  npm install webdriverio`;
+                                                return;
+                                            }
+                                        }
+                                        
+                                        // 验证自动化脚本规范
+                                        const validationResult = validateAutomationScript(args.command, args.cwd || defaultCwd);
+                                        if (!validationResult.valid) {
+                                            result = `❌ 自动化脚本规范检查失败：\n\n${validationResult.errors.map((e: string) => `• ${e}`).join('\n')}\n\n请确保：\n✅ 脚本文件在 ~/.opencowork/skills/chrome-agent/ 目录下\n✅ 文件扩展名为 .js\n✅ 文件有读取权限\n✅ 只使用 Playwright 进行浏览器自动化（禁止使用 Selenium 和 Puppeteer）\n✅ 在自动化脚本列表中点击刷新按钮或等待自动刷新`;
+                                            return;
+                                        }
+                                    }
 
                                     // Determine trust level from the working directory
                                     const trustLevel = args.cwd
