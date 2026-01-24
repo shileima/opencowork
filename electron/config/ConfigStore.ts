@@ -113,7 +113,7 @@ class ConfigStore {
 
     constructor() {
         this.store = new Store({
-            name: 'opencowork-config',
+            name: 'qa-cowork-config',
             defaults: defaults as any
         });
 

@@ -39,7 +39,7 @@ class ScriptStore {
 
     constructor() {
         this.store = new Store<ScriptStoreSchema>({
-            name: 'opencowork-scripts',
+            name: 'qa-cowork-scripts',
             defaults
         });
         // 使用 DirectoryManager 获取目录路径

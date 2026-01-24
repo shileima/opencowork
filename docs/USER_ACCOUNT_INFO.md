@@ -117,7 +117,7 @@ const isAdmin = permissionService.isAdmin();
 
 ```typescript
 const userInfo = os.userInfo();
-const configPath = path.join(userInfo.homedir, '.opencowork', 'config.json');
+const configPath = path.join(userInfo.homedir, '.qa-cowork', 'config.json');
 ```
 
 ## API 参考

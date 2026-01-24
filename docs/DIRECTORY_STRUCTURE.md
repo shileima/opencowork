@@ -8,9 +8,9 @@ OpenCowork 使用统一的目录管理系统（`DirectoryManager`）来管理所
 
 ## 目录分类
 
-### 1. 客户端运行目录（~/.opencowork/）
+### 1. 客户端运行目录（~/.qa-cowork/）
 
-**路径**：`~/.opencowork/`（macOS/Linux）或 `%USERPROFILE%\.opencowork\`（Windows）
+**路径**：`~/.qa-cowork/`（macOS/Linux）或 `%USERPROFILE%\.qa-cowork\`（Windows）
 
 **用途**：存储应用配置、用户数据和用户自定义内容
 
@@ -23,11 +23,11 @@ OpenCowork 使用统一的目录管理系统（`DirectoryManager`）来管理所
 **子目录结构**：
 
 ```
-~/.opencowork/
+~/.qa-cowork/
 ├── config/                    # 配置目录（electron-store 自动管理）
-│   ├── opencowork-config.json    # 应用配置（API Keys、模型选择等）
-│   ├── opencowork-sessions.json   # 会话历史
-│   └── opencowork-scripts.json    # 脚本索引
+│   ├── qa-cowork-config.json    # 应用配置（API Keys、模型选择等）
+│   ├── qa-cowork-sessions.json   # 会话历史
+│   └── qa-cowork-scripts.json    # 脚本索引
 ├── skills/                    # 用户技能目录
 │   ├── chrome-agent/          # 自动化脚本目录
 │   │   ├── login_xgpt.js     # 用户脚本
@@ -92,7 +92,7 @@ resources/
 import { directoryManager } from './config/DirectoryManager';
 
 // 获取基础目录
-const baseDir = directoryManager.getBaseDir(); // ~/.opencowork/
+const baseDir = directoryManager.getBaseDir(); // ~/.qa-cowork/
 
 // 获取配置目录
 const configDir = directoryManager.getConfigDir(); // ~/.opencowork/config/
@@ -101,13 +101,13 @@ const configDir = directoryManager.getConfigDir(); // ~/.opencowork/config/
 const skillsDir = directoryManager.getSkillsDir(); // ~/.opencowork/skills/
 
 // 获取脚本目录
-const scriptsDir = directoryManager.getScriptsDir(); // ~/.opencowork/skills/chrome-agent/
+const scriptsDir = directoryManager.getScriptsDir(); // ~/.qa-cowork/skills/chrome-agent/
 
 // 获取 MCP 目录
-const mcpDir = directoryManager.getMcpDir(); // ~/.opencowork/mcp/
+const mcpDir = directoryManager.getMcpDir(); // ~/.qa-cowork/mcp/
 
 // 获取缓存目录
-const cacheDir = directoryManager.getCacheDir(); // ~/.opencowork/cache/
+const cacheDir = directoryManager.getCacheDir(); // ~/.qa-cowork/cache/
 
 // 获取日志目录
 const logsDir = directoryManager.getLogsDir(); // ~/.opencowork/logs/
@@ -118,7 +118,7 @@ const builtinSkillsDir = directoryManager.getBuiltinSkillsDir();
 const builtinMcpDir = directoryManager.getBuiltinMcpDir();
 
 // 获取特定文件路径
-const userMcpConfigPath = directoryManager.getUserMcpConfigPath(); // ~/.opencowork/mcp/mcp.json
+const userMcpConfigPath = directoryManager.getUserMcpConfigPath(); // ~/.qa-cowork/mcp/mcp.json
 const builtinMcpConfigPath = directoryManager.getBuiltinMcpConfigPath(); // resources/mcp/builtin-mcp.json
 
 // 获取所有路径（用于 UI 显示）
@@ -150,9 +150,9 @@ app.whenReady().then(() => {
 **管理方式**：通过 `electron-store` 自动管理，无需手动创建文件
 
 **文件说明**：
-- `opencowork-config.json`：应用配置，由 `ConfigStore` 管理
-- `opencowork-sessions.json`：会话历史，由 `SessionStore` 管理
-- `opencowork-scripts.json`：脚本索引，由 `ScriptStore` 管理
+- `qa-cowork-config.json`：应用配置，由 `ConfigStore` 管理
+- `qa-cowork-sessions.json`：会话历史，由 `SessionStore` 管理
+- `qa-cowork-scripts.json`：脚本索引，由 `ScriptStore` 管理
 
 ### skills/ 目录
 
@@ -161,7 +161,7 @@ app.whenReady().then(() => {
 - 自动化脚本（chrome-agent）
 
 **管理方式**：
-- 内置技能首次运行时从 `resources/skills/` 复制到 `~/.opencowork/skills/`
+- 内置技能首次运行时从 `resources/skills/` 复制到 `~/.qa-cowork/skills/`
 - 用户自定义技能直接创建在此目录
 - 更新应用时，新增的内置技能会自动添加，但不会覆盖用户修改的技能
 
@@ -232,7 +232,7 @@ app.whenReady().then(() => {
 ## 最佳实践
 
 1. **不要手动修改目录结构**：让应用自动管理
-2. **定期备份**：备份 `~/.opencowork/` 目录以保留配置和会话历史
+2. **定期备份**：备份 `~/.qa-cowork/` 目录以保留配置和会话历史
 3. **清理缓存**：可以定期清理 `cache/` 目录释放空间
 4. **导出配置**：重要配置可以导出备份
 5. **使用 DirectoryManager**：所有目录路径都通过 `DirectoryManager` 获取，不要硬编码路径
@@ -241,19 +241,19 @@ app.whenReady().then(() => {
 
 ### Q: 如何重置应用配置？
 
-A: 删除 `~/.opencowork/config/` 目录，应用会重新创建默认配置。
+A: 删除 `~/.qa-cowork/config/` 目录，应用会重新创建默认配置。
 
 ### Q: 如何备份用户数据？
 
-A: 备份整个 `~/.opencowork/` 目录即可。
+A: 备份整个 `~/.qa-cowork/` 目录即可。
 
 ### Q: 如何迁移到新电脑？
 
-A: 将 `~/.opencowork/` 目录复制到新电脑的相同位置即可。
+A: 将 `~/.qa-cowork/` 目录复制到新电脑的相同位置即可。
 
 ### Q: 内置技能在哪里？
 
-A: 内置技能在 `resources/skills/` 目录，首次运行时复制到 `~/.opencowork/skills/`。
+A: 内置技能在 `resources/skills/` 目录，首次运行时复制到 `~/.qa-cowork/skills/`。
 
 ### Q: 如何查看所有目录路径？
 

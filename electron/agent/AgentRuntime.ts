@@ -451,7 +451,7 @@ export class AgentRuntime {
                 ? `\n\nWORKING DIRECTORY:\n- Primary: ${authorizedFolders[0]}\n- All authorized: ${authorizedFolders.join(', ')}\n\nYou should primarily work within these directories. Always use absolute paths.`
                 : '\n\nNote: No working directory has been selected yet. Ask the user to select a folder first.';
 
-            const skillsDir = os.homedir() + '/.opencowork/skills';
+            const skillsDir = os.homedir() + '/.qa-cowork/skills';
             const systemPrompt = `
 # OpenCowork Assistant System
 
@@ -676,7 +676,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         // 验证自动化脚本规范
                                         const validationResult = validateAutomationScript(args.command, args.cwd || defaultCwd);
                                         if (!validationResult.valid) {
-                                            result = `❌ 自动化脚本规范检查失败：\n\n${validationResult.errors.map((e: string) => `• ${e}`).join('\n')}\n\n请确保：\n✅ 脚本文件在 ~/.opencowork/skills/chrome-agent/ 目录下\n✅ 文件扩展名为 .js\n✅ 文件有读取权限\n✅ 只使用 Playwright 进行浏览器自动化（禁止使用 Selenium 和 Puppeteer）\n✅ 在自动化脚本列表中点击刷新按钮或等待自动刷新`;
+                                            result = `❌ 自动化脚本规范检查失败：\n\n${validationResult.errors.map((e: string) => `• ${e}`).join('\n')}\n\n请确保：\n✅ 脚本文件在 ~/.qa-cowork/skills/chrome-agent/ 目录下\n✅ 文件扩展名为 .js\n✅ 文件有读取权限\n✅ 只使用 Playwright 进行浏览器自动化（禁止使用 Selenium 和 Puppeteer）\n✅ 在自动化脚本列表中点击刷新按钮或等待自动刷新`;
                                             return;
                                         }
                                     }

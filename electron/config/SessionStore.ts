@@ -27,7 +27,7 @@ class SessionStore {
 
     constructor() {
         this.store = new Store<SessionStoreSchema>({
-            name: 'opencowork-sessions',
+            name: 'qa-cowork-sessions',
             defaults
         });
     }

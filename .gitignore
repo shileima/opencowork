@@ -29,7 +29,5 @@ dist-electron
 release
 build
 !build/entitlements.mac.plist
+.qa-cowork
 .opencowork
-
-# Built-in Node.js binaries (large files)
-resources/node/

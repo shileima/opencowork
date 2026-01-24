@@ -18,8 +18,8 @@ export class DirectoryManager {
     private initialized: boolean = false;
 
     private constructor() {
-        // 客户端运行目录：~/.opencowork/ (macOS/Linux) 或 %USERPROFILE%\.opencowork\ (Windows)
-        this.baseDir = path.join(os.homedir(), '.opencowork');
+        // 客户端运行目录：~/.qa-cowork/ (macOS/Linux) 或 %USERPROFILE%\.qa-cowork\ (Windows)
+        this.baseDir = path.join(os.homedir(), '.qa-cowork');
     }
 
     /**
@@ -70,49 +70,49 @@ export class DirectoryManager {
     }
 
     /**
-     * 获取基础目录路径 (~/.opencowork/)
+     * 获取基础目录路径 (~/.qa-cowork/)
      */
     public getBaseDir(): string {
         return this.baseDir;
     }
 
     /**
-     * 获取配置目录路径 (~/.opencowork/config/)
+     * 获取配置目录路径 (~/.qa-cowork/config/)
      */
     public getConfigDir(): string {
         return path.join(this.baseDir, 'config');
     }
 
     /**
-     * 获取技能目录路径 (~/.opencowork/skills/)
+     * 获取技能目录路径 (~/.qa-cowork/skills/)
      */
     public getSkillsDir(): string {
         return path.join(this.baseDir, 'skills');
     }
 
     /**
-     * 获取自动化脚本目录路径 (~/.opencowork/skills/chrome-agent/)
+     * 获取自动化脚本目录路径 (~/.qa-cowork/skills/chrome-agent/)
      */
     public getScriptsDir(): string {
         return path.join(this.baseDir, 'skills', 'chrome-agent');
     }
 
     /**
-     * 获取MCP配置目录路径 (~/.opencowork/mcp/)
+     * 获取MCP配置目录路径 (~/.qa-cowork/mcp/)
      */
     public getMcpDir(): string {
         return path.join(this.baseDir, 'mcp');
     }
 
     /**
-     * 获取缓存目录路径 (~/.opencowork/cache/)
+     * 获取缓存目录路径 (~/.qa-cowork/cache/)
      */
     public getCacheDir(): string {
         return path.join(this.baseDir, 'cache');
     }
 
     /**
-     * 获取日志目录路径 (~/.opencowork/logs/)
+     * 获取日志目录路径 (~/.qa-cowork/logs/)
      */
     public getLogsDir(): string {
         return path.join(this.baseDir, 'logs');
