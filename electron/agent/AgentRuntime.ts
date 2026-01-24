@@ -7,7 +7,6 @@ import { MCPClientService } from './mcp/MCPClientService';
 import { permissionManager } from './security/PermissionManager';
 import { configStore } from '../config/ConfigStore';
 import os from 'os';
-import fs from 'fs';
 
 // Safe commands that can be auto-approved in standard/trust modes
 const SAFE_COMMANDS = [
@@ -54,17 +53,6 @@ function isSafeCommand(command: string): boolean {
     return false;
 }
 
-// Check if a write operation is potentially dangerous (overwriting existing file)
-// Note: Currently unused, but kept for future use
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function _isDangerousWrite(_path: string): boolean {
-    try {
-        // Implementation kept for future use
-        return false;
-    } catch {
-        return false;
-    }
-}
 
 
 export type AgentMessage = {
