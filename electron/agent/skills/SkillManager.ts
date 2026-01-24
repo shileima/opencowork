@@ -53,7 +53,7 @@ export class SkillManager {
             console.log(`[SkillManager] Using builtin skills directory: ${sourceDir}`);
 
             if (!await this.pathExists(sourceDir)) {
-                console.error('[SkillManager] ❌ Could not find default skills directory in any of these locations:', possiblePaths);
+                console.error('[SkillManager] ❌ Could not find default skills directory:', sourceDir);
                 return;
             }
 

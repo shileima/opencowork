@@ -55,7 +55,7 @@ function isSafeCommand(command: string): boolean {
 }
 
 // Check if a write operation is potentially dangerous (overwriting existing file)
-function isDangerousWrite(path: string): boolean {
+function _isDangerousWrite(path: string): boolean {
     try {
         return fs.existsSync(path);
     } catch {

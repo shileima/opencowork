@@ -1,7 +1,6 @@
 import { app, BrowserWindow, shell, ipcMain, screen, dialog, globalShortcut, Tray, Menu, nativeImage } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import os from 'node:os'
 import fs from 'node:fs'
 import dotenv from 'dotenv'
 import { AgentRuntime } from './agent/AgentRuntime'
@@ -696,6 +695,7 @@ ipcMain.handle('mcp:save-config', async (_, content: string) => {
 });
 
 ipcMain.handle('mcp:open-config-folder', async () => {
+  const mcpConfigPath = directoryManager.getUserMcpConfigPath();
   if (fs.existsSync(mcpConfigPath)) {
     shell.showItemInFolder(mcpConfigPath);
   } else {
