@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { getBuiltinNodePath } from '../../utils/NodePath';
 
 const execAsync = promisify(exec);
 
@@ -92,9 +93,23 @@ export class FileSystemTools {
         const workingDir = args.cwd || defaultCwd;
         const timeout = 60000; // 60 second timeout
 
+        // 如果命令包含 'node'，替换为内置的 node 路径
+        let command = args.command;
+        const builtinNodePath = getBuiltinNodePath();
+        if (builtinNodePath && builtinNodePath !== 'node') {
+            // 使用正则表达式替换独立的 'node' 命令（避免替换其他单词中的 node）
+            // 匹配：node 前后是空白字符、引号、行首或行尾
+            const nodeRegex = /(^|\s|["'])\bnode\b(\s|$|["'])/g;
+            const nodeCommand = builtinNodePath.includes(' ') ? `"${builtinNodePath}"` : builtinNodePath;
+            command = command.replace(nodeRegex, (match, before, after) => {
+                // 保留前后的空白字符或引号
+                return `${before}${nodeCommand}${after}`;
+            });
+        }
+
         try {
-            console.log(`[FileSystemTools] Executing command: ${args.command} in ${workingDir}`);
-            const { stdout, stderr } = await execAsync(args.command, {
+            console.log(`[FileSystemTools] Executing command: ${command} in ${workingDir}`);
+            const { stdout, stderr } = await execAsync(command, {
                 cwd: workingDir,
                 timeout: timeout,
                 maxBuffer: 1024 * 1024 * 10, // 10MB buffer
@@ -102,13 +117,13 @@ export class FileSystemTools {
                 shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/bash'
             });
 
-            let result = `Command executed in ${workingDir}:\n$ ${args.command}\n\n`;
+            let result = `Command executed in ${workingDir}:\n$ ${command}\n\n`;
             if (stdout) result += `STDOUT:\n${stdout}\n`;
             if (stderr) result += `STDERR:\n${stderr}\n`;
             return result || 'Command completed with no output.';
         } catch (error: unknown) {
             const err = error as { stdout?: string; stderr?: string; message?: string };
-            let errorMsg = `Command failed in ${workingDir}:\n$ ${args.command}\n\n`;
+            let errorMsg = `Command failed in ${workingDir}:\n$ ${command}\n\n`;
             if (err.stdout) errorMsg += `STDOUT:\n${err.stdout}\n`;
             if (err.stderr) errorMsg += `STDERR:\n${err.stderr}\n`;
             errorMsg += `Error: ${err.message || String(error)}`;

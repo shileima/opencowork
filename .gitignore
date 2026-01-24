@@ -7,6 +7,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Built-in Node.js binaries (large files)
+resources/node/
+
 node_modules
 dist
 dist-ssr
@@ -27,3 +30,6 @@ release
 build
 !build/entitlements.mac.plist
 .opencowork
+
+# Built-in Node.js binaries (large files)
+resources/node/

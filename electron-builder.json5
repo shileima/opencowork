@@ -36,6 +36,11 @@
     {
       "from": "resources/admin-users.json",
       "to": "admin-users.json"
+    },
+    {
+      "from": "resources/node",
+      "to": "node",
+      "filter": ["**/*"]
     }
   ],
   "mac": {
