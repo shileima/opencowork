@@ -94,9 +94,15 @@ try {
 }
 
 // 复制 npm 可执行文件
+// npm 在 bin 目录下通常是一个包装脚本，我们需要从 lib/node_modules/npm/bin/ 复制
+const npmBinPath = path.join(systemNodeRoot, 'lib', 'node_modules', 'npm', 'bin', platform === 'win32' ? 'npm.cmd' : 'npm');
 const targetNpmPath = path.join(targetDir, platform === 'win32' ? 'npm.cmd' : 'npm');
+
+// 优先使用 lib/node_modules/npm/bin/npm（这是实际的 npm 脚本）
+const sourceNpmPath = fs.existsSync(npmBinPath) ? npmBinPath : npmRealPath;
+
 try {
-  fs.copyFileSync(npmRealPath, targetNpmPath);
+  fs.copyFileSync(sourceNpmPath, targetNpmPath);
   fs.chmodSync(targetNpmPath, 0o755);
   console.log(`✅ 复制 npm 到: ${targetNpmPath}`);
 } catch (error) {
