@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Minimize2, X, ChevronDown, ChevronUp, Terminal, Loader2, Plus, ArrowUp, Check } from 'lucide-react';
 import { useI18n } from '../i18n/I18nContext';
+import { CopyButton } from './CopyButton';
 
 interface ToolBlock {
     id: string;
@@ -129,14 +130,24 @@ export function FloatingChat({
                             {messages.map((msg, idx) => (
                                 <div key={idx} className="opacity-100 transition-opacity duration-150">
                                     {msg.role === 'user' ? (
-                                        <div className="bg-stone-200/80 dark:bg-secondary text-stone-800 dark:text-foreground rounded-2xl px-5 py-4 text-sm leading-relaxed max-w-[90%] shadow-sm">
-                                            {msg.content}
+                                        <div className="relative group inline-block max-w-[90%]">
+                                            <div className="bg-stone-200/80 dark:bg-secondary text-stone-800 dark:text-foreground rounded-2xl px-5 py-4 text-sm leading-relaxed shadow-sm">
+                                                {msg.content}
+                                            </div>
+                                            <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <CopyButton content={msg.content} size="sm" />
+                                            </div>
                                         </div>
                                     ) : (
                                         <div className="space-y-4 w-full">
-                                            <p className="text-stone-700 dark:text-foreground text-base leading-7">
-                                                {msg.content}
-                                            </p>
+                                            <div className="relative group">
+                                                <p className="text-stone-700 dark:text-foreground text-base leading-7 pr-8">
+                                                    {msg.content}
+                                                </p>
+                                                <div className="absolute right-0 bottom-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <CopyButton content={msg.content} size="sm" />
+                                                </div>
+                                            </div>
 
                                             {msg.stepsCount && msg.stepsCount > 0 && (
                                                 <div className="flex items-center gap-2 text-sm text-stone-400 dark:text-muted-foreground pl-3 border-l-2 border-stone-300 dark:border-border">
