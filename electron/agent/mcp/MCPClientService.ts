@@ -3,10 +3,9 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { configStore } from '../../config/ConfigStore';
 
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import path from 'path';
 import fs from 'fs/promises';
 import fsSync from 'fs';
-import { ipcMain, app } from 'electron';
+import { ipcMain } from 'electron';
 import { directoryManager } from '../../config/DirectoryManager';
 import { permissionService } from '../../config/PermissionService';
 
@@ -160,7 +159,6 @@ export class MCPClientService {
 
     constructor() {
         // 使用 DirectoryManager 获取MCP配置目录
-        const mcpDir = directoryManager.getMcpDir();
         this.activeConfigPath = directoryManager.getUserMcpConfigPath();
         this.storageConfigPath = directoryManager.getUserMcpStoragePath();
         this.registerIPC();

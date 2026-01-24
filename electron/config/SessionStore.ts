@@ -202,11 +202,19 @@ class SessionStore {
     }
 
     // Set appropriate session based on context
-    setSessionId(id: string, isFloatingBall: boolean = false): void {
+    setSessionId(id: string | null, isFloatingBall: boolean = false): void {
         if (isFloatingBall) {
-            this.setFloatingBallSession(id);
+            if (id === null) {
+                this.store.set('currentFloatingBallSessionId', null);
+            } else {
+                this.setFloatingBallSession(id);
+            }
         } else {
-            this.setCurrentSession(id);
+            if (id === null) {
+                this.store.set('currentSessionId', null);
+            } else {
+                this.setCurrentSession(id);
+            }
         }
     }
 }
