@@ -8,12 +8,7 @@
   "directories": {
     "output": "release/${version}"
   },
-  "publish": {
-    "provider": "github",
-    "owner": "MrCatAI",
-    "repo": "opencowork",
-    "releaseType": "release"
-  },
+  "publish": null,
   "files": [
     "dist",
     "dist-electron"
