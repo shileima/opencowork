@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback } from 'react';
-import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, ChevronUp, MessageCircle, Download, Play, Edit2, Star } from 'lucide-react';
+import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, ChevronUp, MessageCircle, Download, Play, Edit2, Star, RefreshCw, FolderOpen } from 'lucide-react';
 import { ChatInput } from './ChatInput';
 import { useI18n } from '../i18n/I18nContext';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -216,9 +216,18 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     // Fetch scripts list when scripts panel is opened
     useEffect(() => {
         if (showScripts) {
-            window.ipcRenderer.invoke('script:list').then((list) => {
-                setScripts(list as Script[]);
-            });
+            const loadScripts = async () => {
+                const list = await window.ipcRenderer.invoke('script:list') as Script[];
+                setScripts(list);
+            };
+            loadScripts();
+            // 设置定时刷新，每5秒刷新一次脚本列表（用于检测新添加的脚本）
+            const interval = setInterval(() => {
+                if (showScripts) {
+                    loadScripts();
+                }
+            }, 5000);
+            return () => clearInterval(interval);
         }
     }, [showScripts]);
 
@@ -560,17 +569,50 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                 <Play size={14} className="text-orange-500" />
                                 <span className="text-sm font-semibold text-stone-700 dark:text-zinc-200">{t('automationScripts')}</span>
                             </div>
-                            <button
-                                onClick={() => {
-                                    setShowScripts(false);
-                                    if (mode === 'automation') {
-                                        setMode('work');
-                                    }
-                                }}
-                                className="p-1 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
-                            >
-                                <X size={14} />
-                            </button>
+                            <div className="flex items-center gap-1">
+                                <button
+                                    onClick={async () => {
+                                        // 手动刷新脚本列表
+                                        const list = await window.ipcRenderer.invoke('script:list') as Script[];
+                                        setScripts(list);
+                                    }}
+                                    className="p-1 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                                    title={(t('refresh' as any) as string) || '刷新脚本列表'}
+                                >
+                                    <RefreshCw size={14} />
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        // 打开脚本目录（chrome-agent 子目录）
+                                        const paths = await window.ipcRenderer.invoke('directory:get-all-paths') as Record<string, string>;
+                                        const scriptsPath = paths?.scriptsDir;
+                                        if (scriptsPath) {
+                                            await window.ipcRenderer.invoke('directory:open-path', scriptsPath);
+                                        } else {
+                                            // 如果没有 scriptsDir，尝试使用 skillsDir + chrome-agent
+                                            const skillsPath = paths?.skillsDir;
+                                            if (skillsPath) {
+                                                await window.ipcRenderer.invoke('directory:open-path', skillsPath);
+                                            }
+                                        }
+                                    }}
+                                    className="p-1 text-stone-400 hover:text-blue-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-blue-400 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                                    title={(t('openScriptsFolder' as any) as string) || '打开脚本目录'}
+                                >
+                                    <FolderOpen size={14} />
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setShowScripts(false);
+                                        if (mode === 'automation') {
+                                            setMode('work');
+                                        }
+                                    }}
+                                    className="p-1 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                                >
+                                    <X size={14} />
+                                </button>
+                            </div>
                         </div>
 
                         <div className="max-h-[320px] overflow-y-auto p-2">

@@ -188,6 +188,8 @@ export const translations = {
         automationScripts: 'Automation Scripts',
         noScripts: 'No scripts found',
         execute: 'Execute',
+        refresh: 'Refresh',
+        openScriptsFolder: 'Open Scripts Folder',
 
         // Floating Ball
         home: 'Home',
@@ -311,6 +313,8 @@ export const translations = {
         automationScripts: '自动化脚本',
         noScripts: '暂无脚本',
         execute: '执行',
+        refresh: '刷新',
+        openScriptsFolder: '打开脚本目录',
 
         // Settings
         apiConfiguration: 'API 配置',
