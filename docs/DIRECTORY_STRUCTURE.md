@@ -95,10 +95,10 @@ import { directoryManager } from './config/DirectoryManager';
 const baseDir = directoryManager.getBaseDir(); // ~/.qa-cowork/
 
 // 获取配置目录
-const configDir = directoryManager.getConfigDir(); // ~/.opencowork/config/
+const configDir = directoryManager.getConfigDir(); // ~/.qa-cowork/config/
 
 // 获取技能目录
-const skillsDir = directoryManager.getSkillsDir(); // ~/.opencowork/skills/
+const skillsDir = directoryManager.getSkillsDir(); // ~/.qa-cowork/skills/
 
 // 获取脚本目录
 const scriptsDir = directoryManager.getScriptsDir(); // ~/.qa-cowork/skills/chrome-agent/
@@ -110,7 +110,7 @@ const mcpDir = directoryManager.getMcpDir(); // ~/.qa-cowork/mcp/
 const cacheDir = directoryManager.getCacheDir(); // ~/.qa-cowork/cache/
 
 // 获取日志目录
-const logsDir = directoryManager.getLogsDir(); // ~/.opencowork/logs/
+const logsDir = directoryManager.getLogsDir(); // ~/.qa-cowork/logs/
 
 // 获取内置资源目录
 const builtinResourcesDir = directoryManager.getBuiltinResourcesDir();
