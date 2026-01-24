@@ -1,0 +1,16 @@
+{
+  "name": "chrome-agent",
+  "version": "1.0.0",
+  "description": "浏览器自动化测试工具，支持网页导航、元素操作、截图等功能",
+  "author": "Your Name",
+  "license": "MIT",
+  "main": "index.js",
+  "capabilities": [
+    "browser-automation",
+    "web-testing",
+    "screenshot",
+    "form-filling"
+  ],
+  "userInvocable": true,
+  "command": "chrome-agent"
+}

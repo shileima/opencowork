@@ -1,0 +1,23 @@
+{
+  "name": "weibo-hot-search-automation",
+  "version": "1.0.0",
+  "description": "微博热搜自动化抓取工具",
+  "main": "weibo_hot_search.js",
+  "scripts": {
+    "start": "node weibo_hot_search.js",
+    "test": "node weibo_hot_search.js"
+  },
+  "keywords": [
+    "weibo",
+    "hot-search",
+    "automation",
+    "puppeteer",
+    "pdf"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.58.0",
+    "puppeteer": "^24.36.0"
+  }
+}
