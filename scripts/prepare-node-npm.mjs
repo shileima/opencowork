@@ -142,6 +142,25 @@ if (fs.existsSync(npmModuleDir)) {
     
     const size = getDirSize(targetNpmModuleDir);
     console.log(`✅ 复制 npm 模块目录完成 (${(size / 1024 / 1024).toFixed(2)} MB)`);
+    
+    // 创建符号链接：npm 脚本期望在 node_modules/npm 找到 npm
+    // 但我们实际在 lib/node_modules/npm，所以创建符号链接
+    const targetNodeModulesDir = path.join(targetDir, 'node_modules');
+    const targetNodeModulesNpm = path.join(targetNodeModulesDir, 'npm');
+    
+    if (!fs.existsSync(targetNodeModulesDir)) {
+      fs.mkdirSync(targetNodeModulesDir, { recursive: true });
+    }
+    
+    // 如果已存在符号链接或目录，先删除
+    if (fs.existsSync(targetNodeModulesNpm)) {
+      fs.rmSync(targetNodeModulesNpm, { recursive: true, force: true });
+    }
+    
+    // 创建符号链接：node_modules/npm -> lib/node_modules/npm
+    const relativePath = path.relative(targetNodeModulesDir, targetNpmModuleDir);
+    fs.symlinkSync(relativePath, targetNodeModulesNpm, 'dir');
+    console.log(`✅ 创建符号链接: node_modules/npm -> lib/node_modules/npm`);
   } catch (error) {
     console.error(`❌ 复制 npm 模块目录失败: ${error.message}`);
     console.warn('   应用可能仍能工作，但某些 npm 功能可能不可用');
