@@ -112,24 +112,28 @@ export class FileSystemTools {
         
         if (builtinNpmPath && builtinNpmPath !== 'npm') {
             // npm 脚本会在 process.execPath 的目录下查找 node_modules/npm/bin/npm-cli.js
-            // 但我们的 npm 在 lib/node_modules/npm，所以直接使用 node 执行 npm-cli.js 更可靠
+            // 我们已经创建了符号链接，所以 npm 脚本应该能工作
+            // 但为了更可靠，优先使用 node 直接执行 npm-cli.js
             const npmCliJsPath = getBuiltinNpmCliJsPath();
-            const builtinNodePath = getBuiltinNodePath();
+            const builtinNodePathForNpm = getBuiltinNodePath();
             
-            if (npmCliJsPath && builtinNodePath && builtinNodePath !== 'node') {
+            if (npmCliJsPath && builtinNodePathForNpm && builtinNodePathForNpm !== 'node') {
                 // 使用 node 直接执行 npm-cli.js，避免 npm 脚本的路径问题
-                const nodeCommand = builtinNodePath.includes(' ') ? `"${builtinNodePath}"` : builtinNodePath;
+                const nodeCommand = builtinNodePathForNpm.includes(' ') ? `"${builtinNodePathForNpm}"` : builtinNodePathForNpm;
                 const npmCliCommand = npmCliJsPath.includes(' ') ? `"${npmCliJsPath}"` : npmCliJsPath;
                 
                 // 替换 npm 命令为: node npm-cli.js [args]
-                const npmRegex = /(^|\s|["'])\bnpm\b(\s+)([^"'\s]+|"[^"]*"|'[^']*')?/g;
+                // 匹配: npm 后跟空格和参数（可能是 install、run 等）
+                // 例如: "npm install" -> "node npm-cli.js install"
+                //      'npm run build' -> 'node npm-cli.js run build'
+                const npmRegex = /(^|\s|["'])\bnpm\b(\s+)(.*?)(?=\s*$|\s*["']|$)/g;
                 command = command.replace(npmRegex, (match, before, space, args) => {
-                    // 提取 npm 后的参数
-                    const npmArgs = args ? ` ${args}` : '';
-                    return `${before}${nodeCommand} ${npmCliCommand}${npmArgs}`;
+                    // 保留 npm 后的所有参数
+                    const npmArgs = args.trim();
+                    return `${before}${nodeCommand} ${npmCliCommand}${npmArgs ? ' ' + npmArgs : ''}`;
                 });
             } else {
-                // 回退到使用 npm 脚本
+                // 回退到使用 npm 脚本（现在有符号链接应该能工作）
                 const npmRegex = /(^|\s|["'])\bnpm\b(\s|$|["'])/g;
                 const npmCommand = builtinNpmPath.includes(' ') ? `"${builtinNpmPath}"` : builtinNpmPath;
                 command = command.replace(npmRegex, (_match, before, after) => {
