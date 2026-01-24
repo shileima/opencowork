@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { getBuiltinNodePath, getBuiltinNpmPath } from '../../utils/NodePath';
+import { getBuiltinNodePath, getBuiltinNpmPath, getNpmEnvVars } from '../../utils/NodePath';
 import { getPlaywrightEnvVars } from '../../utils/PlaywrightPath';
 
 const execAsync = promisify(exec);
@@ -122,16 +122,21 @@ export class FileSystemTools {
         }
 
         try {
-            // 获取 Playwright 环境变量
+            // 获取 Playwright 和 npm 环境变量
             const playwrightEnv = getPlaywrightEnvVars();
+            const npmEnv = getNpmEnvVars();
             const env = {
                 ...process.env,
-                ...playwrightEnv
+                ...playwrightEnv,
+                ...npmEnv
             };
             
             console.log(`[FileSystemTools] Executing command: ${command} in ${workingDir}`);
             if (Object.keys(playwrightEnv).length > 0) {
                 console.log(`[FileSystemTools] Playwright env vars: ${JSON.stringify(playwrightEnv)}`);
+            }
+            if (Object.keys(npmEnv).length > 0) {
+                console.log(`[FileSystemTools] npm env vars: ${JSON.stringify(npmEnv)}`);
             }
             
             const { stdout, stderr } = await execAsync(command, {

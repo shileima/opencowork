@@ -120,3 +120,54 @@ export function getBuiltinNpmPath(): string {
   console.warn(`[NodePath] Built-in npm not found, falling back to system npm`);
   return 'npm';
 }
+
+/**
+ * 获取 npm 环境变量配置
+ * 
+ * npm 需要特定的环境变量才能正常工作：
+ * - PATH: 包含 node 和 npm 的目录
+ * - NODE_PATH: Node.js 模块搜索路径
+ * 
+ * @returns 环境变量对象
+ */
+export function getNpmEnvVars(): Record<string, string> {
+  const env: Record<string, string> = {};
+  
+  if (!app.isPackaged) {
+    // 开发环境：不需要特殊设置
+    return env;
+  }
+
+  const nodeDir = getBuiltinNodeDir();
+  if (!nodeDir) {
+    return env;
+  }
+
+  const platform = process.platform;
+  const nodePath = getBuiltinNodePath();
+  const npmPath = getBuiltinNpmPath();
+  
+  // 设置 PATH，确保能找到 node 和 npm
+  const nodeBinDir = path.dirname(nodePath);
+  const npmBinDir = path.dirname(npmPath);
+  
+  // 合并 PATH，优先使用内置的 node 和 npm
+  const existingPath = process.env.PATH || '';
+  const pathSeparator = platform === 'win32' ? ';' : ':';
+  env.PATH = `${nodeBinDir}${pathSeparator}${npmBinDir}${pathSeparator}${existingPath}`;
+  
+  // 设置 NODE_PATH，让 npm 能找到自己的模块
+  const npmModuleDir = path.join(nodeDir, 'lib', 'node_modules');
+  if (fs.existsSync(npmModuleDir)) {
+    const existingNodePath = process.env.NODE_PATH || '';
+    env.NODE_PATH = existingNodePath 
+      ? `${npmModuleDir}${path.delimiter}${existingNodePath}`
+      : npmModuleDir;
+  }
+  
+  // 设置 npm 配置目录
+  const npmPrefix = nodeDir;
+  env.NPM_CONFIG_PREFIX = npmPrefix;
+  
+  return env;
+}
