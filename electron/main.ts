@@ -9,6 +9,7 @@ import { sessionStore } from './config/SessionStore'
 import { scriptStore } from './config/ScriptStore'
 import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
+import { getBuiltinNodePath } from './utils/NodePath'
 import Anthropic from '@anthropic-ai/sdk'
 
 // Extend App type to include isQuitting property
@@ -365,7 +366,10 @@ ipcMain.handle('script:execute', async (event, scriptId: string) => {
     // 构建执行命令
     const scriptDir = path.dirname(script.filePath)
     const scriptName = path.basename(script.filePath)
-    const command = `cd "${scriptDir}" && node "${scriptName}"`
+    const nodePath = getBuiltinNodePath()
+    // 使用引号包裹 node 路径，防止路径中包含空格
+    const nodeCommand = nodePath.includes(' ') ? `"${nodePath}"` : nodePath
+    const command = `cd "${scriptDir}" && ${nodeCommand} "${scriptName}"`
     
     // 发送消息给 agent 执行脚本
     const executeMessage = `请执行以下 chrome-agent 脚本：\n\n\`\`\`bash\n${command}\n\`\`\`\n\n脚本路径：${script.filePath}`
