@@ -147,6 +147,7 @@ const DEFAULT_MCP_CONFIGS: Record<string, MCPServerConfig> = {
 };
 
 export class MCPClientService {
+    private static instance: MCPClientService | null = null;
     private clients: Map<string, Client> = new Map();
     private clientStatus: Map<string, MCPStatus> = new Map();
     private activeConfigPath: string; // The standard mcp.json
@@ -157,17 +158,28 @@ export class MCPClientService {
         return Array.from(this.clients.keys());
     }
 
-    constructor() {
+    private constructor() {
         // 使用 DirectoryManager 获取MCP配置目录
         this.activeConfigPath = directoryManager.getUserMcpConfigPath();
         this.storageConfigPath = directoryManager.getUserMcpStoragePath();
         this.registerIPC();
     }
 
+    /**
+     * 获取 MCPClientService 单例实例
+     */
+    public static getInstance(): MCPClientService {
+        if (!MCPClientService.instance) {
+            MCPClientService.instance = new MCPClientService();
+        }
+        return MCPClientService.instance;
+    }
+
     private registerIPC() {
         ipcMain.removeHandler('mcp:get-all');
         ipcMain.removeHandler('mcp:add-server');
         ipcMain.removeHandler('mcp:remove-server');
+        ipcMain.removeHandler('mcp:mark-builtin');
         ipcMain.removeHandler('mcp:toggle-server');
         ipcMain.removeHandler('mcp:retry-connection');
         ipcMain.removeHandler('mcp:analyze-config');
