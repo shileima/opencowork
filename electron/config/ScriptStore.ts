@@ -2,8 +2,7 @@ import Store from 'electron-store';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
-import { app } from 'electron';
+import { directoryManager } from './DirectoryManager';
 
 export interface Script {
     id: string;
@@ -43,39 +42,16 @@ class ScriptStore {
             name: 'opencowork-scripts',
             defaults
         });
-        // chrome-agent 脚本目录（用户目录）
-        this.scriptsDir = path.join(os.homedir(), '.opencowork', 'skills', 'chrome-agent');
+        // 使用 DirectoryManager 获取目录路径
+        this.scriptsDir = directoryManager.getScriptsDir();
         // 官方脚本目录（资源目录）
         this.officialScriptsDir = this.getOfficialScriptsDir();
     }
 
     // 获取官方脚本目录路径
     private getOfficialScriptsDir(): string {
-        const possiblePaths: string[] = [];
-
-        if (app.isPackaged) {
-            // 生产环境
-            possiblePaths.push(
-                path.join(process.resourcesPath, 'skills', 'chrome-agent'),
-                path.join(process.resourcesPath, 'resources', 'skills', 'chrome-agent'),
-                path.join(process.resourcesPath, 'app.asar.unpacked', 'skills', 'chrome-agent')
-            );
-        } else {
-            // 开发环境
-            possiblePaths.push(
-                path.join(process.cwd(), 'resources', 'skills', 'chrome-agent')
-            );
-        }
-
-        // 尝试找到存在的路径
-        for (const testPath of possiblePaths) {
-            if (fs.existsSync(testPath)) {
-                return testPath;
-            }
-        }
-
-        // 如果都不存在，返回第一个可能的路径（用于创建）
-        return possiblePaths[0] || path.join(process.cwd(), 'resources', 'skills', 'chrome-agent');
+        // 使用 DirectoryManager 获取内置技能目录，然后拼接 chrome-agent 子目录
+        return path.join(directoryManager.getBuiltinSkillsDir(), 'chrome-agent');
     }
 
     // 读取官方脚本清单
@@ -295,6 +271,123 @@ class ScriptStore {
         this.store.set('scripts', scripts);
         
         return script;
+    }
+
+    // 重命名脚本
+    renameScript(id: string, newName: string): boolean {
+        const scripts = this.store.get('scripts') || [];
+        const script = scripts.find(s => s.id === id);
+        
+        if (!script) {
+            console.warn(`[ScriptStore] Script not found: ${id}`);
+            return false;
+        }
+
+        try {
+            const oldFilePath = script.filePath;
+            const oldDir = path.dirname(oldFilePath);
+            const newFilePath = path.join(oldDir, `${newName}.js`);
+
+            // 重命名文件
+            if (fs.existsSync(oldFilePath)) {
+                fs.renameSync(oldFilePath, newFilePath);
+                console.log(`[ScriptStore] Renamed script file: ${oldFilePath} -> ${newFilePath}`);
+            }
+
+            // 更新 store 记录
+            script.name = newName;
+            script.filePath = newFilePath;
+            script.updatedAt = Date.now();
+            
+            this.store.set('scripts', scripts);
+            return true;
+        } catch (error) {
+            console.error(`[ScriptStore] Error renaming script:`, error);
+            return false;
+        }
+    }
+
+    // 标记脚本为官方
+    markAsOfficial(id: string): boolean {
+        const scripts = this.store.get('scripts') || [];
+        const script = scripts.find(s => s.id === id);
+        
+        if (!script) {
+            console.warn(`[ScriptStore] Script not found: ${id}`);
+            return false;
+        }
+
+        // 如果已经是官方脚本，直接返回
+        if (script.isOfficial) {
+            return true;
+        }
+
+        try {
+            // 读取脚本文件内容
+            if (!fs.existsSync(script.filePath)) {
+                console.error(`[ScriptStore] Script file not found: ${script.filePath}`);
+                return false;
+            }
+
+            const scriptContent = fs.readFileSync(script.filePath, 'utf-8');
+            const scriptFileName = path.basename(script.filePath);
+
+            // 确保官方脚本目录存在
+            if (!fs.existsSync(this.officialScriptsDir)) {
+                fs.mkdirSync(this.officialScriptsDir, { recursive: true });
+            }
+
+            // 复制脚本文件到官方脚本目录
+            const officialScriptPath = path.join(this.officialScriptsDir, scriptFileName);
+            fs.writeFileSync(officialScriptPath, scriptContent, 'utf-8');
+            console.log(`[ScriptStore] Copied script to official directory: ${officialScriptPath}`);
+
+            // 更新官方脚本清单
+            const manifest = this.loadOfficialScriptsManifest();
+            if (!manifest) {
+                // 如果清单不存在，创建新的
+                const newManifest: OfficialScriptManifest = {
+                    version: '1.0.0',
+                    officialScripts: [{
+                        name: script.name,
+                        file: scriptFileName,
+                        description: `官方脚本: ${script.name}`,
+                        version: '1.0.0'
+                    }]
+                };
+                const manifestPath = path.join(this.officialScriptsDir, 'official-scripts.json');
+                fs.writeFileSync(manifestPath, JSON.stringify(newManifest, null, 2), 'utf-8');
+                this.officialScriptsManifest = newManifest;
+            } else {
+                // 检查是否已存在
+                const exists = manifest.officialScripts.some(s => s.name === script.name || s.file === scriptFileName);
+                if (!exists) {
+                    manifest.officialScripts.push({
+                        name: script.name,
+                        file: scriptFileName,
+                        description: `官方脚本: ${script.name}`,
+                        version: '1.0.0'
+                    });
+                    const manifestPath = path.join(this.officialScriptsDir, 'official-scripts.json');
+                    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+                    this.officialScriptsManifest = manifest;
+                }
+            }
+
+            // 同步到用户目录（确保用户也能看到官方脚本）
+            this.syncOfficialScripts();
+
+            // 更新脚本记录
+            script.isOfficial = true;
+            script.updatedAt = Date.now();
+            this.store.set('scripts', scripts);
+
+            console.log(`[ScriptStore] Marked script as official: ${script.name}`);
+            return true;
+        } catch (error) {
+            console.error(`[ScriptStore] Error marking script as official:`, error);
+            return false;
+        }
     }
 }
 

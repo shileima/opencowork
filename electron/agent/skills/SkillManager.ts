@@ -1,8 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import yaml from 'js-yaml';
-import os from 'os';
 import { app } from 'electron';
+import { directoryManager } from '../../config/DirectoryManager';
 
 export interface SkillDefinition {
     name: string;
@@ -27,7 +27,8 @@ export class SkillManager {
     }
 
     constructor() {
-        this.skillsDir = path.join(os.homedir(), '.opencowork', 'skills');
+        // 使用 DirectoryManager 获取技能目录
+        this.skillsDir = directoryManager.getSkillsDir();
     }
 
     private async pathExists(testPath: string): Promise<boolean> {
@@ -47,39 +48,11 @@ export class SkillManager {
         console.log(`[SkillManager] process.resourcesPath exists: ${app.isPackaged ? await this.pathExists(process.resourcesPath) : 'N/A'}`);
 
         try {
-            // Determine source directory for default skills
-            let sourceDir = '';
-            const possiblePaths: string[] = [];
+            // 使用 DirectoryManager 获取内置技能目录
+            const sourceDir = directoryManager.getBuiltinSkillsDir();
+            console.log(`[SkillManager] Using builtin skills directory: ${sourceDir}`);
 
-            if (app.isPackaged) {
-                // In production, try multiple possible locations
-                possiblePaths.push(
-                    path.join(process.resourcesPath, 'skills'),  // Our electron-builder config
-                    path.join(process.resourcesPath, 'resources', 'skills'),  // Alternative layout
-                    path.join(process.resourcesPath, 'app.asar.unpacked', 'skills')  // Unpacked asar
-                );
-            } else {
-                // In development
-                possiblePaths.push(
-                    path.join(process.cwd(), 'resources', 'skills'),
-                    path.join(process.cwd(), 'skills')  // Alternative dev layout
-                );
-            }
-
-            // Try each possible path
-            for (const testPath of possiblePaths) {
-                console.log(`[SkillManager] Checking path: ${testPath}`);
-                try {
-                    await fs.access(testPath);
-                    sourceDir = testPath;
-                    console.log(`[SkillManager] ✓ Found skills directory at: ${testPath}`);
-                    break;
-                } catch {
-                    console.log(`[SkillManager] ✗ Path not found: ${testPath}`);
-                }
-            }
-
-            if (!sourceDir) {
+            if (!await this.pathExists(sourceDir)) {
                 console.error('[SkillManager] ❌ Could not find default skills directory in any of these locations:', possiblePaths);
                 return;
             }

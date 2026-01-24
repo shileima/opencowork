@@ -32,6 +32,10 @@
       "from": "resources/mcp",
       "to": "mcp",
       "filter": "**/*"
+    },
+    {
+      "from": "resources/admin-users.json",
+      "to": "admin-users.json"
     }
   ],
   "mac": {

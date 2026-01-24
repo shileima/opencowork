@@ -72,6 +72,7 @@ export const translations = {
         tabPermissions: 'Permissions',
         tabMCP: 'MCP',
         tabSkills: 'Skills',
+        tabDirectories: 'Directories',
         tabAdvanced: 'Advanced',
         tabAbout: 'About',
 
@@ -261,6 +262,38 @@ export const translations = {
         trustStrictShort: 'All Confirm',
         trustStandardShort: 'Safe Auto',
         trustTrustShort: 'All Auto',
+
+        // Directory Management
+        directoryManagement: 'Directory Management',
+        directoryManagementDesc: 'View and manage all directory paths used by the application',
+        openFolder: 'Open Folder',
+        directoryInfo: 'These directories are automatically managed by the application and usually do not need manual modification.',
+        loading: 'Loading...',
+
+        // Admin & Permissions
+        tabAdmin: 'Admin',
+        adminSettings: 'Administrator Settings',
+        adminSettingsDesc: 'Manage user roles and permission settings',
+        currentRole: 'Current Role',
+        roleAdmin: 'Administrator',
+        roleUser: 'Regular User',
+        admin: 'Admin',
+        switchToUser: 'Switch to Regular User',
+        switchToAdmin: 'Switch to Administrator',
+        adminPermissions: 'Administrator Permissions:',
+        adminPerm1: 'Can rename and delete scripts',
+        adminPerm2: 'Can mark scripts as official',
+        adminPerm3: 'Can mark skills as built-in',
+        adminPerm4: 'Can mark MCP servers as built-in',
+        adminPerm5: 'Can delete user skills and MCP servers',
+        markAsBuiltin: 'Mark as Built-in',
+        currentUser: 'Current User',
+        presetAdmins: 'Preset Administrators',
+        noPresetAdmins: 'No preset administrators',
+        addPresetAdminPlaceholder: 'Enter system username',
+        add: 'Add',
+        presetAdminHint: 'Preset administrators will automatically receive admin privileges on first launch',
+        viewAccountDetails: 'View Account Details',
     },
     zh: {
         // Navigation
@@ -334,6 +367,7 @@ export const translations = {
         tabPermissions: '权限',
         tabMCP: 'MCP',
         tabSkills: 'Skills',
+        tabDirectories: '目录管理',
         tabAdvanced: '高级',
         tabAbout: '关于',
 
@@ -518,6 +552,38 @@ export const translations = {
         trustStrictShort: '全部确认',
         trustStandardShort: '安全自动',
         trustTrustShort: '全部自动',
+
+        // Directory Management
+        directoryManagement: '目录管理',
+        directoryManagementDesc: '查看和管理应用使用的所有目录路径',
+        openFolder: '打开文件夹',
+        directoryInfo: '这些目录由应用自动管理，通常不需要手动修改。',
+        loading: '加载中...',
+
+        // Admin & Permissions
+        tabAdmin: '管理员',
+        adminSettings: '管理员设置',
+        adminSettingsDesc: '管理用户角色和权限设置',
+        currentRole: '当前角色',
+        roleAdmin: '超级管理员',
+        roleUser: '普通用户',
+        admin: '管理员',
+        switchToUser: '切换为普通用户',
+        switchToAdmin: '切换为超级管理员',
+        adminPermissions: '超级管理员权限：',
+        adminPerm1: '可以重命名和删除脚本',
+        adminPerm2: '可以标记脚本为官方',
+        adminPerm3: '可以标记技能为内置',
+        adminPerm4: '可以标记MCP服务器为内置',
+        adminPerm5: '可以删除用户技能和MCP服务器',
+        markAsBuiltin: '标记为内置',
+        currentUser: '当前用户',
+        presetAdmins: '预设管理员列表',
+        noPresetAdmins: '暂无预设管理员',
+        addPresetAdminPlaceholder: '输入系统用户名',
+        add: '添加',
+        presetAdminHint: '预设管理员会在首次启动时自动获得管理员权限',
+        viewAccountDetails: '查看账户详情',
     }
 };
 

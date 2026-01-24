@@ -8,6 +8,8 @@ import { AgentRuntime } from './agent/AgentRuntime'
 import { configStore, TrustLevel } from './config/ConfigStore'
 import { sessionStore } from './config/SessionStore'
 import { scriptStore } from './config/ScriptStore'
+import { directoryManager } from './config/DirectoryManager'
+import { permissionService } from './config/PermissionService'
 import Anthropic from '@anthropic-ai/sdk'
 
 // Extend App type to include isQuitting property
@@ -136,6 +138,10 @@ app.whenReady().then(() => {
 
   // 4. Sync official scripts to user directory (non-blocking)
   scriptStore.syncOfficialScripts()
+
+  // 4.5. Initialize permission service and check preset admin
+  // 这会自动检查当前用户是否为预设管理员，如果是则自动设置为管理员
+  permissionService.getUserRole()
 
   // 5. Built-in skills are now loaded async by SkillManager (inside initializeAgent)
   // ensureBuiltinSkills() - Removed
@@ -277,8 +283,58 @@ ipcMain.handle('script:list', () => {
 })
 
 ipcMain.handle('script:delete', (_, id: string) => {
+  const script = scriptStore.getScript(id)
+  if (!script) {
+    return { success: false, error: 'Script not found' }
+  }
+
+  // 权限检查：只有管理员可以删除脚本
+  if (!permissionService.canDeleteScript(id, script.isOfficial)) {
+    return { success: false, error: 'Permission denied: Only administrators can delete scripts' }
+  }
+
   const success = scriptStore.deleteScript(id)
-  return { success }
+  return { success, error: success ? undefined : 'Failed to delete script' }
+})
+
+ipcMain.handle('script:rename', (_, id: string, newName: string) => {
+  const script = scriptStore.getScript(id)
+  if (!script) {
+    return { success: false, error: 'Script not found' }
+  }
+
+  // 权限检查：只有管理员可以重命名脚本
+  if (!permissionService.canRenameScript(id, script.isOfficial)) {
+    return { success: false, error: 'Permission denied: Only administrators can rename scripts' }
+  }
+
+  // 验证新名称
+  if (!newName || newName.trim().length === 0) {
+    return { success: false, error: 'Invalid script name' }
+  }
+
+  const success = scriptStore.renameScript(id, newName.trim())
+  return { success, error: success ? undefined : 'Failed to rename script' }
+})
+
+ipcMain.handle('script:mark-official', (_, id: string) => {
+  const script = scriptStore.getScript(id)
+  if (!script) {
+    return { success: false, error: 'Script not found' }
+  }
+
+  // 权限检查：只有管理员可以标记脚本为官方
+  if (!permissionService.canMarkScriptOfficial(id)) {
+    return { success: false, error: 'Permission denied: Only administrators can mark scripts as official' }
+  }
+
+  // 如果已经是官方脚本，直接返回成功
+  if (script.isOfficial) {
+    return { success: true }
+  }
+
+  const success = scriptStore.markAsOfficial(id)
+  return { success, error: success ? undefined : 'Failed to mark script as official' }
 })
 
 ipcMain.handle('script:execute', async (event, scriptId: string) => {
@@ -576,38 +632,24 @@ ipcMain.handle('window:close', () => mainWin?.hide())
 
 
 // MCP Configuration Handlers
-const mcpConfigPath = path.join(os.homedir(), '.opencowork', 'mcp.json');
-
 // Ensure built-in MCP config exists
 function ensureBuiltinMcpConfig() {
   try {
+    const mcpConfigPath = directoryManager.getUserMcpConfigPath();
+    
     // If config already exists, do nothing
     if (fs.existsSync(mcpConfigPath)) return;
 
     console.log('[MCP] Initializing default configuration...');
 
-    // Determine source path based on environment
-    let sourcePath = '';
-
-    if (app.isPackaged) {
-      // Production: resources/mcp/builtin-mcp.json
-      // Try electron-builder standard resources path
-      sourcePath = path.join(process.resourcesPath, 'mcp', 'builtin-mcp.json');
-
-      // Fallback: Check inside resources folder (some setups)
-      if (!fs.existsSync(sourcePath)) {
-        sourcePath = path.join(process.resourcesPath, 'resources', 'mcp', 'builtin-mcp.json');
-      }
-    } else {
-      // Development: resources/mcp/builtin-mcp.json (relative to root)
-      sourcePath = path.join(process.env.APP_ROOT!, 'resources', 'mcp', 'builtin-mcp.json');
-    }
+    // 使用 DirectoryManager 获取内置MCP配置文件路径
+    const sourcePath = directoryManager.getBuiltinMcpConfigPath();
 
     if (fs.existsSync(sourcePath)) {
       const configContent = fs.readFileSync(sourcePath, 'utf-8');
 
-      // Ensure directory exists
-      const configDir = path.dirname(mcpConfigPath);
+      // Ensure directory exists (DirectoryManager 应该已经创建了，但为了安全起见再检查一次)
+      const configDir = directoryManager.getMcpDir();
       if (!fs.existsSync(configDir)) {
         fs.mkdirSync(configDir, { recursive: true });
       }
@@ -624,6 +666,7 @@ function ensureBuiltinMcpConfig() {
 
 ipcMain.handle('mcp:get-config', async () => {
   try {
+    const mcpConfigPath = directoryManager.getUserMcpConfigPath();
     if (!fs.existsSync(mcpConfigPath)) return '{}';
     return fs.readFileSync(mcpConfigPath, 'utf-8');
   } catch (e) {
@@ -634,7 +677,8 @@ ipcMain.handle('mcp:get-config', async () => {
 
 ipcMain.handle('mcp:save-config', async (_, content: string) => {
   try {
-    const dir = path.dirname(mcpConfigPath);
+    const mcpConfigPath = directoryManager.getUserMcpConfigPath();
+    const dir = directoryManager.getMcpDir();
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(mcpConfigPath, content, 'utf-8');
 
@@ -663,7 +707,8 @@ ipcMain.handle('mcp:open-config-folder', async () => {
 });
 
 // Skills Management Handlers
-const skillsDir = path.join(os.homedir(), '.opencowork', 'skills');
+// 使用 DirectoryManager 获取技能目录（在需要时获取，避免在模块加载时初始化）
+const getSkillsDir = () => directoryManager.getSkillsDir();
 
 // Helper to get built-in skill names
 const getBuiltinSkillNames = () => {
@@ -686,6 +731,7 @@ const getBuiltinSkillNames = () => {
 
 ipcMain.handle('skills:list', async () => {
   try {
+    const skillsDir = getSkillsDir();
     if (!fs.existsSync(skillsDir)) return [];
     const builtinSkills = getBuiltinSkillNames();
     const files = fs.readdirSync(skillsDir);
@@ -706,6 +752,7 @@ ipcMain.handle('skills:list', async () => {
 
 ipcMain.handle('skills:get', async (_, skillId: string) => {
   try {
+    const skillsDir = getSkillsDir();
     const skillPath = path.join(skillsDir, skillId);
     if (!fs.existsSync(skillPath)) return '';
 
@@ -727,10 +774,19 @@ ipcMain.handle('skills:save', async (_, { filename, content }: { filename: strin
 
     // Check if built-in
     const builtinSkills = getBuiltinSkillNames();
-    if (builtinSkills.includes(skillId)) {
-      return { success: false, error: 'Cannot modify built-in skills' };
+    const isBuiltin = builtinSkills.includes(skillId);
+
+    // 权限检查：内置技能只有管理员可以编辑
+    if (isBuiltin && !permissionService.canEditSkill(skillId, true)) {
+      return { success: false, error: 'Permission denied: Only administrators can edit built-in skills' };
     }
 
+    // 用户技能所有用户都可以编辑（但删除需要权限检查）
+    if (!isBuiltin && !permissionService.canEditSkill(skillId, false)) {
+      return { success: false, error: 'Permission denied' };
+    }
+
+    const skillsDir = getSkillsDir();
     if (!fs.existsSync(skillsDir)) fs.mkdirSync(skillsDir, { recursive: true });
     const skillPath = path.join(skillsDir, skillId);
     if (!fs.existsSync(skillPath)) fs.mkdirSync(skillPath, { recursive: true });
@@ -755,10 +811,16 @@ ipcMain.handle('skills:delete', async (_, skillId: string) => {
   try {
     // Check if built-in
     const builtinSkills = getBuiltinSkillNames();
-    if (builtinSkills.includes(skillId)) {
-      return { success: false, error: 'Cannot delete built-in skills' };
+    const isBuiltin = builtinSkills.includes(skillId);
+
+    // 权限检查：只有管理员可以删除技能，且内置技能不能被删除
+    if (!permissionService.canDeleteSkill(skillId, isBuiltin)) {
+      return { success: false, error: isBuiltin 
+        ? 'Cannot delete built-in skills' 
+        : 'Permission denied: Only administrators can delete skills' };
     }
 
+    const skillsDir = getSkillsDir();
     const skillPath = path.join(skillsDir, skillId);
     if (fs.existsSync(skillPath)) {
       fs.rmSync(skillPath, { recursive: true, force: true });
@@ -770,13 +832,118 @@ ipcMain.handle('skills:delete', async (_, skillId: string) => {
   }
 });
 
+ipcMain.handle('skill:mark-builtin', async (_, skillId: string) => {
+  try {
+    // 权限检查：只有管理员可以标记技能为内置
+    if (!permissionService.canMarkSkillBuiltin(skillId)) {
+      return { success: false, error: 'Permission denied: Only administrators can mark skills as built-in' };
+    }
+
+    const skillsDir = getSkillsDir();
+    const skillPath = path.join(skillsDir, skillId);
+    
+    if (!fs.existsSync(skillPath)) {
+      return { success: false, error: 'Skill not found' };
+    }
+
+    // 检查是否已经是内置技能
+    const builtinSkills = getBuiltinSkillNames();
+    if (builtinSkills.includes(skillId)) {
+      return { success: false, error: 'Skill is already built-in' };
+    }
+
+    // 获取内置技能目录
+    const builtinSkillsDir = directoryManager.getBuiltinSkillsDir();
+    if (!fs.existsSync(builtinSkillsDir)) {
+      fs.mkdirSync(builtinSkillsDir, { recursive: true });
+    }
+
+    // 复制技能目录到内置技能目录
+    const targetPath = path.join(builtinSkillsDir, skillId);
+    if (fs.existsSync(targetPath)) {
+      return { success: false, error: 'Built-in skill with same name already exists' };
+    }
+
+    // 复制整个技能目录
+    fs.cpSync(skillPath, targetPath, { recursive: true });
+    console.log(`[Skills] Copied skill to built-in directory: ${skillId}`);
+
+    // 从用户目录删除技能
+    fs.rmSync(skillPath, { recursive: true, force: true });
+    console.log(`[Skills] Removed skill from user directory: ${skillId}`);
+
+    return { success: true };
+  } catch (e) {
+    console.error('Failed to mark skill as built-in:', e);
+    return { success: false, error: (e as Error).message };
+  }
+});
+
 ipcMain.handle('skills:open-folder', () => {
+  const skillsDir = getSkillsDir();
   if (fs.existsSync(skillsDir)) {
     shell.openPath(skillsDir);
   } else {
     fs.mkdirSync(skillsDir, { recursive: true });
     shell.openPath(skillsDir);
   }
+});
+
+// Directory Management Handlers
+ipcMain.handle('directory:get-all-paths', () => {
+  return directoryManager.getAllPaths();
+});
+
+ipcMain.handle('directory:open-path', (_, dirPath: string) => {
+  if (fs.existsSync(dirPath)) {
+    shell.openPath(dirPath);
+  } else {
+    // If directory doesn't exist, try opening parent directory
+    const parentDir = path.dirname(dirPath);
+    if (fs.existsSync(parentDir)) {
+      shell.openPath(parentDir);
+    }
+  }
+});
+
+// Permission Management Handlers
+ipcMain.handle('permission:get-role', () => {
+  return permissionService.getUserRole();
+});
+
+ipcMain.handle('permission:set-role', (_, role: 'user' | 'admin') => {
+  // 权限检查：只有当前管理员可以设置角色
+  if (!permissionService.isAdmin() && role === 'admin') {
+    return { success: false, error: 'Permission denied: Only administrators can grant admin role' };
+  }
+  permissionService.setUserRole(role);
+  return { success: true };
+});
+
+ipcMain.handle('permission:is-admin', () => {
+  return permissionService.isAdmin();
+});
+
+ipcMain.handle('permission:get-user-identifier', () => {
+  return permissionService.getCurrentUserIdentifier();
+});
+
+ipcMain.handle('permission:get-user-account-info', () => {
+  return permissionService.getUserAccountInfo();
+});
+
+ipcMain.handle('permission:get-preset-admins', () => {
+  return permissionService.getPresetAdminUsers();
+});
+
+ipcMain.handle('permission:add-preset-admin', (_, username: string) => {
+  const success = permissionService.addPresetAdmin(username);
+  return { success, error: success ? undefined : 'Failed to add preset admin' };
+});
+
+ipcMain.handle('permission:remove-preset-admin', (_, username: string) => {
+  const success = permissionService.removePresetAdmin(username);
+  return { success, error: success ? undefined : 'Failed to remove preset admin' };
 });
 
 

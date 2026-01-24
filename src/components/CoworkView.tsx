@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback } from 'react';
-import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, ChevronUp, MessageCircle, Download, Play } from 'lucide-react';
+import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, ChevronUp, MessageCircle, Download, Play, Edit2, Star } from 'lucide-react';
 import { ChatInput } from './ChatInput';
 import { useI18n } from '../i18n/I18nContext';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -53,6 +53,9 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     const [showScripts, setShowScripts] = useState(false);
     const [scripts, setScripts] = useState<Script[]>([]);
     const [config, setConfig] = useState<any>(null);
+    const [userRole, setUserRole] = useState<'user' | 'admin'>('user');
+    const [editingScriptId, setEditingScriptId] = useState<string | null>(null);
+    const [editingScriptName, setEditingScriptName] = useState<string>('');
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -71,6 +74,10 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     useEffect(() => {
         window.ipcRenderer.invoke('config:get-all').then((cfg) => {
             setConfig(cfg as any); // Use full config
+        });
+        // 获取用户角色
+        window.ipcRenderer.invoke('permission:get-role').then((role) => {
+            setUserRole(role as 'user' | 'admin');
         });
         // ... existing listeners
         const removeStreamListener = window.ipcRenderer.on('agent:stream-token', (_event, ...args) => {
@@ -623,29 +630,114 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                             >
                                                 {t('execute')}
                                             </button>
-                                            {!script.isOfficial && (
-                                                <button
-                                                    onClick={async (e) => {
-                                                        e.stopPropagation();
-                                                        // 确认删除
-                                                        const confirmMessage = script.name === 'index' 
-                                                            ? `确定要删除脚本 "${script.name}" 吗？\n\n注意：index.js 可能是系统文件，删除后可能影响功能。`
-                                                            : `确定要删除脚本 "${script.name}" 吗？\n\n此操作将永久删除文件，无法恢复。`;
-                                                        
-                                                        if (window.confirm(confirmMessage)) {
-                                                            const result = await window.ipcRenderer.invoke('script:delete', script.id) as { success: boolean };
-                                                            if (result.success) {
-                                                                setScripts(scripts.filter(s => s.id !== script.id));
-                                                            } else {
-                                                                setError('删除脚本失败，请检查文件权限');
-                                                            }
-                                                        }
-                                                    }}
-                                                    className="p-1 text-stone-400 hover:text-red-500 transition-colors"
-                                                    title="删除脚本"
-                                                >
-                                                    <Trash2 size={12} />
-                                                </button>
+                                            {userRole === 'admin' && (
+                                                <>
+                                                    {editingScriptId === script.id ? (
+                                                        <div className="flex items-center gap-1">
+                                                            <input
+                                                                type="text"
+                                                                value={editingScriptName}
+                                                                onChange={(e) => setEditingScriptName(e.target.value)}
+                                                                onKeyDown={async (e) => {
+                                                                    if (e.key === 'Enter') {
+                                                                        const result = await window.ipcRenderer.invoke('script:rename', script.id, editingScriptName) as { success: boolean; error?: string };
+                                                                        if (result.success) {
+                                                                            setEditingScriptId(null);
+                                                                            setScripts(await window.ipcRenderer.invoke('script:list') as Script[]);
+                                                                        } else {
+                                                                            setError(result.error || '重命名失败');
+                                                                        }
+                                                                    } else if (e.key === 'Escape') {
+                                                                        setEditingScriptId(null);
+                                                                        setEditingScriptName('');
+                                                                    }
+                                                                }}
+                                                                className="text-[10px] px-1.5 py-0.5 border border-orange-300 rounded bg-white dark:bg-zinc-800 text-stone-700 dark:text-zinc-200 w-20"
+                                                                autoFocus
+                                                            />
+                                                            <button
+                                                                onClick={async () => {
+                                                                    const result = await window.ipcRenderer.invoke('script:rename', script.id, editingScriptName) as { success: boolean; error?: string };
+                                                                    if (result.success) {
+                                                                        setEditingScriptId(null);
+                                                                        setScripts(await window.ipcRenderer.invoke('script:list') as Script[]);
+                                                                    } else {
+                                                                        setError(result.error || '重命名失败');
+                                                                    }
+                                                                }}
+                                                                className="p-0.5 text-green-500 hover:text-green-600"
+                                                            >
+                                                                <Check size={10} />
+                                                            </button>
+                                                            <button
+                                                                onClick={() => {
+                                                                    setEditingScriptId(null);
+                                                                    setEditingScriptName('');
+                                                                }}
+                                                                className="p-0.5 text-stone-400 hover:text-stone-600"
+                                                            >
+                                                                <X size={10} />
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <>
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setEditingScriptId(script.id);
+                                                                    setEditingScriptName(script.name);
+                                                                }}
+                                                                className="p-1 text-stone-400 hover:text-blue-500 transition-colors"
+                                                                title="重命名脚本"
+                                                            >
+                                                                <Edit2 size={12} />
+                                                            </button>
+                                                            {!script.isOfficial && (
+                                                                <button
+                                                                    onClick={async (e) => {
+                                                                        e.stopPropagation();
+                                                                        if (window.confirm(`确定要将脚本 "${script.name}" 标记为官方吗？\n\n标记后，该脚本将同步给所有用户。`)) {
+                                                                            const result = await window.ipcRenderer.invoke('script:mark-official', script.id) as { success: boolean; error?: string };
+                                                                            if (result.success) {
+                                                                                setScripts(await window.ipcRenderer.invoke('script:list') as Script[]);
+                                                                            } else {
+                                                                                setError(result.error || '标记失败');
+                                                                            }
+                                                                        }
+                                                                    }}
+                                                                    className="p-1 text-stone-400 hover:text-yellow-500 transition-colors"
+                                                                    title="标记为官方"
+                                                                >
+                                                                    <Star size={12} />
+                                                                </button>
+                                                            )}
+                                                        </>
+                                                    )}
+                                                    {!script.isOfficial && (
+                                                        <button
+                                                            onClick={async (e) => {
+                                                                e.stopPropagation();
+                                                                // 确认删除
+                                                                const confirmMessage = script.name === 'index' 
+                                                                    ? `确定要删除脚本 "${script.name}" 吗？\n\n注意：index.js 可能是系统文件，删除后可能影响功能。`
+                                                                    : `确定要删除脚本 "${script.name}" 吗？\n\n此操作将永久删除文件，无法恢复。`;
+                                                                
+                                                                if (window.confirm(confirmMessage)) {
+                                                                    const result = await window.ipcRenderer.invoke('script:delete', script.id) as { success: boolean; error?: string };
+                                                                    if (result.success) {
+                                                                        setScripts(scripts.filter(s => s.id !== script.id));
+                                                                    } else {
+                                                                        setError(result.error || '删除脚本失败');
+                                                                    }
+                                                                }
+                                                            }}
+                                                            className="p-1 text-stone-400 hover:text-red-500 transition-colors"
+                                                            title="删除脚本"
+                                                        >
+                                                            <Trash2 size={12} />
+                                                        </button>
+                                                    )}
+                                                </>
                                             )}
                                             </div>
                                         </div>
