@@ -127,7 +127,7 @@ export class FileSystemTools {
                 // 例如: "npm install" -> "node npm-cli.js install"
                 //      'npm run build' -> 'node npm-cli.js run build'
                 const npmRegex = /(^|\s|["'])\bnpm\b(\s+)(.*?)(?=\s*$|\s*["']|$)/g;
-                command = command.replace(npmRegex, (match, before, space, args) => {
+                command = command.replace(npmRegex, (_match, before, _space, args) => {
                     // 保留 npm 后的所有参数
                     const npmArgs = args.trim();
                     return `${before}${nodeCommand} ${npmCliCommand}${npmArgs ? ' ' + npmArgs : ''}`;
