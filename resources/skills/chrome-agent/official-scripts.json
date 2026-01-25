@@ -1,0 +1,23 @@
+{
+  "version": "1.0.0",
+  "officialScripts": [
+    {
+      "name": "weibo-scraper",
+      "file": "weibo-scraper.js",
+      "description": "微博热搜抓取脚本：自动抓取微博热搜榜并生成PDF报告",
+      "version": "1.0.0"
+    },
+    {
+      "name": "login_bots",
+      "file": "login_bots.js",
+      "description": "Bots平台登录脚本：自动登录bots.sankuai.com并访问动态组件开发专家",
+      "version": "1.0.0"
+    },
+    {
+      "name": "login_xgpt",
+      "file": "login_xgpt.js",
+      "description": "XGPT登录脚本：自动登录XGPT平台",
+      "version": "1.0.0"
+    }
+  ]
+}

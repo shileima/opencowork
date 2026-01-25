@@ -595,14 +595,16 @@ ${error}
                 </div>
             )}
 
-            {/* Input Area - Using FloatingInput */}
-            <FloatingInput
-                onSendMessage={handleSubmit}
-                onAbort={handleAbort}
-                onContentChange={setHasContent}
-                isProcessing={isProcessing}
-                autoFocus={ballState === 'input'}
-            />
+            {/* Input Area - Using FloatingInput - Ensure it's on top */}
+            <div className="relative z-50">
+                <FloatingInput
+                    onSendMessage={handleSubmit}
+                    onAbort={handleAbort}
+                    onContentChange={setHasContent}
+                    isProcessing={isProcessing}
+                    autoFocus={ballState === 'input'}
+                />
+            </div>
 
             {/* Quick Actions */}
             <div className="px-2 pb-1.5 flex items-center justify-between shrink-0">

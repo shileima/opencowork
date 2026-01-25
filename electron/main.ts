@@ -170,10 +170,9 @@ app.whenReady().then(() => {
     }
   })
 
-  // Show main window in dev mode
-  if (VITE_DEV_SERVER_URL) {
-    mainWin?.show()
-  }
+  // Show main window and bring to front
+  mainWin?.show()
+  mainWin?.focus()
 
   console.log('OpenCowork started. Press Alt+Space to toggle floating ball.')
 })
@@ -1152,6 +1151,7 @@ function createMainWindow() {
         createMainWindow()
       } else {
         mainWin?.show()
+        mainWin?.focus()
       }
     })
 
@@ -1164,6 +1164,9 @@ function createMainWindow() {
 
   mainWin.once('ready-to-show', () => {
     console.log('Main window ready.')
+    // 确保窗口显示在最前面
+    mainWin?.show()
+    mainWin?.focus()
   })
 
   // Handle external links
