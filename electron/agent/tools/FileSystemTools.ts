@@ -143,6 +143,9 @@ export class FileSystemTools {
             }
         }
 
+        // 检测是否为自动化测试命令（可能启动 Chrome for Testing）
+        const isAutomationTest = this.isAutomationTestCommand(command);
+
         try {
             // 获取 Playwright 和 npm 环境变量
             const playwrightEnv = getPlaywrightEnvVars();
@@ -170,17 +173,78 @@ export class FileSystemTools {
                 shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/bash'
             });
 
+            // 如果是自动化测试命令，执行完成后清理 Chrome for Testing 进程
+            if (isAutomationTest) {
+                await this.cleanupChromeForTesting();
+            }
+
             let result = `Command executed in ${workingDir}:\n$ ${command}\n\n`;
             if (stdout) result += `STDOUT:\n${stdout}\n`;
             if (stderr) result += `STDERR:\n${stderr}\n`;
             return result || 'Command completed with no output.';
         } catch (error: unknown) {
+            // 即使命令失败，如果是自动化测试命令，也要清理 Chrome for Testing 进程
+            if (isAutomationTest) {
+                await this.cleanupChromeForTesting();
+            }
+
             const err = error as { stdout?: string; stderr?: string; message?: string };
             let errorMsg = `Command failed in ${workingDir}:\n$ ${command}\n\n`;
             if (err.stdout) errorMsg += `STDOUT:\n${err.stdout}\n`;
             if (err.stderr) errorMsg += `STDERR:\n${err.stderr}\n`;
             errorMsg += `Error: ${err.message || String(error)}`;
             return errorMsg;
+        }
+    }
+
+    /**
+     * 检测命令是否为自动化测试命令（可能启动 Chrome for Testing）
+     */
+    private isAutomationTestCommand(command: string): boolean {
+        const cmdLower = command.toLowerCase();
+        // 检测是否包含 playwright、chrome-agent、自动化测试相关关键词
+        return cmdLower.includes('playwright') ||
+               cmdLower.includes('chrome-agent') ||
+               cmdLower.includes('chromium') ||
+               (cmdLower.includes('node') && cmdLower.includes('.js') && cmdLower.includes('chrome'));
+    }
+
+    /**
+     * 清理 Google Chrome for Testing 进程
+     */
+    private async cleanupChromeForTesting(): Promise<void> {
+        try {
+            console.log('[FileSystemTools] Cleaning up Google Chrome for Testing processes...');
+            
+            if (process.platform === 'darwin' || process.platform === 'linux') {
+                // macOS 和 Linux 使用 pkill
+                const cleanupCommand = 'pkill -9 -f "Google Chrome for Testing"';
+                await execAsync(cleanupCommand, {
+                    timeout: 5000,
+                    maxBuffer: 1024 * 1024, // 1MB buffer
+                    encoding: 'utf-8'
+                });
+                console.log('[FileSystemTools] Successfully cleaned up Google Chrome for Testing processes');
+            } else if (process.platform === 'win32') {
+                // Windows 使用 taskkill
+                const cleanupCommand = 'taskkill /F /IM "Google Chrome for Testing.exe" /T';
+                await execAsync(cleanupCommand, {
+                    timeout: 5000,
+                    maxBuffer: 1024 * 1024, // 1MB buffer
+                    encoding: 'utf-8',
+                    shell: 'powershell.exe'
+                });
+                console.log('[FileSystemTools] Successfully cleaned up Google Chrome for Testing processes');
+            }
+        } catch (error: unknown) {
+            // 如果进程不存在或已退出，pkill 会返回错误，这是正常的
+            const err = error as { code?: number; message?: string };
+            if (err.code === 1) {
+                // pkill 返回 1 表示没有找到匹配的进程，这是正常的
+                console.log('[FileSystemTools] No Google Chrome for Testing processes found to clean up');
+            } else {
+                console.warn(`[FileSystemTools] Failed to cleanup Chrome for Testing: ${err.message || String(error)}`);
+            }
         }
     }
 }
