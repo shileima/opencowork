@@ -45,6 +45,188 @@ for i, page in enumerate(pdf):
 
 ## JavaScript Libraries
 
+### pdfkit (MIT License)
+
+pdfkit is a powerful Node.js library for creating PDF documents. It's particularly useful for generating PDFs programmatically with custom layouts and fonts.
+
+#### Basic PDF Creation
+```javascript
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+
+const doc = new PDFDocument({ margin: 50 });
+doc.pipe(fs.createWriteStream('output.pdf'));
+
+doc.fontSize(24)
+   .text('Hello World!', { align: 'center' })
+   .moveDown()
+   .fontSize(12)
+   .text('This is a PDF created with pdfkit');
+
+doc.end();
+```
+
+#### Chinese Font Support (Critical for CJK Text)
+
+**IMPORTANT**: pdfkit does NOT support Chinese characters by default. You MUST register and use a Chinese font to avoid garbled text (mojibake).
+
+```javascript
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
+
+/**
+ * Find Chinese font in system
+ */
+function findChineseFont() {
+  const possibleFontPaths = [
+    // macOS system fonts
+    '/System/Library/Fonts/STHeiti Light.ttc',
+    '/System/Library/Fonts/STHeiti Medium.ttc',
+    '/System/Library/Fonts/STSong.ttc',
+    '/Library/Fonts/Microsoft/SimHei.ttf',
+    '/Library/Fonts/Microsoft/SimSun.ttf',
+    // Windows fonts
+    'C:/Windows/Fonts/simsun.ttc',
+    'C:/Windows/Fonts/simhei.ttf',
+    'C:/Windows/Fonts/msyh.ttc',
+    // Linux fonts
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+  ];
+
+  for (const fontPath of possibleFontPaths) {
+    if (fs.existsSync(fontPath)) {
+      return fontPath;
+    }
+  }
+  return null;
+}
+
+/**
+ * Get TTC font name from path
+ */
+function getTtcFontName(fontPath) {
+  if (fontPath.includes('STHeiti Light')) {
+    return 'STHeiti Light';
+  } else if (fontPath.includes('STHeiti Medium')) {
+    return 'STHeiti Medium';
+  } else if (fontPath.includes('STSong')) {
+    return 'STSong';
+  } else if (fontPath.includes('PingFang')) {
+    return 'PingFang SC';
+  }
+  return null;
+}
+
+/**
+ * Create PDF with Chinese text
+ */
+function createChinesePDF() {
+  const doc = new PDFDocument({ margin: 50 });
+  const stream = fs.createWriteStream('chinese.pdf');
+  doc.pipe(stream);
+
+  // Find and load Chinese font
+  const chineseFontPath = findChineseFont();
+  let fontRegistered = false;
+
+  if (chineseFontPath) {
+    try {
+      if (chineseFontPath.endsWith('.ttc')) {
+        // TTC files need font name as second parameter
+        const fontName = getTtcFontName(chineseFontPath);
+        if (fontName) {
+          doc.font(chineseFontPath, fontName);
+        } else {
+          doc.font(chineseFontPath);
+        }
+        fontRegistered = true;
+        console.log(`✅ Loaded Chinese font (TTC): ${chineseFontPath}`);
+      } else {
+        // TTF/OTF files can be used directly
+        doc.font(chineseFontPath);
+        fontRegistered = true;
+        console.log(`✅ Loaded Chinese font: ${chineseFontPath}`);
+      }
+    } catch (fontError) {
+      console.warn(`⚠️  Font loading failed: ${fontError.message}`);
+    }
+  } else {
+    console.warn('⚠️  No Chinese font found. Chinese text may appear garbled.');
+  }
+
+  // Use Chinese font for all text
+  if (fontRegistered && chineseFontPath) {
+    if (chineseFontPath.endsWith('.ttc')) {
+      const fontName = getTtcFontName(chineseFontPath);
+      if (fontName) {
+        doc.font(chineseFontPath, fontName);
+      } else {
+        doc.font(chineseFontPath);
+      }
+    } else {
+      doc.font(chineseFontPath);
+    }
+  }
+
+  // Add Chinese text
+  doc.fontSize(24)
+     .text('微博热搜榜', { align: 'center' })
+     .moveDown()
+     .fontSize(12)
+     .text('这是使用 pdfkit 生成的中文 PDF');
+
+  doc.end();
+}
+
+createChinesePDF();
+```
+
+#### Key Points for Chinese Font Support
+
+1. **Always use a Chinese font**: pdfkit's default fonts do NOT support CJK characters
+2. **TTC vs TTF/OTF**: 
+   - TTC (TrueType Collection) files require the font name as a second parameter: `doc.font(fontPath, 'Font Name')`
+   - TTF/OTF files can be used directly: `doc.font(fontPath)`
+3. **Re-apply font**: You may need to re-apply the font when switching between different text sections
+4. **Font detection**: Always check if the font file exists before using it
+5. **Error handling**: Provide fallback behavior if Chinese font is not available
+
+#### Advanced PDF Creation with pdfkit
+```javascript
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+
+const doc = new PDFDocument({ margin: 50 });
+doc.pipe(fs.createWriteStream('advanced.pdf'));
+
+// Add header
+doc.fontSize(20)
+   .fillColor('#0066CC')
+   .text('Invoice', { align: 'center' })
+   .moveDown();
+
+// Add table-like content
+const items = [
+  { name: 'Item 1', price: '$100' },
+  { name: 'Item 2', price: '$200' }
+];
+
+items.forEach(item => {
+  doc.fontSize(12)
+     .fillColor('#000000')
+     .text(item.name, { continued: true })
+     .text(item.price, { align: 'right' });
+});
+
+// Add footer
+doc.fontSize(10)
+   .text('Thank you for your business!', { align: 'center' });
+
+doc.end();
+```
+
 ### pdf-lib (MIT License)
 
 pdf-lib is a powerful JavaScript library for creating and modifying PDF documents in any JavaScript environment.
@@ -610,3 +792,4 @@ def extract_text_with_ocr(pdf_path):
 - **qpdf**: Apache License
 - **pdf-lib**: MIT License
 - **pdfjs-dist**: Apache License
+- **pdfkit**: MIT License
