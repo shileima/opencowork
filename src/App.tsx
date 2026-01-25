@@ -10,10 +10,22 @@ function App() {
   const [history, setHistory] = useState<Anthropic.MessageParam[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [appVersion, setAppVersion] = useState<string>('');
   const { pendingRequest, handleConfirm, handleDeny } = useConfirmations();
 
   // Check if this is the floating ball window
   const isFloatingBall = window.location.hash === '#/floating-ball' || window.location.hash === '#floating-ball';
+
+  // 获取应用版本号
+  useEffect(() => {
+    // 尝试从 IPC 获取版本号，如果没有则使用默认值
+    window.ipcRenderer.invoke('app:get-version').then((version) => {
+      setAppVersion(version as string || '');
+    }).catch(() => {
+      // 如果 IPC 方法不存在，使用 package.json 中的版本（在构建时注入）
+      setAppVersion(import.meta.env.VITE_APP_VERSION || '');
+    });
+  }, []);
 
   useEffect(() => {
     // Listen for history updates (don't reset isProcessing here - wait for agent:done)
@@ -92,6 +104,9 @@ ${err}
         <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <img src="./icon.png" alt="Logo" className="w-6 h-6 rounded-md object-cover" />
           <span className="font-medium text-stone-700 dark:text-zinc-200 text-sm">测试助手</span>
+          {appVersion && (
+            <span className="text-xs text-stone-500 dark:text-zinc-500">{appVersion}</span>
+          )}
         </div>
 
         {!navigator.userAgent.includes('Mac') && (

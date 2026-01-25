@@ -735,10 +735,10 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                 onClick={async () => {
                                                     // 立即关闭浮层
                                                     setShowScripts(false);
-                                                    setMode('work');
+                                                    // 保持在当前模式，不切换到 work 模式
                                                     
                                                     try {
-                                                        // 执行脚本（script:execute 内部会创建新会话）
+                                                        // 执行脚本（script:execute 会使用当前会话，不清空历史）
                                                         const result = await window.ipcRenderer.invoke('script:execute', script.id) as { success: boolean; error?: string; sessionId?: string };
                                                         if (result.success && result.sessionId) {
                                                             // 立即记录脚本正在运行

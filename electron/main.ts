@@ -396,15 +396,33 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
     // 确定是浮动球窗口还是主窗口
     const isFloatingBall = event.sender === floatingBallWin?.webContents
     
-    // 创建新会话，使用脚本名称作为标题
-    const sessionTitle = `执行脚本: ${script.name}`
-    const newSession = sessionStore.createSession(sessionTitle)
+    // 获取当前会话ID（如果存在），否则创建新会话
+    let currentSessionId = sessionStore.getSessionId(isFloatingBall)
+    let sessionTitle = `执行脚本: ${script.name}`
     
-    // 设置当前会话ID，这样后续保存时会使用这个会话
-    sessionStore.setSessionId(newSession.id, isFloatingBall)
+    if (!currentSessionId) {
+      // 如果没有当前会话，创建新会话
+      const newSession = sessionStore.createSession(sessionTitle)
+      currentSessionId = newSession.id
+      sessionStore.setSessionId(currentSessionId, isFloatingBall)
+    } else {
+      // 如果有当前会话，更新会话标题（但不清空历史，让执行结果追加到当前会话）
+      const currentSession = sessionStore.getSession(currentSessionId)
+      if (currentSession) {
+        // 更新标题，但保留现有消息（不清空）
+        sessionStore.updateSession(currentSessionId, currentSession.messages, sessionTitle)
+      }
+    }
     
-    // 清空 agent 历史
+    // 清空 agent 历史（这样执行脚本时不会显示之前的对话）
+    // 但保持在当前会话中，执行结果会追加到当前会话
     targetAgent.clearHistory()
+    
+    // 通知前端历史已清空（这样前端会显示空状态，等待新的执行结果）
+    const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('agent:history-update', [])
+    }
     
     // 构建执行命令
     const scriptDir = path.dirname(script.filePath)
@@ -433,8 +451,8 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
     setImmediate(async () => {
       try {
         // 使用 agent 的 processUserMessage 方法，传递 taskId 以支持并发执行
-        // 使用 session ID 作为 taskId，这样每个脚本执行都有独立的上下文
-        await targetAgent.processUserMessage(executeMessage, newSession.id)
+        // 使用当前会话 ID 作为 taskId，保持在当前会话中
+        await targetAgent.processUserMessage(executeMessage, currentSessionId)
       } catch (error) {
         console.error('[Script] Error executing script:', error)
         const errorMsg = (error as Error).message
@@ -459,7 +477,7 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
       }
     })
     
-    return { success: true, sessionId: newSession.id }
+    return { success: true, sessionId: currentSessionId }
   } catch (error) {
     console.error('[Script] Error executing script:', error)
     return { success: false, error: (error as Error).message }
@@ -574,6 +592,10 @@ ipcMain.handle('app:info', () => {
     author: 'Safphere', // Hardcoded from package.json
     homepage: 'https://github.com/Safphere/opencowork'
   };
+})
+
+ipcMain.handle('app:get-version', () => {
+  return app.getVersion()
 })
 
 ipcMain.handle('app:check-update', async () => {
