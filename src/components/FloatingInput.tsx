@@ -101,7 +101,7 @@ export function FloatingInput({ onSendMessage, onAbort, onContentChange, isProce
     };
 
     return (
-        <div className="p-2 shrink-0 z-10 bg-white dark:bg-zinc-950">
+        <div className="p-2 shrink-0 z-50 bg-white dark:bg-zinc-950 relative">
             {/* Image Preview */}
             {images.length > 0 && (
                 <div className="flex gap-2 mb-2 overflow-x-auto pb-1">
