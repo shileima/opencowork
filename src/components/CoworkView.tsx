@@ -79,6 +79,18 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
         window.ipcRenderer.invoke('permission:get-role').then((role) => {
             setUserRole(role as 'user' | 'admin');
         });
+        // 设置默认工作目录为 chrome-agent（仅在初始化时，如果工作目录为空）
+        (async () => {
+            try {
+                const scriptsDir = await window.ipcRenderer.invoke('agent:get-scripts-dir') as string;
+                if (scriptsDir && !workingDir) {
+                    setWorkingDir(scriptsDir);
+                    await window.ipcRenderer.invoke('agent:set-working-dir', scriptsDir);
+                }
+            } catch (error) {
+                console.error('[CoworkView] Error setting default working dir:', error);
+            }
+        })();
         // ... existing listeners
         const removeStreamListener = window.ipcRenderer.on('agent:stream-token', (_event, ...args) => {
             const token = args[0] as string;
@@ -89,6 +101,18 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
         const removeConfigListener = window.ipcRenderer.on('config:updated', (_event, newConfig) => {
             console.log('[CoworkView] Config updated:', newConfig);
             setConfig(newConfig);
+        });
+
+        // 监听自动加载会话事件
+        const removeAutoLoadListener = window.ipcRenderer.on('session:auto-loaded', (_event, ...args) => {
+            const sessionId = args[0] as string;
+            console.log('[CoworkView] Session auto-loaded:', sessionId);
+            // 标记正在加载会话，避免自动保存覆盖
+            isLoadingSessionRef.current = true;
+            // 刷新会话列表
+            window.ipcRenderer.invoke('session:list').then((list) => {
+                setSessions(list as SessionSummary[]);
+            });
         });
 
         // Clear streaming when history updates and save session
@@ -184,7 +208,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             removeStreamListener?.();
             removeConfigListener?.();
             removeHistoryListener?.();
-            removeConfirmListener?.();
+            removeAutoLoadListener?.();
             removeConfirmListener?.();
             removeAbortListener?.();
             removeErrorListener?.();
@@ -404,9 +428,19 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                             {t('cowork')}
                         </button>
                         <button
-                            onClick={() => {
+                            onClick={async () => {
                                 setMode('automation');
                                 setShowScripts(true);
+                                // 切换到自动化模式时，自动设置工作目录为 chrome-agent
+                                try {
+                                    const scriptsDir = await window.ipcRenderer.invoke('agent:get-scripts-dir') as string;
+                                    if (scriptsDir) {
+                                        setWorkingDir(scriptsDir);
+                                        await window.ipcRenderer.invoke('agent:set-working-dir', scriptsDir);
+                                    }
+                                } catch (error) {
+                                    console.error('[CoworkView] Error setting scripts dir:', error);
+                                }
                             }}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${mode === 'automation' ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm' : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
                                 }`}
@@ -420,7 +454,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                 {/* History + Settings */}
                 <div className="flex items-center gap-2">
                     {workingDir && (
-                        <span className="text-xs text-stone-400 dark:text-zinc-500 truncate max-w-32">
+                        <span className="text-xs text-stone-400 dark:text-zinc-500 truncate w-[120px] flex-shrink-0" title={workingDir.split(/[\\/]/).pop()}>
                             📂 {workingDir.split(/[\\/]/).pop()}
                         </span>
                     )}
@@ -428,6 +462,16 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                         <button
                             onClick={async () => {
                                 await window.ipcRenderer.invoke('agent:new-session');
+                                // 新打开对话时，设置默认工作目录为 chrome-agent
+                                try {
+                                    const scriptsDir = await window.ipcRenderer.invoke('agent:get-scripts-dir') as string;
+                                    if (scriptsDir) {
+                                        setWorkingDir(scriptsDir);
+                                        await window.ipcRenderer.invoke('agent:set-working-dir', scriptsDir);
+                                    }
+                                } catch (error) {
+                                    console.error('[CoworkView] Error setting default scripts dir:', error);
+                                }
                                 // 刷新历史任务列表（如果打开的话）
                                 if (showHistory) {
                                     setTimeout(() => {

@@ -336,7 +336,31 @@ ipcMain.handle('script:mark-official', (_, id: string) => {
   return { success, error: success ? undefined : 'Failed to mark script as official' }
 })
 
-ipcMain.handle('script:execute', async (event, scriptId: string) => {
+/**
+ * 检测用户输入中是否包含"关闭浏览器"的意图
+ */
+function shouldCloseBrowser(userInput: string): boolean {
+  if (!userInput) return false;
+  
+  const closeKeywords = [
+    '关闭浏览器',
+    '关闭窗口',
+    '关闭页面',
+    'close browser',
+    'close window',
+    'close page',
+    'browser.close',
+    'context.close',
+    'page.close',
+    '退出浏览器',
+    '退出窗口'
+  ];
+  
+  const inputLower = userInput.toLowerCase();
+  return closeKeywords.some(keyword => inputLower.includes(keyword.toLowerCase()));
+}
+
+ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: string) => {
   const script = scriptStore.getScript(scriptId)
   if (!script) {
     return { success: false, error: 'Script not found' }
@@ -370,8 +394,19 @@ ipcMain.handle('script:execute', async (event, scriptId: string) => {
     const nodeCommand = nodePath.includes(' ') ? `"${nodePath}"` : nodePath
     const command = `cd "${scriptDir}" && ${nodeCommand} "${scriptName}"`
     
-    // 发送消息给 agent 执行脚本
-    const executeMessage = `请执行以下 chrome-agent 脚本：\n\n\`\`\`bash\n${command}\n\`\`\`\n\n脚本路径：${script.filePath}`
+    // 检测用户输入中是否包含"关闭浏览器"的意图
+    const userInput = userMessage || '';
+    const shouldClose = shouldCloseBrowser(userInput);
+    
+    // 构建执行消息
+    let executeMessage = `请执行以下 chrome-agent 脚本：\n\n\`\`\`bash\n${command}\n\`\`\`\n\n脚本路径：${script.filePath}`;
+    
+    // 如果没有明确要求关闭浏览器，添加提示保持浏览器打开
+    if (!shouldClose) {
+      executeMessage += `\n\n⚠️ 重要提示：脚本执行完成后请保持浏览器打开，不要自动调用 browser.close()、context.close() 或 page.close()。除非用户明确要求"关闭浏览器"，否则浏览器应该保持打开状态以便用户查看结果或继续操作。`;
+    } else {
+      executeMessage += `\n\n✅ 用户要求关闭浏览器，脚本执行完成后可以关闭浏览器。`;
+    }
     
     // 使用 agent 的 processUserMessage 方法
     await targetAgent.processUserMessage(executeMessage)
@@ -419,6 +454,11 @@ ipcMain.handle('permissions:revoke', (_, { tool, pathPattern }: { tool: string, 
 ipcMain.handle('permissions:clear', () => {
   configStore.clearAllPermissions()
   return { success: true }
+})
+
+// Get chrome-agent scripts directory path
+ipcMain.handle('agent:get-scripts-dir', () => {
+  return directoryManager.getScriptsDir()
 })
 
 ipcMain.handle('agent:set-working-dir', (_, folderPath: string) => {
@@ -1063,9 +1103,13 @@ function createMainWindow() {
   // Mac-specific configuration
   const isMac = process.platform === 'darwin'
 
+  // 默认窗口宽度设置为 1090
+  const DEFAULT_WINDOW_WIDTH = 560;
+  const DEFAULT_WINDOW_HEIGHT = 720;
+
   mainWin = new BrowserWindow({
-    width: 480,
-    height: 720,
+    width: DEFAULT_WINDOW_WIDTH,
+    height: DEFAULT_WINDOW_HEIGHT,
     minWidth: 400,
     minHeight: 600,
     icon: iconImage || iconPath,
@@ -1187,6 +1231,46 @@ function createMainWindow() {
 
   mainWin.webContents.on('did-finish-load', () => {
     mainWin?.webContents.send('main-process-message', (new Date).toLocaleString())
+    
+    // 自动加载最近一次会话
+    const tryLoadLatestSession = () => {
+      try {
+        // 确保 agent 已初始化
+        if (!mainAgent) {
+          console.log('[Main] Agent not ready yet, retrying in 500ms...')
+          setTimeout(tryLoadLatestSession, 500)
+          return
+        }
+        
+        const sessions = sessionStore.getSessions()
+        if (sessions && sessions.length > 0) {
+          // 按更新时间排序，获取最近一次会话
+          const sortedSessions = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+          const latestSession = sortedSessions[0]
+          
+          if (latestSession) {
+            console.log(`[Main] Auto-loading latest session: ${latestSession.id} (${latestSession.title})`)
+            // 设置当前会话ID
+            sessionStore.setSessionId(latestSession.id, false)
+            // 加载会话历史
+            const fullSession = sessionStore.getSession(latestSession.id)
+            if (fullSession && fullSession.messages.length > 0) {
+              mainAgent.loadHistory(fullSession.messages)
+              // 通知渲染进程会话已加载
+              mainWin?.webContents.send('session:auto-loaded', latestSession.id)
+              console.log(`[Main] Successfully auto-loaded session: ${latestSession.title}`)
+            }
+          }
+        } else {
+          console.log('[Main] No sessions found, skipping auto-load')
+        }
+      } catch (error) {
+        console.error('[Main] Error auto-loading latest session:', error)
+      }
+    }
+    
+    // 延迟一下确保 agent 已初始化
+    setTimeout(tryLoadLatestSession, 500)
   })
 
   if (VITE_DEV_SERVER_URL) {

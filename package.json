@@ -1,11 +1,11 @@
 {
   "name": "qacowork",
   "private": true,
-  "version": "0.0.10",
+  "version": "0.0.12",
   "description": "qa cowork - 你的数字测试同事",
   "author": {
-    "name": "Safphere",
-    "email": "a976466014@gmail.com"
+    "name": "mashilei",
+    "email": "mashilei@meituan.com"
   },
   "license": "Apache-2.0",
   "type": "module",
@@ -20,7 +20,8 @@
     "verify:mac": "node scripts/check-mac-compatibility.cjs",
     "verify:all": "node scripts/verify-builtin-resources.cjs && node scripts/check-mac-compatibility.cjs",
     "prepare:playwright": "node scripts/prepare-playwright.mjs",
-    "prepare:node-npm": "node scripts/prepare-node-npm.mjs"
+    "prepare:node-npm": "node scripts/prepare-node-npm.mjs",
+    "prepare:awesome-skills": "node scripts/prepare-awesome-skills.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
