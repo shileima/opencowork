@@ -312,6 +312,14 @@ export class PermissionService {
     }
 
     /**
+     * 检查是否可以将官方脚本标记为非官方
+     */
+    public canUnmarkScriptOfficial(_scriptId: string): boolean {
+        // 只有管理员可以将官方脚本标记为非官方
+        return this.isAdmin();
+    }
+
+    /**
      * 检查是否可以编辑技能
      */
     public canEditSkill(_skillId: string, isBuiltin: boolean = false): boolean {

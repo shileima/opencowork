@@ -458,6 +458,57 @@ class ScriptStore {
             return false;
         }
     }
+
+    // 将官方脚本标记为非官方（仅管理员）
+    unmarkAsOfficial(id: string): boolean {
+        const scripts = this.store.get('scripts') || [];
+        const script = scripts.find(s => s.id === id);
+        
+        if (!script) {
+            console.warn(`[ScriptStore] Script not found: ${id}`);
+            return false;
+        }
+
+        // 如果不是官方脚本，直接返回
+        if (!script.isOfficial) {
+            return true;
+        }
+
+        try {
+            const scriptFileName = path.basename(script.filePath);
+
+            // 从官方脚本清单中移除
+            const manifest = this.loadOfficialScriptsManifest();
+            if (manifest) {
+                const normalizedScriptName = script.name.toLowerCase();
+                const normalizedFileName = scriptFileName.toLowerCase();
+                
+                manifest.officialScripts = manifest.officialScripts.filter(s => {
+                    const normalizedManifestName = s.name.toLowerCase();
+                    const normalizedManifestFile = s.file.toLowerCase();
+                    return normalizedManifestName !== normalizedScriptName && 
+                           normalizedManifestFile !== normalizedFileName &&
+                           normalizedManifestFile !== `${normalizedScriptName}.js`;
+                });
+
+                const manifestPath = path.join(this.officialScriptsDir, 'official-scripts.json');
+                fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+                this.officialScriptsManifest = manifest;
+                console.log(`[ScriptStore] Removed script from official manifest: ${script.name}`);
+            }
+
+            // 更新脚本记录（标记为非官方）
+            script.isOfficial = false;
+            script.updatedAt = Date.now();
+            this.store.set('scripts', scripts);
+
+            console.log(`[ScriptStore] Unmarked script as official: ${script.name}`);
+            return true;
+        } catch (error) {
+            console.error(`[ScriptStore] Error unmarking script as official:`, error);
+            return false;
+        }
+    }
 }
 
 export const scriptStore = new ScriptStore();

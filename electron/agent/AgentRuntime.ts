@@ -244,6 +244,13 @@ export class AgentRuntime {
     private maxTokens: number;
     private lastProcessTime: number = 0;
     private userWantsCloseBrowser: boolean = false; // 用户是否要求关闭浏览器
+    
+    // 支持并发任务：每个任务有独立的处理状态
+    private activeTasks: Map<string, {
+        abortController: AbortController;
+        startTime: number;
+        history: Anthropic.MessageParam[];
+    }> = new Map();
 
     constructor(apiKey: string, window: BrowserWindow, model: string = 'claude-3-5-sonnet-20241022', apiUrl: string = 'https://api.anthropic.com', maxTokens: number = 131072) {
         this.anthropic = new Anthropic({ apiKey, baseURL: apiUrl });
@@ -348,22 +355,88 @@ export class AgentRuntime {
         this.notifyUpdate();
     }
 
-    public async processUserMessage(input: string | { content: string, images: string[] }) {
-        // Auto-recover from stuck state if > 60 seconds have passed since start
-        if (this.isProcessing) {
-            if (Date.now() - this.lastProcessTime > 60000) {
-                console.warn('[AgentRuntime] Detected stale processing state (60s+). Auto-resetting.');
+    public async processUserMessage(input: string | { content: string, images: string[] }, taskId?: string) {
+        // 如果提供了 taskId，使用任务级别的并发控制；否则使用全局控制（向后兼容）
+        const useTaskLevelConcurrency = taskId !== undefined;
+        
+        if (useTaskLevelConcurrency) {
+            // 任务级别并发：检查该任务是否已在处理中
+            if (this.activeTasks.has(taskId)) {
+                const task = this.activeTasks.get(taskId)!;
+                // 如果任务超过60秒未更新，自动重置
+                if (Date.now() - task.startTime > 60000) {
+                    console.warn(`[AgentRuntime] Task ${taskId} stale (60s+). Auto-resetting.`);
+                    this.activeTasks.delete(taskId);
+                } else {
+                    throw new Error(`Task ${taskId} is already processing`);
+                }
+            }
+            
+            // 创建任务上下文
+            const abortController = new AbortController();
+            const taskHistory: Anthropic.MessageParam[] = [];
+            this.activeTasks.set(taskId, {
+                abortController,
+                startTime: Date.now(),
+                history: taskHistory
+            });
+            
+            // 保存全局状态（用于恢复）
+            const originalAbortController = this.abortController;
+            const originalHistory = this.history;
+            const originalIsProcessing = this.isProcessing;
+            
+            // 使用任务级别的状态（每个任务有独立的上下文）
+            this.abortController = abortController;
+            this.history = taskHistory;
+            this.isProcessing = true;
+            
+            try {
+                await this.processMessageWithContext(input, taskId);
+            } catch (error) {
+                // 即使出错也要确保状态恢复和任务清理
+                console.error(`[AgentRuntime] Task ${taskId} error:`, error);
+                throw error; // 重新抛出，让外层处理
+            } finally {
+                // 确保状态恢复和任务清理（无论成功还是失败）
+                this.history = originalHistory;
+                this.isProcessing = originalIsProcessing;
+                this.abortController = originalAbortController;
+                this.activeTasks.delete(taskId);
+                // 只有在有历史记录时才通知更新（避免空更新）
+                if (taskHistory.length > 0) {
+                    this.notifyUpdate();
+                }
+                this.broadcast('agent:done', { timestamp: Date.now(), taskId });
+            }
+        } else {
+            // 全局并发控制（向后兼容）：保持原有逻辑
+            if (this.isProcessing) {
+                if (Date.now() - this.lastProcessTime > 60000) {
+                    console.warn('[AgentRuntime] Detected stale processing state (60s+). Auto-resetting.');
+                    this.isProcessing = false;
+                    this.abortController = null;
+                } else {
+                    throw new Error('Agent is already processing a message');
+                }
+            }
+
+            this.lastProcessTime = Date.now();
+            this.isProcessing = true;
+            this.abortController = new AbortController();
+            
+            try {
+                await this.processMessageWithContext(input);
+            } finally {
                 this.isProcessing = false;
                 this.abortController = null;
-            } else {
-                throw new Error('Agent is already processing a message');
+                this.notifyUpdate();
+                this.broadcast('agent:done', { timestamp: Date.now() });
             }
         }
-
-        this.lastProcessTime = Date.now();
-
-        this.isProcessing = true;
-        this.abortController = new AbortController();
+    }
+    
+    private async processMessageWithContext(input: string | { content: string, images: string[] }, taskId?: string) {
         
         // 重置浏览器关闭意图检测（每次新消息时重置）
         this.userWantsCloseBrowser = false;
@@ -421,6 +494,38 @@ export class AgentRuntime {
             const err = error as { status?: number; message?: string; error?: { message?: string; type?: string } };
             console.error('Agent Loop Error:', error);
 
+            // 检查是否有成功的工具执行（特别是脚本执行）
+            const hasSuccessfulScriptExecution = this.history.some(msg => {
+                if (msg.role === 'user' && Array.isArray(msg.content)) {
+                    return msg.content.some((block: any) => {
+                        if (block.type === 'tool_result') {
+                            const result = typeof block.content === 'string' ? block.content : '';
+                            // 检查是否是脚本执行成功的结果（包含成功标识或没有错误信息）
+                            return result.includes('chrome-agent') || 
+                                   result.includes('自动化') ||
+                                   (result.length > 0 && !result.toLowerCase().includes('error') && !result.toLowerCase().includes('失败'));
+                        }
+                        return false;
+                    });
+                }
+                return false;
+            });
+
+            // 如果脚本已经执行成功，对于后续的 AI 调用错误，只记录日志，不显示错误弹窗
+            if (hasSuccessfulScriptExecution && (err.status === 400 || err.status === 429 || err.status === 500 || err.status === 503)) {
+                console.warn(`[AgentRuntime] Script execution succeeded, but subsequent AI call failed (${err.status}). This is non-critical.`);
+                // 添加一个友好的提示消息到历史记录，但不显示错误弹窗
+                const friendlyMessage: Anthropic.MessageParam = {
+                    role: 'assistant',
+                    content: `✅ 脚本执行已完成。\n\n注意：后续的 AI 响应处理遇到了问题（状态码 ${err.status}），但这不影响脚本的执行结果。`
+                };
+                this.history.push(friendlyMessage);
+                this.notifyUpdate();
+                // 仍然发送 done 事件，表示任务完成
+                this.broadcast('agent:done', { timestamp: Date.now(), taskId: taskId || undefined });
+                return; // 提前返回，不显示错误弹窗
+            }
+
             // [Fix] Handle MiniMax/provider sensitive content errors gracefully
             if (err.status === 500 && (err.message?.includes('sensitive') || JSON.stringify(error).includes('1027'))) {
                 this.broadcast('agent:error', 'AI Provider Error: The generated content was flagged as sensitive and blocked by the provider.');
@@ -443,23 +548,11 @@ export class AgentRuntime {
                 // Generic error with full details
                 const errorMsg = err.message || err.error?.message || 'An unknown error occurred';
                 const statusInfo = err.status ? `[${err.status}] ` : '';
-                this.broadcast('agent:error', `${statusInfo}${errorMsg}`);
+                this.broadcast('agent:error', `${statusInfo}${errorMsg}`, taskId || undefined);
             }
-        } finally {
-            // Force reload MCP clients on next run if we had an error, to ensure fresh connection
-            if (this.isProcessing && this.abortController?.signal.aborted) {
-                // Was aborted, do nothing special
-            } else {
-                // For now, we don't force reload every time, but we ensure state is clear
-            }
-
-            this.isProcessing = false;
-            this.abortController = null;
-            this.notifyUpdate();
-            // Broadcast done event to signal processing is complete
-            this.broadcast('agent:done', { timestamp: Date.now() });
         }
     }
+    
 
     private async runLoop() {
         let keepGoing = true;
@@ -865,6 +958,31 @@ ${skillInfo.instructions}
                     return;
                 }
 
+                // 检查是否有成功的工具执行（特别是脚本执行）
+                // 如果脚本已经执行成功，对于后续的 API 调用错误，优雅处理
+                const hasSuccessfulScriptExecution = this.history.some(msg => {
+                    if (msg.role === 'user' && Array.isArray(msg.content)) {
+                        return msg.content.some((block: any) => {
+                            if (block.type === 'tool_result') {
+                                const result = typeof block.content === 'string' ? block.content : '';
+                                // 检查是否是脚本执行成功的结果
+                                const isScriptExecution = result.includes('chrome-agent') || 
+                                                         result.includes('自动化') ||
+                                                         result.includes('node ') ||
+                                                         result.includes('.js');
+                                // 检查是否成功（没有错误信息）
+                                const isSuccess = result.length > 0 && 
+                                                  !result.toLowerCase().includes('error') && 
+                                                  !result.toLowerCase().includes('失败') &&
+                                                  !result.toLowerCase().includes('failed');
+                                return isScriptExecution && isSuccess;
+                            }
+                            return false;
+                        });
+                    }
+                    return false;
+                });
+
                 // Handle Sensitive Content Error (1027)
                 if (loopErr.status === 500 && (loopErr.message?.includes('sensitive') || JSON.stringify(loopError).includes('1027'))) {
                     console.log("Caught sensitive content error, asking Agent to retry...");
@@ -878,6 +996,19 @@ ${skillInfo.instructions}
 
                     // Allow the loop to continue to the next iteration
                     continue;
+                } else if (hasSuccessfulScriptExecution && (loopErr.status === 400 || loopErr.status === 429 || loopErr.status === 500 || loopErr.status === 503)) {
+                    // 如果脚本已经执行成功，对于后续的 API 调用错误，优雅处理
+                    console.warn(`[AgentRuntime] Script execution succeeded, but subsequent AI call failed (${loopErr.status}). Ending loop gracefully.`);
+                    // 添加一个友好的提示消息
+                    const friendlyMessage: Anthropic.MessageParam = {
+                        role: 'assistant',
+                        content: `✅ 脚本执行已完成。\n\n注意：后续的 AI 响应处理遇到了问题（状态码 ${loopErr.status}），但这不影响脚本的执行结果。`
+                    };
+                    this.history.push(friendlyMessage);
+                    this.notifyUpdate();
+                    // 正常结束循环
+                    keepGoing = false;
+                    return;
                 } else {
                     // Re-throw other errors to be caught effectively by the outer handler
                     throw loopError;
@@ -887,10 +1018,13 @@ ${skillInfo.instructions}
     }
 
     // Broadcast to all windows
-    private broadcast(channel: string, data: unknown) {
+    private broadcast(channel: string, data?: unknown, taskId?: string) {
+        const payload = taskId && typeof data === 'object' && data !== null 
+            ? { ...data as object, taskId } 
+            : data;
         for (const win of this.windows) {
             if (!win.isDestroyed()) {
-                win.webContents.send(channel, data);
+                win.webContents.send(channel, payload);
             }
         }
     }

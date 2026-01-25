@@ -336,6 +336,26 @@ ipcMain.handle('script:mark-official', (_, id: string) => {
   return { success, error: success ? undefined : 'Failed to mark script as official' }
 })
 
+ipcMain.handle('script:unmark-official', (_, id: string) => {
+  const script = scriptStore.getScript(id)
+  if (!script) {
+    return { success: false, error: 'Script not found' }
+  }
+
+  // 权限检查：只有管理员可以将官方脚本标记为非官方
+  if (!permissionService.canUnmarkScriptOfficial(id)) {
+    return { success: false, error: 'Permission denied: Only administrators can unmark official scripts' }
+  }
+
+  // 如果不是官方脚本，直接返回成功
+  if (!script.isOfficial) {
+    return { success: true }
+  }
+
+  const success = scriptStore.unmarkAsOfficial(id)
+  return { success, error: success ? undefined : 'Failed to unmark script as official' }
+})
+
 /**
  * 检测用户输入中是否包含"关闭浏览器"的意图
  */
@@ -408,8 +428,36 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
       executeMessage += `\n\n✅ 用户要求关闭浏览器，脚本执行完成后可以关闭浏览器。`;
     }
     
-    // 使用 agent 的 processUserMessage 方法
-    await targetAgent.processUserMessage(executeMessage)
+    // 先返回 sessionId，让前端可以立即设置运行状态
+    // 然后异步执行脚本，不阻塞返回
+    setImmediate(async () => {
+      try {
+        // 使用 agent 的 processUserMessage 方法，传递 taskId 以支持并发执行
+        // 使用 session ID 作为 taskId，这样每个脚本执行都有独立的上下文
+        await targetAgent.processUserMessage(executeMessage, newSession.id)
+      } catch (error) {
+        console.error('[Script] Error executing script:', error)
+        const errorMsg = (error as Error).message
+        
+        // 检查是否是脚本执行成功但后续 AI 调用失败的情况
+        // 这种情况下不应该显示错误弹窗
+        const isNonCriticalError = errorMsg.includes('脚本执行已完成') || 
+                                   errorMsg.includes('状态码 400') ||
+                                   errorMsg.includes('状态码 429') ||
+                                   errorMsg.includes('状态码 500') ||
+                                   errorMsg.includes('状态码 503')
+        
+        if (!isNonCriticalError) {
+          // 只有真正的错误才发送错误事件
+          const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+          if (targetWindow && !targetWindow.isDestroyed()) {
+            targetWindow.webContents.send('agent:error', errorMsg)
+          }
+        } else {
+          console.log('[Script] Non-critical error after successful script execution, skipping error notification')
+        }
+      }
+    })
     
     return { success: true, sessionId: newSession.id }
   } catch (error) {
