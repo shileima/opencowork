@@ -56,6 +56,8 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     const [userRole, setUserRole] = useState<'user' | 'admin'>('user');
     const [editingScriptId, setEditingScriptId] = useState<string | null>(null);
     const [editingScriptName, setEditingScriptName] = useState<string>('');
+    // 跟踪正在运行的脚本：scriptId -> sessionId 映射
+    const [runningScripts, setRunningScripts] = useState<Map<string, string>>(new Map());
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -113,6 +115,32 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             window.ipcRenderer.invoke('session:list').then((list) => {
                 setSessions(list as SessionSummary[]);
             });
+        });
+
+        // 监听任务完成事件，移除运行状态
+        const removeDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
+            const data = args[0] as { timestamp?: number; taskId?: string };
+            console.log(`[CoworkView] agent:done event received:`, data);
+            if (data?.taskId) {
+                // 通过 taskId (sessionId) 找到对应的 scriptId 并移除运行状态
+                setRunningScripts(prev => {
+                    const newMap = new Map(prev);
+                    let found = false;
+                    for (const [scriptId, sessionId] of newMap.entries()) {
+                        if (sessionId === data.taskId) {
+                            console.log(`[CoworkView] Removing running status for script ${scriptId}, sessionId: ${sessionId}`);
+                            newMap.delete(scriptId);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        console.warn(`[CoworkView] Could not find script for taskId: ${data.taskId}`);
+                    }
+                    console.log(`[CoworkView] Running scripts after removal:`, Array.from(newMap.entries()));
+                    return newMap;
+                });
+            }
         });
 
         // Clear streaming when history updates and save session
@@ -212,6 +240,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             removeConfirmListener?.();
             removeAbortListener?.();
             removeErrorListener?.();
+            removeDoneListener?.();
         };
     }, []);
 
@@ -683,13 +712,21 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                             </span>
                                                         )}
                                                     </div>
-                                                    <p className="text-[10px] text-stone-400 mt-1">
-                                                        {new Date(script.updatedAt).toLocaleString('zh-CN', {
-                                                            month: 'short',
-                                                            day: 'numeric',
-                                                            hour: '2-digit',
-                                                            minute: '2-digit'
-                                                        })}
+                                                    <p className="text-[10px] text-stone-400 mt-1 flex items-center gap-1.5">
+                                                        <span>
+                                                            {new Date(script.updatedAt).toLocaleString('zh-CN', {
+                                                                month: 'short',
+                                                                day: 'numeric',
+                                                                hour: '2-digit',
+                                                                minute: '2-digit',
+                                                                second: '2-digit'
+                                                            })}
+                                                        </span>
+                                                        {runningScripts.has(script.id) && (
+                                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
+                                                                running
+                                                            </span>
+                                                        )}
                                                     </p>
                                                 </div>
                                             </div>
@@ -703,7 +740,16 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                     try {
                                                         // 执行脚本（script:execute 内部会创建新会话）
                                                         const result = await window.ipcRenderer.invoke('script:execute', script.id) as { success: boolean; error?: string; sessionId?: string };
-                                                        if (!result.success) {
+                                                        if (result.success && result.sessionId) {
+                                                            // 立即记录脚本正在运行
+                                                            console.log(`[CoworkView] Script ${script.id} started, sessionId: ${result.sessionId}`);
+                                                            setRunningScripts(prev => {
+                                                                const newMap = new Map(prev);
+                                                                newMap.set(script.id, result.sessionId!);
+                                                                console.log(`[CoworkView] Running scripts:`, Array.from(newMap.entries()));
+                                                                return newMap;
+                                                            });
+                                                        } else {
                                                             setError(result.error || '执行脚本失败');
                                                         }
                                                         // 注意：会话会在 agent:history-update 事件触发时自动保存和刷新列表
@@ -716,6 +762,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                             >
                                                 {t('execute')}
                                             </button>
+                                            {/* 编辑按钮：只有管理员可以编辑脚本（官方和非官方都需要管理员权限） */}
                                             {userRole === 'admin' && (
                                                 <>
                                                     {editingScriptId === script.id ? (
@@ -774,7 +821,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                                     setEditingScriptName(script.name);
                                                                 }}
                                                                 className="p-1 text-stone-400 hover:text-blue-500 transition-colors"
-                                                                title="重命名脚本"
+                                                                title={script.isOfficial ? "重命名脚本（官方脚本，仅管理员）" : "重命名脚本"}
                                                             >
                                                                 <Edit2 size={12} />
                                                             </button>
@@ -795,6 +842,25 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                                     title="标记为官方"
                                                                 >
                                                                     <Star size={12} />
+                                                                </button>
+                                                            )}
+                                                            {script.isOfficial && (
+                                                                <button
+                                                                    onClick={async (e) => {
+                                                                        e.stopPropagation();
+                                                                        if (window.confirm(`确定要将脚本 "${script.name}" 取消官方标记吗？\n\n取消后，该脚本将不再作为官方脚本。`)) {
+                                                                            const result = await window.ipcRenderer.invoke('script:unmark-official', script.id) as { success: boolean; error?: string };
+                                                                            if (result.success) {
+                                                                                setScripts(await window.ipcRenderer.invoke('script:list') as Script[]);
+                                                                            } else {
+                                                                                setError(result.error || '取消官方标记失败');
+                                                                            }
+                                                                        }
+                                                                    }}
+                                                                    className="p-1 text-stone-400 hover:text-orange-500 transition-colors"
+                                                                    title="取消官方标记"
+                                                                >
+                                                                    <Star size={12} className="fill-current" />
                                                                 </button>
                                                             )}
                                                         </>

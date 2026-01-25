@@ -36,6 +36,12 @@
       "file": "bots-login-example.js",
       "description": "Bots 平台登录示例：演示如何使用美团 SSO 登录管理器",
       "version": "1.0.0"
+    },
+    {
+      "name": "bots-chat-input",
+      "file": "bots-chat-input.js",
+      "description": "官方脚本: bots-chat-input",
+      "version": "1.0.0"
     }
   ]
 }
