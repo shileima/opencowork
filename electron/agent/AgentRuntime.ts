@@ -243,6 +243,7 @@ export class AgentRuntime {
     private model: string;
     private maxTokens: number;
     private lastProcessTime: number = 0;
+    private userWantsCloseBrowser: boolean = false; // 用户是否要求关闭浏览器
 
     constructor(apiKey: string, window: BrowserWindow, model: string = 'claude-3-5-sonnet-20241022', apiUrl: string = 'https://api.anthropic.com', maxTokens: number = 131072) {
         this.anthropic = new Anthropic({ apiKey, baseURL: apiUrl });
@@ -298,6 +299,32 @@ export class AgentRuntime {
         this.windows = this.windows.filter(w => w !== win);
     }
 
+    /**
+     * 检测用户输入中是否包含"关闭浏览器"的意图
+     */
+    private detectCloseBrowserIntent(userInput: string): boolean {
+        if (!userInput) return false;
+        
+        const closeKeywords = [
+            '关闭浏览器',
+            '关闭窗口',
+            '关闭页面',
+            'close browser',
+            'close window',
+            'close page',
+            'browser.close',
+            'context.close',
+            'page.close',
+            '退出浏览器',
+            '退出窗口',
+            'shut down browser',
+            'quit browser'
+        ];
+        
+        const inputLower = userInput.toLowerCase();
+        return closeKeywords.some(keyword => inputLower.includes(keyword.toLowerCase()));
+    }
+
     // Handle confirmation response
     public handleConfirmResponse(id: string, approved: boolean) {
         const pending = this.pendingConfirmations.get(id);
@@ -337,6 +364,9 @@ export class AgentRuntime {
 
         this.isProcessing = true;
         this.abortController = new AbortController();
+        
+        // 重置浏览器关闭意图检测（每次新消息时重置）
+        this.userWantsCloseBrowser = false;
 
         try {
             await this.skillManager.loadSkills();
@@ -375,6 +405,11 @@ export class AgentRuntime {
                 userContent = blocks;
             }
 
+            // 检测用户输入中是否包含"关闭浏览器"的意图（用于 chrome-agent 脚本）
+            const userInputText = typeof userContent === 'string' ? userContent : 
+                (Array.isArray(userContent) ? userContent.filter(b => b.type === 'text').map(b => (b as any).text).join(' ') : '');
+            this.userWantsCloseBrowser = this.detectCloseBrowserIntent(userInputText);
+            
             // Add user message to history
             this.history.push({ role: 'user', content: userContent });
             this.notifyUpdate();
@@ -493,6 +528,19 @@ You are OpenCowork, an advanced AI desktop assistant designed for efficient task
 1. **Skills First**: Before any task, check for relevant skills in \`${skillsDir}\`
 2. **MCP Integration**: Leverage available MCP servers for enhanced capabilities
 3. **Tool Prefixes**: MCP tools use namespace prefixes (e.g., \`tool_name__action\`)
+
+### Browser Automation Guidelines (chrome-agent scripts)
+When executing Playwright automation scripts:
+- **Default Behavior**: Keep the browser open after script completion unless the user explicitly requests to close it
+- **Browser Closing**: Only call \`browser.close()\`, \`context.close()\`, or \`page.close()\` if:
+  - The user's message explicitly contains keywords like "关闭浏览器", "close browser", "关闭窗口", etc.
+  - The user explicitly requests to close the browser in their instructions
+- **User Intent Detection**: If the user's input does NOT contain any closing intent, preserve the browser state for:
+  - Result verification
+  - Continued manual interaction
+  - Debugging purposes
+- **Current User Intent**: ${this.userWantsCloseBrowser ? 'User HAS requested to close the browser - you may close it after script completion.' : 'User has NOT requested to close the browser - KEEP the browser open after script execution.'}
+- **Exception**: If the script explicitly requires closing (e.g., cleanup scripts), follow the script's logic, but prefer keeping it open when in doubt
 
 ## Current Context
 **Working Directory**: ${workingDirContext}

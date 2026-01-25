@@ -67,7 +67,7 @@ export class SkillManager {
                 await fs.mkdir(this.skillsDir, { recursive: true });
             }
 
-            // Copy files
+            // Copy files recursively (including awesome-claude-skills subdirectory)
             console.log('[SkillManager] Reading source directory...');
             const files = await fs.readdir(sourceDir);
             console.log(`[SkillManager] Found ${files.length} items in source directory`);
@@ -75,38 +75,55 @@ export class SkillManager {
             let installedCount = 0;
             let skippedCount = 0;
 
-            for (const file of files) {
-                // Must be a directory (skills are folders now)
-                try {
-                    const stats = await fs.stat(path.join(sourceDir, file));
-                    if (!stats.isDirectory()) {
-                        console.log(`[SkillManager] Skipping non-directory item: ${file}`);
+            // Helper function to recursively copy skills
+            // Skills are flattened to the target directory (no nested structure)
+            const copySkillsRecursively = async (sourcePath: string, baseTargetPath: string) => {
+                const items = await fs.readdir(sourcePath);
+                
+                for (const item of items) {
+                    const itemSourcePath = path.join(sourcePath, item);
+                    let itemStats;
+                    try {
+                        itemStats = await fs.stat(itemSourcePath);
+                    } catch {
+                        console.log(`[SkillManager] Skipping inaccessible item: ${item}`);
                         continue;
                     }
-                } catch {
-                    console.log(`[SkillManager] Skipping inaccessible item: ${file}`);
-                    continue;
-                }
-
-                const targetPath = path.join(this.skillsDir, file);
-
-                // Check if skill already exists to avoid re-copying on every startup
-                try {
-                    await fs.access(targetPath);
-                    // Exists, skip
-                    console.log(`[SkillManager] ⊙ Skipped existing skill: ${file}`);
-                    skippedCount++;
-                } catch {
-                    // Doesn't exist, proceed to copy
-                    try {
-                        await fs.cp(path.join(sourceDir, file), targetPath, { recursive: true });
-                        console.log(`[SkillManager] ✓ Installed default skill: ${file}`);
-                        installedCount++;
-                    } catch (e) {
-                        console.error(`[SkillManager] ✗ Failed to install skill ${file}:`, e);
+                    
+                    if (itemStats.isDirectory()) {
+                        // Check if this directory contains a SKILL.md (it's a skill)
+                        const skillMdPath = path.join(itemSourcePath, 'SKILL.md');
+                        try {
+                            await fs.access(skillMdPath);
+                            // This is a skill directory - copy it to target (flattened)
+                            const targetSkillPath = path.join(baseTargetPath, item);
+                            
+                            // Check if skill already exists
+                            try {
+                                await fs.access(targetSkillPath);
+                                console.log(`[SkillManager] ⊙ Skipped existing skill: ${item}`);
+                                skippedCount++;
+                            } catch {
+                                // Doesn't exist, proceed to copy
+                                try {
+                                    await fs.cp(itemSourcePath, targetSkillPath, { recursive: true });
+                                    console.log(`[SkillManager] ✓ Installed default skill: ${item}`);
+                                    installedCount++;
+                                } catch (e: any) {
+                                    console.error(`[SkillManager] ✗ Failed to install skill ${item}:`, e.message);
+                                }
+                            }
+                        } catch {
+                            // No SKILL.md, might be a container directory (like awesome-claude-skills)
+                            // Recursively process subdirectories
+                            await copySkillsRecursively(itemSourcePath, baseTargetPath);
+                        }
                     }
                 }
-            }
+            };
+
+            // Process all skills recursively
+            await copySkillsRecursively(sourceDir, this.skillsDir);
 
             console.log(`[SkillManager] ✅ Default skills initialization complete: ${installedCount} installed, ${skippedCount} skipped.`);
         } catch (e) {
