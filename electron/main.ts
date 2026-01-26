@@ -157,6 +157,12 @@ app.whenReady().then(() => {
     console.log('Skipping protocol registration in Dev mode.')
   }
 
+  // Log version information on startup
+  const appVersion = app.getVersion()
+  const hotUpdateVersion = resourceUpdater ? directoryManager.getHotUpdateVersion() : null
+  const effectiveVersion = resourceUpdater?.getCurrentVersion() || appVersion
+  console.log(`[Main] App started - appVersion: ${appVersion}, hotUpdateVersion: ${hotUpdateVersion}, effectiveVersion: ${effectiveVersion}`)
+
   // 1. Setup IPC handlers FIRST
   // 1. Setup IPC handlers FIRST
   // setupIPCHandlers() - handlers are defined at top level now
@@ -641,16 +647,19 @@ ipcMain.handle('config:test-connection', async (_, { apiKey, apiUrl, model }) =>
 
 ipcMain.handle('app:info', () => {
   // 获取有效版本（优先热更新版本）
-  const effectiveVersion = resourceUpdater?.getCurrentVersion() || app.getVersion()
+  const appVersion = app.getVersion()
   const hotUpdateVersion = directoryManager.getHotUpdateVersion()
+  const effectiveVersion = resourceUpdater?.getCurrentVersion() || appVersion
+  
+  console.log(`[Main] app:info - appVersion: ${appVersion}, hotUpdateVersion: ${hotUpdateVersion}, effectiveVersion: ${effectiveVersion}`)
   
   return {
     name: 'QACowork',
     version: effectiveVersion,
-    appVersion: app.getVersion(), // 原始应用版本
+    appVersion: appVersion, // 原始应用版本
     hotUpdateVersion: hotUpdateVersion, // 热更新版本（如果有）
-    author: 'Safphere',
-    homepage: 'https://github.com/Safphere/qacowork'
+    author: 'shileima', 
+    homepage: 'https://github.com/shileima/opencowork'
   };
 })
 
