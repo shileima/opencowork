@@ -1641,7 +1641,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                     {/* 资源更新区域 */}
                                     <div className="border-t border-stone-200 dark:border-zinc-700 pt-4 mt-4">
                                         <p className="text-xs text-stone-500 dark:text-zinc-400 mb-2 text-center">
-                                            资源热更新 (无需重装应用)
+                                            支持资源热更新 (无需重装应用)
                                         </p>
                                         <button
                                             onClick={handleCheckResourceUpdate}
