@@ -90,10 +90,12 @@ export class ResourceUpdater {
     // 防止并发检查
     if (this.isChecking) {
       console.log('[ResourceUpdater] Check already in progress, skipping...')
+      // 返回一个标记，表示正在检查中
       return {
         hasUpdate: false,
         currentVersion: this.getCurrentVersion(),
-        latestVersion: this.getCurrentVersion()
+        latestVersion: this.getCurrentVersion(),
+        filesToUpdate: 0
       }
     }
 
@@ -150,8 +152,11 @@ export class ResourceUpdater {
         console.log(`[ResourceUpdater] Found newer version: ${latestVersion} > ${currentVersion}`)
         console.log(`[ResourceUpdater] Found ${filesToUpdate.length} files to update (${this.formatBytes(updateSize)})`)
 
+        const hasUpdate = filesToUpdate.length > 0
+        console.log(`[ResourceUpdater] Check result: hasUpdate=${hasUpdate}, current=${currentVersion}, latest=${latestVersion}, files=${filesToUpdate.length}`)
+
         return {
-          hasUpdate: filesToUpdate.length > 0,
+          hasUpdate,
           currentVersion,
           latestVersion,
           updateSize,
@@ -171,11 +176,14 @@ export class ResourceUpdater {
         console.log(`[ResourceUpdater] Already on latest version (${currentVersion}) with no file changes`)
       }
 
+      const hasUpdate = filesToUpdate.length > 0
+      console.log(`[ResourceUpdater] Check result: hasUpdate=${hasUpdate}, current=${currentVersion}, latest=${latestVersion}, files=${filesToUpdate.length}`)
+      
       return {
-        hasUpdate: filesToUpdate.length > 0,
+        hasUpdate,
         currentVersion,
         latestVersion,
-        updateSize: filesToUpdate.length > 0 ? updateSize : undefined,
+        updateSize: hasUpdate ? updateSize : undefined,
         changelog: latestRelease.body,
         filesToUpdate: filesToUpdate.length
       }
@@ -338,16 +346,25 @@ export class ResourceUpdater {
 
     const checkAndNotify = async () => {
       try {
+        console.log('[ResourceUpdater] Auto check triggered')
         const result = await this.checkForUpdates()
+        
+        console.log(`[ResourceUpdater] Auto check result: hasUpdate=${result.hasUpdate}, onUpdateFound=${!!onUpdateFound}`)
         
         // 如果检查成功，重置失败计数
         if (result.currentVersion && result.latestVersion) {
           consecutiveFailures = 0
         }
         
-        if (result.hasUpdate && onUpdateFound) {
-          console.log('[ResourceUpdater] New version found, notifying...')
-          onUpdateFound(result)
+        if (result.hasUpdate) {
+          if (onUpdateFound) {
+            console.log('[ResourceUpdater] New version found, notifying...')
+            onUpdateFound(result)
+          } else {
+            console.warn('[ResourceUpdater] Update found but no callback provided')
+          }
+        } else {
+          console.log('[ResourceUpdater] No update available')
         }
       } catch (err: any) {
         consecutiveFailures++
