@@ -179,24 +179,30 @@ export class ResourceUpdater {
   /**
    * 自动检查更新(定时)
    */
-  startAutoUpdateCheck(intervalHours: number = 24) {
+  startAutoUpdateCheck(intervalHours: number = 24, onUpdateFound?: (updateInfo: any) => void) {
     // 清除旧的定时器
     if (this.updateCheckInterval) {
       clearInterval(this.updateCheckInterval)
     }
 
+    const checkAndNotify = async () => {
+      try {
+        const result = await this.checkForUpdates()
+        if (result.hasUpdate && onUpdateFound) {
+          console.log('[ResourceUpdater] New version found, notifying...')
+          onUpdateFound(result)
+        }
+      } catch (err) {
+        console.error('[ResourceUpdater] Auto update check failed:', err)
+      }
+    }
+
     // 立即检查一次
-    this.checkForUpdates().catch(err => {
-      console.error('[ResourceUpdater] Auto update check failed:', err)
-    })
+    checkAndNotify()
 
     // 设置定时检查
     const interval = intervalHours * 60 * 60 * 1000
-    this.updateCheckInterval = setInterval(() => {
-      this.checkForUpdates().catch(err => {
-        console.error('[ResourceUpdater] Auto update check failed:', err)
-      })
-    }, interval)
+    this.updateCheckInterval = setInterval(checkAndNotify, interval)
   }
 
   stopAutoUpdateCheck() {

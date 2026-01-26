@@ -164,11 +164,18 @@ app.whenReady().then(() => {
   resourceUpdater = new ResourceUpdater()
   
   // 开发环境也启用自动更新检查 (用于测试)
+  const notifyUpdateFound = (updateInfo: any) => {
+    console.log('[Main] Resource update found, notifying renderer...')
+    // 通知所有窗口有新版本
+    mainWin?.webContents.send('resource:update-available', updateInfo)
+    floatingBallWin?.webContents.send('resource:update-available', updateInfo)
+  }
+  
   if (app.isPackaged) {
-    resourceUpdater.startAutoUpdateCheck(1 / 60) // 每1分钟检查一次 (测试用)
+    resourceUpdater.startAutoUpdateCheck(1 / 60, notifyUpdateFound) // 每1分钟检查一次 (测试用)
   } else {
     // 开发环境: 每1分钟检查一次
-    resourceUpdater.startAutoUpdateCheck(1 / 60)
+    resourceUpdater.startAutoUpdateCheck(1 / 60, notifyUpdateFound)
   }
 
   // 7.5 Initialize Playwright manager and check status
@@ -612,8 +619,8 @@ ipcMain.handle('app:info', () => {
   return {
     name: 'OpenCowork', // app.getName() might be lowercase 'opencowork'
     version: app.getVersion(),
-    author: 'Safphere', // Hardcoded from package.json
-    homepage: 'https://github.com/Safphere/opencowork'
+    author: 'shileima', // Hardcoded from package.json
+    homepage: 'https://github.com/shileima/opencowork'
   };
 })
 
