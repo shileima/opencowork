@@ -484,8 +484,9 @@ export class ResourceUpdater {
 
   /**
    * 获取远程资源清单
+   * 支持重试机制和超时控制
    */
-  private async fetchRemoteManifest(release: any): Promise<ResourceManifest | null> {
+  private async fetchRemoteManifest(release: any, retries: number = 3): Promise<ResourceManifest | null> {
     try {
       console.log(`[ResourceUpdater] Release assets: ${release.assets?.map((a: any) => a.name).join(', ') || 'none'}`)
       
@@ -507,12 +508,95 @@ export class ResourceUpdater {
         headers['Authorization'] = `token ${this.githubToken}`
       }
 
-      const response = await fetch(manifestAsset.browser_download_url, { headers })
-      if (!response.ok) {
-        throw new Error(`Failed to download manifest: ${response.status}`)
+      // 重试机制
+      for (let attempt = 0; attempt < retries; attempt++) {
+        let timeoutId: NodeJS.Timeout | null = null
+        try {
+          // 创建超时控制器（manifest 文件较小，30 秒超时足够）
+          const timeoutMs = 30000
+          const abortController = new AbortController()
+          timeoutId = setTimeout(() => {
+            abortController.abort()
+          }, timeoutMs)
+
+          console.log(`[ResourceUpdater] Fetching manifest (attempt ${attempt + 1}/${retries})...`)
+
+          const response = await fetch(manifestAsset.browser_download_url, {
+            headers,
+            signal: abortController.signal
+          })
+
+          if (timeoutId) {
+            clearTimeout(timeoutId)
+            timeoutId = null
+          }
+
+          if (!response.ok) {
+            // 处理速率限制
+            if (response.status === 403) {
+              const errorText = await response.text()
+              if (errorText.includes('rate limit')) {
+                const resetTime = response.headers.get('x-ratelimit-reset')
+                const resetDate = resetTime ? new Date(parseInt(resetTime) * 1000) : null
+                const waitMinutes = resetDate ? Math.ceil((resetDate.getTime() - Date.now()) / 60000) : 60
+                
+                console.warn(`[ResourceUpdater] Rate limit exceeded while fetching manifest. Reset in ~${waitMinutes} minutes`)
+                
+                if (attempt < retries - 1) {
+                  const waitTime = Math.min(60000 * Math.pow(2, attempt), 300000)
+                  console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
+                  await new Promise(resolve => setTimeout(resolve, waitTime))
+                  continue
+                }
+              }
+            }
+            
+            if (attempt === retries - 1) {
+              throw new Error(`Failed to download manifest: ${response.status}`)
+            }
+            
+            // 其他错误，等待后重试
+            const waitTime = 1000 * Math.pow(2, attempt)
+            await new Promise(resolve => setTimeout(resolve, waitTime))
+            continue
+          }
+
+          const manifest = await response.json()
+          console.log(`[ResourceUpdater] Successfully fetched manifest: version ${manifest.version}`)
+          return manifest
+
+        } catch (error: any) {
+          if (timeoutId) {
+            clearTimeout(timeoutId)
+            timeoutId = null
+          }
+
+          // 检查是否是超时错误
+          if (error.name === 'AbortError' || error.code === 'UND_ERR_CONNECT_TIMEOUT') {
+            console.error(`[ResourceUpdater] Manifest fetch timeout (attempt ${attempt + 1}/${retries})`)
+            if (attempt === retries - 1) {
+              console.error('[ResourceUpdater] Failed to fetch manifest after all retries')
+              return null
+            }
+            // 等待后重试
+            const waitTime = 2000 * Math.pow(2, attempt)
+            console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
+            await new Promise(resolve => setTimeout(resolve, waitTime))
+            continue
+          }
+
+          if (attempt === retries - 1) {
+            console.error('[ResourceUpdater] Failed to fetch remote manifest:', error)
+            return null
+          }
+
+          // 其他错误，等待后重试
+          const waitTime = 1000 * Math.pow(2, attempt)
+          await new Promise(resolve => setTimeout(resolve, waitTime))
+        }
       }
 
-      return await response.json()
+      return null
     } catch (error) {
       console.error('[ResourceUpdater] Failed to fetch remote manifest:', error)
       return null
