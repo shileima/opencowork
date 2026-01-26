@@ -720,17 +720,23 @@ ipcMain.handle('resource:perform-update', async () => {
     })
 
     if (success) {
-      // 更新完成后提示用户重启应用
+      // 更新完成后获取新版本号
+      const newVersion = resourceUpdater.getCurrentVersion()
+      console.log(`[Main] Resource update completed. New version: ${newVersion}`)
+      
       return { 
         success: true, 
-        message: 'Resource update completed! Please restart the app to apply changes.' 
+        message: `资源更新完成！新版本: v${newVersion}`,
+        version: newVersion
       }
     }
 
-    return { success: false, error: 'Update failed' }
+    return { success: false, error: '更新失败：未知错误' }
   } catch (error: any) {
-    console.error('Resource update failed:', error)
-    return { success: false, error: error.message }
+    console.error('[Main] Resource update failed:', error)
+    const errorMessage = error?.message || '未知错误'
+    console.error('[Main] Error details:', error)
+    return { success: false, error: `更新失败: ${errorMessage}` }
   }
 })
 
