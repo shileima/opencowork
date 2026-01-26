@@ -49,8 +49,11 @@ export class ResourceUpdater {
   private manifestPath: string
   private githubRepo = 'shileima/opencowork'
   private updateCheckInterval: NodeJS.Timeout | null = null
+  private githubToken: string | null = null
 
   constructor() {
+    // 尝试从环境变量读取 GitHub Token（可选）
+    this.githubToken = process.env.GITHUB_TOKEN || null
     // 临时下载目录
     this.tempDir = path.join(app.getPath('userData'), 'update-temp')
     // 热更新目录（资源实际存放位置）
@@ -92,6 +95,7 @@ export class ResourceUpdater {
       const latestRelease = await this.fetchLatestRelease()
       
       if (!latestRelease) {
+        console.warn('[ResourceUpdater] Failed to fetch latest release (may be rate limited or network issue)')
         return {
           hasUpdate: false,
           currentVersion,
@@ -283,6 +287,7 @@ export class ResourceUpdater {
 
   /**
    * 自动检查更新(定时)
+   * 如果遇到速率限制，会自动延长检查间隔
    */
   startAutoUpdateCheck(intervalHours: number = 24, onUpdateFound?: (updateInfo: UpdateCheckResult) => void) {
     // 清除旧的定时器
@@ -290,15 +295,38 @@ export class ResourceUpdater {
       clearInterval(this.updateCheckInterval)
     }
 
+    let consecutiveFailures = 0
+    const maxFailures = 3
+
     const checkAndNotify = async () => {
       try {
         const result = await this.checkForUpdates()
+        
+        // 如果检查成功，重置失败计数
+        if (result.currentVersion && result.latestVersion) {
+          consecutiveFailures = 0
+        }
+        
         if (result.hasUpdate && onUpdateFound) {
           console.log('[ResourceUpdater] New version found, notifying...')
           onUpdateFound(result)
         }
-      } catch (err) {
-        console.error('[ResourceUpdater] Auto update check failed:', err)
+      } catch (err: any) {
+        consecutiveFailures++
+        console.error(`[ResourceUpdater] Auto update check failed (${consecutiveFailures}/${maxFailures}):`, err.message)
+        
+        // 如果连续失败多次，延长检查间隔（可能是速率限制）
+        if (consecutiveFailures >= maxFailures) {
+          console.warn('[ResourceUpdater] Too many consecutive failures, extending check interval to avoid rate limiting')
+          // 清除当前定时器
+          if (this.updateCheckInterval) {
+            clearInterval(this.updateCheckInterval)
+          }
+          // 延长到 6 小时检查一次
+          const extendedInterval = 6 * 60 * 60 * 1000
+          this.updateCheckInterval = setInterval(checkAndNotify, extendedInterval)
+          consecutiveFailures = 0 // 重置计数
+        }
       }
     }
 
@@ -334,30 +362,86 @@ export class ResourceUpdater {
 
   /**
    * 从 GitHub Releases 获取最新版本信息
+   * 支持重试机制和 GitHub Token 认证
    */
-  private async fetchLatestRelease(): Promise<any> {
-    try {
-      const response = await fetch(
-        `https://api.github.com/repos/${this.githubRepo}/releases/latest`,
-        {
-          headers: {
-            'User-Agent': 'QACowork-App',
-            'Accept': 'application/vnd.github.v3+json'
-          }
+  private async fetchLatestRelease(retries: number = 3): Promise<any> {
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        const headers: Record<string, string> = {
+          'User-Agent': 'QACowork-App',
+          'Accept': 'application/vnd.github.v3+json'
         }
-      )
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error(`[ResourceUpdater] GitHub API error: ${response.status} - ${errorText}`)
-        throw new Error(`GitHub API returned ${response.status}`)
+        // 如果配置了 GitHub Token，添加到请求头
+        if (this.githubToken) {
+          headers['Authorization'] = `token ${this.githubToken}`
+        }
+
+        const response = await fetch(
+          `https://api.github.com/repos/${this.githubRepo}/releases/latest`,
+          { headers }
+        )
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          let errorData: any = {}
+          try {
+            errorData = JSON.parse(errorText)
+          } catch {
+            errorData = { message: errorText }
+          }
+
+          // 处理速率限制错误
+          if (response.status === 403 && errorData.message?.includes('rate limit')) {
+            const resetTime = response.headers.get('x-ratelimit-reset')
+            const resetDate = resetTime ? new Date(parseInt(resetTime) * 1000) : null
+            const waitMinutes = resetDate ? Math.ceil((resetDate.getTime() - Date.now()) / 60000) : 60
+            
+            console.warn(`[ResourceUpdater] GitHub API rate limit exceeded. Reset in ~${waitMinutes} minutes`)
+            
+            // 如果是最后一次尝试，返回 null 而不是抛出错误
+            if (attempt === retries - 1) {
+              console.warn('[ResourceUpdater] Rate limit exceeded, skipping update check')
+              return null
+            }
+            
+            // 等待后重试（指数退避）
+            const waitTime = Math.min(60000 * Math.pow(2, attempt), 300000) // 最多等待 5 分钟
+            console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
+            await new Promise(resolve => setTimeout(resolve, waitTime))
+            continue
+          }
+
+          // 其他错误
+          console.error(`[ResourceUpdater] GitHub API error: ${response.status} - ${errorData.message || errorText}`)
+          
+          // 如果是最后一次尝试，返回 null
+          if (attempt === retries - 1) {
+            return null
+          }
+          
+          // 等待后重试
+          const waitTime = 1000 * Math.pow(2, attempt) // 指数退避：1s, 2s, 4s
+          await new Promise(resolve => setTimeout(resolve, waitTime))
+          continue
+        }
+
+        return await response.json()
+      } catch (error: any) {
+        console.error(`[ResourceUpdater] Failed to fetch latest release (attempt ${attempt + 1}/${retries}):`, error.message)
+        
+        // 如果是最后一次尝试，返回 null
+        if (attempt === retries - 1) {
+          return null
+        }
+        
+        // 等待后重试
+        const waitTime = 1000 * Math.pow(2, attempt)
+        await new Promise(resolve => setTimeout(resolve, waitTime))
       }
-
-      return await response.json()
-    } catch (error) {
-      console.error('[ResourceUpdater] Failed to fetch latest release:', error)
-      return null
     }
+    
+    return null
   }
 
   /**
@@ -380,7 +464,12 @@ export class ResourceUpdater {
       
       console.log(`[ResourceUpdater] Found manifest: ${manifestAsset.name} (${manifestAsset.size} bytes)`)
 
-      const response = await fetch(manifestAsset.browser_download_url)
+      const headers: Record<string, string> = {}
+      if (this.githubToken) {
+        headers['Authorization'] = `token ${this.githubToken}`
+      }
+
+      const response = await fetch(manifestAsset.browser_download_url, { headers })
       if (!response.ok) {
         throw new Error(`Failed to download manifest: ${response.status}`)
       }
@@ -468,12 +557,61 @@ export class ResourceUpdater {
 
       console.log(`[ResourceUpdater] Downloading resource package: ${resourceAsset.name}`)
       
-      // 下载 zip 包
+      // 下载 zip 包（支持重试）
       const zipPath = path.join(this.tempDir, 'temp.zip')
-      const response = await fetch(resourceAsset.browser_download_url)
+      let response: Response | null = null
+      let retries = 3
       
-      if (!response.ok) {
-        throw new Error(`Failed to download resource package: ${response.status}`)
+      for (let attempt = 0; attempt < retries; attempt++) {
+        try {
+          const headers: Record<string, string> = {}
+          if (this.githubToken) {
+            headers['Authorization'] = `token ${this.githubToken}`
+          }
+          
+          response = await fetch(resourceAsset.browser_download_url, { headers })
+          
+          if (response.ok) {
+            break
+          }
+          
+          // 处理速率限制
+          if (response.status === 403) {
+            const errorText = await response.text()
+            if (errorText.includes('rate limit')) {
+              const resetTime = response.headers.get('x-ratelimit-reset')
+              const resetDate = resetTime ? new Date(parseInt(resetTime) * 1000) : null
+              const waitMinutes = resetDate ? Math.ceil((resetDate.getTime() - Date.now()) / 60000) : 60
+              
+              console.warn(`[ResourceUpdater] Rate limit exceeded while downloading. Reset in ~${waitMinutes} minutes`)
+              
+              if (attempt < retries - 1) {
+                const waitTime = Math.min(60000 * Math.pow(2, attempt), 300000)
+                console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
+                await new Promise(resolve => setTimeout(resolve, waitTime))
+                continue
+              }
+            }
+          }
+          
+          if (attempt === retries - 1) {
+            throw new Error(`Failed to download resource package: ${response.status}`)
+          }
+          
+          // 其他错误，等待后重试
+          const waitTime = 2000 * Math.pow(2, attempt)
+          await new Promise(resolve => setTimeout(resolve, waitTime))
+        } catch (error: any) {
+          if (attempt === retries - 1) {
+            throw error
+          }
+          const waitTime = 2000 * Math.pow(2, attempt)
+          await new Promise(resolve => setTimeout(resolve, waitTime))
+        }
+      }
+      
+      if (!response || !response.ok) {
+        throw new Error(`Failed to download resource package after ${retries} attempts`)
       }
 
       const buffer = await response.arrayBuffer()
