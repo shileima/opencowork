@@ -192,6 +192,30 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         // Updates should be checked in the About tab or manually
     }, []);
 
+    // 监听自动检测到的资源更新
+    useEffect(() => {
+        const handleAutoUpdateFound = (_event: any, updateInfo: any) => {
+            console.log('[SettingsView] Auto update detected:', updateInfo);
+            setResourceUpdateInfo({
+                hasUpdate: true,
+                currentVersion: updateInfo.currentVersion,
+                latestVersion: updateInfo.latestVersion,
+                updateSize: updateInfo.updateSize,
+                changelog: updateInfo.changelog
+            });
+            // 自动切换到"关于"标签页
+            setActiveTab('about');
+        };
+
+        const removeListener = window.ipcRenderer?.on('resource:update-available', handleAutoUpdateFound);
+
+        return () => {
+            if (removeListener) {
+                removeListener();
+            }
+        };
+    }, []);
+
     const handleCheckUpdate = async () => {
         setCheckingUpdate(true);
         setUpdateInfo(null);

@@ -59,6 +59,12 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     const [editingScriptName, setEditingScriptName] = useState<string>('');
     // 跟踪正在运行的脚本：scriptId -> sessionId 映射
     const [runningScripts, setRunningScripts] = useState<Map<string, string>>(new Map());
+    // 资源更新通知状态
+    const [resourceUpdateAvailable, setResourceUpdateAvailable] = useState<{
+        currentVersion: string;
+        latestVersion: string;
+        updateSize?: number;
+    } | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -142,6 +148,17 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                     return newMap;
                 });
             }
+        });
+
+        // 监听资源更新通知
+        const removeUpdateListener = window.ipcRenderer.on('resource:update-available', (_event, ...args) => {
+            const updateInfo = args[0] as any;
+            console.log('[CoworkView] Resource update available:', updateInfo);
+            setResourceUpdateAvailable({
+                currentVersion: updateInfo.currentVersion,
+                latestVersion: updateInfo.latestVersion,
+                updateSize: updateInfo.updateSize
+            });
         });
 
         // Clear streaming when history updates and save session
@@ -242,6 +259,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             removeAbortListener?.();
             removeErrorListener?.();
             removeDoneListener?.();
+            removeUpdateListener?.();
         };
     }, []);
 
@@ -905,6 +923,54 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             {/* Messages Area - Narrower for better readability */}
             <div className="flex-1 overflow-y-auto px-4 py-6" ref={scrollRef}>
                 <div className="max-w-xl mx-auto space-y-5">
+                    {/* Resource Update Notification Banner */}
+                    {resourceUpdateAvailable && (
+                        <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 border-2 border-amber-300 dark:border-amber-700 rounded-xl p-4 shadow-lg animate-in slide-in-from-top-2 fade-in duration-300">
+                            <div className="flex items-start gap-3">
+                                <div className="w-10 h-10 rounded-full bg-amber-500 flex items-center justify-center shrink-0">
+                                    <Download size={20} className="text-white" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <h3 className="text-lg font-bold text-amber-900 dark:text-amber-100 mb-1">
+                                        🎉 发现新资源版本!
+                                    </h3>
+                                    <p className="text-sm text-amber-800 dark:text-amber-200 mb-3">
+                                        当前: v{resourceUpdateAvailable.currentVersion} → 最新: v{resourceUpdateAvailable.latestVersion}
+                                        {resourceUpdateAvailable.updateSize && (
+                                            <span className="ml-2">
+                                                ({(resourceUpdateAvailable.updateSize / 1024 / 1024).toFixed(2)} MB)
+                                            </span>
+                                        )}
+                                    </p>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => {
+                                                onOpenSettings();
+                                                // 切换到关于标签会在 SettingsView 的监听器中处理
+                                            }}
+                                            className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors flex items-center gap-2"
+                                        >
+                                            <Download size={16} />
+                                            立即更新
+                                        </button>
+                                        <button
+                                            onClick={() => setResourceUpdateAvailable(null)}
+                                            className="px-4 py-2 text-sm font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded-lg transition-colors"
+                                        >
+                                            稍后提醒
+                                        </button>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => setResourceUpdateAvailable(null)}
+                                    className="p-1 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded-lg transition-colors"
+                                >
+                                    <X size={18} />
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    
                     {/* Playwright Installation Prompt - 在 automation 模式或启动时显示 */}
                     <PlaywrightPrompt />
                     
