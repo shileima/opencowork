@@ -119,6 +119,84 @@ export class DirectoryManager {
     }
 
     /**
+     * 获取热更新目录路径 (~/.qa-cowork/hot-update/)
+     * 用于存储从远程下载的更新资源
+     */
+    public getHotUpdateDir(): string {
+        return path.join(this.baseDir, 'hot-update');
+    }
+
+    /**
+     * 获取热更新前端资源目录 (~/.qa-cowork/hot-update/dist/)
+     */
+    public getHotUpdateDistDir(): string {
+        return path.join(this.getHotUpdateDir(), 'dist');
+    }
+
+    /**
+     * 获取热更新技能目录 (~/.qa-cowork/hot-update/resources/skills/)
+     * 注意：保持与 manifest 中的路径结构一致
+     */
+    public getHotUpdateSkillsDir(): string {
+        return path.join(this.getHotUpdateDir(), 'resources', 'skills');
+    }
+
+    /**
+     * 获取热更新MCP目录 (~/.qa-cowork/hot-update/resources/mcp/)
+     * 注意：保持与 manifest 中的路径结构一致
+     */
+    public getHotUpdateMcpDir(): string {
+        return path.join(this.getHotUpdateDir(), 'resources', 'mcp');
+    }
+
+    /**
+     * 获取热更新版本清单文件路径
+     */
+    public getHotUpdateManifestPath(): string {
+        return path.join(this.getHotUpdateDir(), 'manifest.json');
+    }
+
+    /**
+     * 获取热更新版本号
+     * @returns 热更新版本号，如果没有热更新则返回 null
+     */
+    public getHotUpdateVersion(): string | null {
+        try {
+            const manifestPath = this.getHotUpdateManifestPath();
+            if (fs.existsSync(manifestPath)) {
+                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+                return manifest.version || null;
+            }
+        } catch (error) {
+            console.error('[DirectoryManager] Failed to read hot update version:', error);
+        }
+        return null;
+    }
+
+    /**
+     * 检查热更新目录中是否存在指定文件
+     */
+    public hasHotUpdateFile(relativePath: string): boolean {
+        const hotPath = path.join(this.getHotUpdateDir(), relativePath);
+        return fs.existsSync(hotPath);
+    }
+
+    /**
+     * 获取资源的有效路径（优先热更新，其次内置）
+     * @param relativePath 相对路径，如 'skills/xxx' 或 'mcp/xxx'
+     * @returns 实际可用的文件路径
+     */
+    public resolveResourcePath(relativePath: string): string {
+        // 优先使用热更新目录
+        const hotPath = path.join(this.getHotUpdateDir(), relativePath);
+        if (fs.existsSync(hotPath)) {
+            return hotPath;
+        }
+        // 回退到内置资源目录
+        return path.join(this.getBuiltinResourcesDir(), relativePath);
+    }
+
+    /**
      * 获取内置资源目录路径（开发环境和生产环境）
      * 
      * 开发环境：项目根目录/resources/
@@ -218,6 +296,10 @@ export class DirectoryManager {
         builtinResourcesDir: string;
         builtinSkillsDir: string;
         builtinMcpDir: string;
+        hotUpdateDir: string;
+        hotUpdateDistDir: string;
+        hotUpdateSkillsDir: string;
+        hotUpdateMcpDir: string;
     } {
         return {
             baseDir: this.getBaseDir(),
@@ -229,7 +311,11 @@ export class DirectoryManager {
             logsDir: this.getLogsDir(),
             builtinResourcesDir: this.getBuiltinResourcesDir(),
             builtinSkillsDir: this.getBuiltinSkillsDir(),
-            builtinMcpDir: this.getBuiltinMcpDir()
+            builtinMcpDir: this.getBuiltinMcpDir(),
+            hotUpdateDir: this.getHotUpdateDir(),
+            hotUpdateDistDir: this.getHotUpdateDistDir(),
+            hotUpdateSkillsDir: this.getHotUpdateSkillsDir(),
+            hotUpdateMcpDir: this.getHotUpdateMcpDir()
         };
     }
 }
