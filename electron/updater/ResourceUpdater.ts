@@ -50,6 +50,8 @@ export class ResourceUpdater {
   private githubRepo = 'shileima/opencowork'
   private updateCheckInterval: NodeJS.Timeout | null = null
   private githubToken: string | null = null
+  private isUpdating: boolean = false // 防止并发更新
+  private isChecking: boolean = false // 防止并发检查
 
   constructor() {
     // 尝试从环境变量读取 GitHub Token（可选）
@@ -85,6 +87,18 @@ export class ResourceUpdater {
    * 检查资源更新
    */
   async checkForUpdates(): Promise<UpdateCheckResult> {
+    // 防止并发检查
+    if (this.isChecking) {
+      console.log('[ResourceUpdater] Check already in progress, skipping...')
+      return {
+        hasUpdate: false,
+        currentVersion: this.getCurrentVersion(),
+        latestVersion: this.getCurrentVersion()
+      }
+    }
+
+    this.isChecking = true
+    
     try {
       console.log('[ResourceUpdater] Checking for resource updates...')
 
@@ -168,6 +182,8 @@ export class ResourceUpdater {
     } catch (error) {
       console.error('[ResourceUpdater] Check for updates failed:', error)
       throw error
+    } finally {
+      this.isChecking = false
     }
   }
 
@@ -177,6 +193,14 @@ export class ResourceUpdater {
   async performUpdate(
     onProgress?: (progress: UpdateProgress) => void
   ): Promise<boolean> {
+    // 防止并发更新
+    if (this.isUpdating) {
+      console.warn('[ResourceUpdater] Update already in progress, skipping...')
+      throw new Error('Update already in progress')
+    }
+
+    this.isUpdating = true
+    
     try {
       console.log('[ResourceUpdater] Starting resource update...')
 
@@ -217,7 +241,7 @@ export class ResourceUpdater {
       // 阶段2: 下载
       onProgress?.({
         stage: 'downloading',
-        total: filesToUpdate.length,
+        total: 100,
         downloaded: 0,
         current: 'Downloading resource package...',
         percentage: 10
@@ -234,14 +258,26 @@ export class ResourceUpdater {
         latestRelease,
         filesToUpdate,
         downloadDir,
-        (extractProgress) => {
-          onProgress?.({
-            stage: 'extracting',
-            total: extractProgress.total,
-            downloaded: extractProgress.downloaded,
-            current: extractProgress.current,
-            percentage: 10 + (extractProgress.downloaded / extractProgress.total) * 60
-          })
+        (downloadProgress) => {
+          // 下载阶段：10% - 70%
+          if (downloadProgress.current.includes('Downloading:')) {
+            onProgress?.({
+              stage: 'downloading',
+              total: downloadProgress.total,
+              downloaded: downloadProgress.downloaded,
+              current: downloadProgress.current,
+              percentage: 10 + (downloadProgress.downloaded / downloadProgress.total) * 60
+            })
+          } else {
+            // 解压阶段：70% - 90%
+            onProgress?.({
+              stage: 'extracting',
+              total: downloadProgress.total,
+              downloaded: downloadProgress.downloaded,
+              current: downloadProgress.current,
+              percentage: 70 + (downloadProgress.downloaded / downloadProgress.total) * 20
+            })
+          }
         }
       )
 
@@ -282,6 +318,8 @@ export class ResourceUpdater {
     } catch (error) {
       console.error('[ResourceUpdater] Update failed:', error)
       throw error
+    } finally {
+      this.isUpdating = false
     }
   }
 
@@ -555,67 +593,138 @@ export class ResourceUpdater {
         throw new Error('Resource package not found in release')
       }
 
-      console.log(`[ResourceUpdater] Downloading resource package: ${resourceAsset.name}`)
+      console.log(`[ResourceUpdater] Downloading resource package: ${resourceAsset.name} (${this.formatBytes(resourceAsset.size)})`)
       
-      // 下载 zip 包（支持重试）
+      // 下载 zip 包（支持重试和进度显示）
       const zipPath = path.join(this.tempDir, 'temp.zip')
-      let response: Response | null = null
+      const totalSize = resourceAsset.size || 0
       let retries = 3
+      let downloaded = 0
       
       for (let attempt = 0; attempt < retries; attempt++) {
+        let timeoutId: NodeJS.Timeout | null = null
         try {
           const headers: Record<string, string> = {}
           if (this.githubToken) {
             headers['Authorization'] = `token ${this.githubToken}`
           }
           
-          response = await fetch(resourceAsset.browser_download_url, { headers })
+          // 创建超时控制器（大文件需要更长的超时时间：每 MB 10 秒，最少 60 秒，最多 30 分钟）
+          const timeoutMs = Math.min(Math.max(totalSize / 1024 / 1024 * 10000, 60000), 30 * 60 * 1000)
+          const abortController = new AbortController()
+          timeoutId = setTimeout(() => {
+            abortController.abort()
+          }, timeoutMs)
           
-          if (response.ok) {
-            break
+          console.log(`[ResourceUpdater] Download attempt ${attempt + 1}/${retries}, timeout: ${Math.round(timeoutMs / 1000)}s`)
+          
+          const response = await fetch(resourceAsset.browser_download_url, {
+            headers,
+            signal: abortController.signal
+          })
+          
+          if (timeoutId) {
+            clearTimeout(timeoutId)
+            timeoutId = null
           }
           
-          // 处理速率限制
-          if (response.status === 403) {
-            const errorText = await response.text()
-            if (errorText.includes('rate limit')) {
-              const resetTime = response.headers.get('x-ratelimit-reset')
-              const resetDate = resetTime ? new Date(parseInt(resetTime) * 1000) : null
-              const waitMinutes = resetDate ? Math.ceil((resetDate.getTime() - Date.now()) / 60000) : 60
-              
-              console.warn(`[ResourceUpdater] Rate limit exceeded while downloading. Reset in ~${waitMinutes} minutes`)
-              
-              if (attempt < retries - 1) {
-                const waitTime = Math.min(60000 * Math.pow(2, attempt), 300000)
-                console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
-                await new Promise(resolve => setTimeout(resolve, waitTime))
-                continue
+          if (!response.ok) {
+            // 处理速率限制
+            if (response.status === 403) {
+              const errorText = await response.text()
+              if (errorText.includes('rate limit')) {
+                const resetTime = response.headers.get('x-ratelimit-reset')
+                const resetDate = resetTime ? new Date(parseInt(resetTime) * 1000) : null
+                const waitMinutes = resetDate ? Math.ceil((resetDate.getTime() - Date.now()) / 60000) : 60
+                
+                console.warn(`[ResourceUpdater] Rate limit exceeded while downloading. Reset in ~${waitMinutes} minutes`)
+                
+                if (attempt < retries - 1) {
+                  const waitTime = Math.min(60000 * Math.pow(2, attempt), 300000)
+                  console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
+                  await new Promise(resolve => setTimeout(resolve, waitTime))
+                  continue
+                }
               }
             }
+            
+            if (attempt === retries - 1) {
+              throw new Error(`Failed to download resource package: ${response.status}`)
+            }
+            
+            // 其他错误，等待后重试
+            const waitTime = 2000 * Math.pow(2, attempt)
+            await new Promise(resolve => setTimeout(resolve, waitTime))
+            continue
+          }
+
+          // 流式下载，显示进度
+          const contentLength = parseInt(response.headers.get('content-length') || '0', 10)
+          const reader = response.body?.getReader()
+          
+          if (!reader) {
+            throw new Error('Response body is not readable')
+          }
+
+          const chunks: Uint8Array[] = []
+          downloaded = 0
+
+          while (true) {
+            const { done, value } = await reader.read()
+            
+            if (done) {
+              break
+            }
+            
+            chunks.push(value)
+            downloaded += value.length
+            
+            // 更新下载进度
+            if (onProgress && contentLength > 0) {
+              const percentage = Math.round((downloaded / contentLength) * 100)
+              onProgress({
+                total: contentLength,
+                downloaded,
+                current: `Downloading: ${this.formatBytes(downloaded)} / ${this.formatBytes(contentLength)} (${percentage}%)`
+              })
+            }
+          }
+
+          // 合并所有 chunks 并写入文件
+          const buffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)))
+          fs.writeFileSync(zipPath, buffer)
+          
+          console.log(`[ResourceUpdater] Download completed: ${this.formatBytes(downloaded)}`)
+          break // 下载成功，退出重试循环
+          
+        } catch (error: any) {
+          if (timeoutId) {
+            clearTimeout(timeoutId)
+            timeoutId = null
+          }
+          
+          // 检查是否是超时错误
+          if (error.name === 'AbortError' || error.code === 'UND_ERR_CONNECT_TIMEOUT') {
+            console.error(`[ResourceUpdater] Download timeout (attempt ${attempt + 1}/${retries})`)
+            if (attempt === retries - 1) {
+              throw new Error(`Download timeout after ${retries} attempts. File may be too large or network too slow.`)
+            }
+            // 等待后重试
+            const waitTime = 5000 * Math.pow(2, attempt)
+            console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
+            await new Promise(resolve => setTimeout(resolve, waitTime))
+            continue
           }
           
           if (attempt === retries - 1) {
-            throw new Error(`Failed to download resource package: ${response.status}`)
+            throw error
           }
           
           // 其他错误，等待后重试
           const waitTime = 2000 * Math.pow(2, attempt)
           await new Promise(resolve => setTimeout(resolve, waitTime))
-        } catch (error: any) {
-          if (attempt === retries - 1) {
-            throw error
-          }
-          const waitTime = 2000 * Math.pow(2, attempt)
-          await new Promise(resolve => setTimeout(resolve, waitTime))
         }
       }
-      
-      if (!response || !response.ok) {
-        throw new Error(`Failed to download resource package after ${retries} attempts`)
-      }
-
-      const buffer = await response.arrayBuffer()
-      fs.writeFileSync(zipPath, Buffer.from(buffer))
 
       console.log(`[ResourceUpdater] Extracting ${filesToUpdate.length} files...`)
 
