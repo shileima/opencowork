@@ -1139,7 +1139,7 @@ function EmptyState({ mode, workingDir }: { mode: Mode, workingDir: string | nul
             </div>
             <div className="space-y-2">
                 <h2 className="text-xl font-semibold text-stone-800 dark:text-zinc-100">
-                    {mode === 'chat' ? '测试助手' : mode === 'automation' ? '自动化脚本' : '测试助手'}
+                    {mode === 'chat' ? 'QACowork' : mode === 'automation' ? '自动化脚本' : 'QACowork'}
                 </h2>
                 <p className="text-stone-500 dark:text-zinc-400 text-sm max-w-xs">
                     {mode === 'work' && !workingDir

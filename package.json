@@ -2,11 +2,12 @@
   "name": "qacowork",
   "private": true,
   "version": "0.0.18",
-  "description": "qa cowork - 你的数字测试同事",
+  "description": "QACowork - 你的数字测试同事",
   "author": {
-    "name": "mashilei",
+    "name": "shileima",
     "email": "mashilei@meituan.com"
   },
+  "homepage": "https://github.com/shileima/opencowork",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
