@@ -186,7 +186,13 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         changelog?: string;
     } | null>(null);
     const [updatingResources, setUpdatingResources] = useState(false);
-    const [updateProgress, setUpdateProgress] = useState<{ total: number; downloaded: number; current: string } | null>(null);
+    const [updateProgress, setUpdateProgress] = useState<{ 
+        stage?: 'checking' | 'downloading' | 'extracting' | 'applying' | 'completed';
+        total: number; 
+        downloaded: number; 
+        current: string;
+        percentage?: number;
+    } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
@@ -281,16 +287,25 @@ export function SettingsView({ onClose }: SettingsViewProps) {
             }
 
             if (result && result.success) {
+                // 刷新应用信息以显示新版本
+                const info = await window.ipcRenderer?.invoke('app:info') as any;
+                setAppInfo(info);
+                
                 // 显示成功消息并提示重启
-                if (confirm('Resource update completed! Restart now?')) {
+                if (confirm('资源更新完成！是否立即重启应用以应用更改？')) {
                     await window.ipcRenderer?.invoke('resource:restart-app');
+                } else {
+                    // 刷新资源更新信息
+                    await handleCheckResourceUpdate();
                 }
             } else {
-                alert('Resource update failed. Please try again.');
+                const errorMsg = result?.error || '未知错误';
+                alert(`资源更新失败: ${errorMsg}\n\n请检查网络连接或稍后重试。`);
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error('Resource update failed', error);
-            alert('Resource update failed. Please try again.');
+            const errorMsg = error?.message || '未知错误';
+            alert(`资源更新失败: ${errorMsg}\n\n请检查开发者控制台获取详细信息。`);
         } finally {
             setUpdatingResources(false);
             setUpdateProgress(null);
@@ -1577,7 +1592,12 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                     </p>
                                     {appInfo?.hotUpdateVersion && appInfo.hotUpdateVersion !== appInfo.appVersion && (
                                         <p className="text-xs text-green-600 dark:text-green-400">
-                                            资源版本: v{appInfo.hotUpdateVersion}
+                                            资源版本: v{appInfo.hotUpdateVersion} (热更新)
+                                        </p>
+                                    )}
+                                    {!appInfo?.hotUpdateVersion && (
+                                        <p className="text-xs text-stone-400 dark:text-zinc-500">
+                                            应用版本: v{appInfo?.appVersion || '1.0.0'}
                                         </p>
                                     )}
                                 </div>
@@ -1677,16 +1697,31 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                         {updateProgress && (
                                                             <div className="mt-2 space-y-1">
                                                                 <div className="flex justify-between text-xs text-amber-700 dark:text-amber-300">
-                                                                    <span>进度: {updateProgress.downloaded}/{updateProgress.total}</span>
-                                                                    <span>{Math.round((updateProgress.downloaded / updateProgress.total) * 100)}%</span>
+                                                                    <span>
+                                                                        {updateProgress.stage === 'checking' && '检查更新中...'}
+                                                                        {updateProgress.stage === 'downloading' && '下载资源包中...'}
+                                                                        {updateProgress.stage === 'extracting' && '解压文件中...'}
+                                                                        {updateProgress.stage === 'applying' && '应用更新中...'}
+                                                                        {updateProgress.stage === 'completed' && '更新完成！'}
+                                                                        {!updateProgress.stage && `进度: ${updateProgress.downloaded}/${updateProgress.total}`}
+                                                                    </span>
+                                                                    <span>
+                                                                        {updateProgress.percentage !== undefined 
+                                                                            ? `${Math.round(updateProgress.percentage)}%`
+                                                                            : `${Math.round((updateProgress.downloaded / updateProgress.total) * 100)}%`}
+                                                                    </span>
                                                                 </div>
                                                                 <div className="w-full h-1.5 bg-amber-200 dark:bg-amber-800 rounded-full overflow-hidden">
                                                                     <div
                                                                         className="h-full bg-amber-500 transition-all duration-300"
-                                                                        style={{ width: `${(updateProgress.downloaded / updateProgress.total) * 100}%` }}
+                                                                        style={{ 
+                                                                            width: `${updateProgress.percentage !== undefined 
+                                                                                ? updateProgress.percentage 
+                                                                                : (updateProgress.downloaded / updateProgress.total) * 100}%` 
+                                                                        }}
                                                                     />
                                                                 </div>
-                                                                <p className="text-xs text-amber-600 dark:text-amber-400 truncate">
+                                                                <p className="text-xs text-amber-600 dark:text-amber-400 truncate" title={updateProgress.current}>
                                                                     {updateProgress.current}
                                                                 </p>
                                                             </div>
