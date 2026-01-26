@@ -59,6 +59,12 @@ if (!npmPath) {
 const platform = process.platform;
 const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
 
+// Linux 平台不需要准备 npm（Linux 构建不打包 Node.js 运行时）
+if (platform === 'linux') {
+  console.log('ℹ️  Linux 平台不需要准备 npm，跳过');
+  process.exit(0);
+}
+
 let targetDir;
 if (platform === 'darwin') {
   targetDir = path.join(projectRoot, 'resources', 'node', `darwin-${arch}`);
