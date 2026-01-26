@@ -71,6 +71,14 @@ jobs:
         run: npm ci
 
       -
+        name: Download and prepare Node.js runtimes
+        run: node scripts/download-node.mjs
+
+      -
+        name: Prepare npm for Node.js runtimes
+        run: node scripts/prepare-node-npm.mjs
+
+      -
         name: Run TypeScript compiler check
         run: npm run lint || true
 

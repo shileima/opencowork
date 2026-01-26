@@ -29,6 +29,14 @@ build
 .qa-cowork
 .opencowork
 
-# playright
+# playwright
 resources/playwright
+
+# Node.js runtimes (downloaded during build)
+resources/node/*/node
+resources/node/*/node.exe
+resources/node/*/npm
+resources/node/*/npm-cli.js
+resources/node/*/lib
+resources/node/*/node_modules
 
