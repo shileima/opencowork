@@ -27,9 +27,9 @@ console.log(`Node.js 版本: ${NODE_VERSION}`);
 
 // 定义需要准备的平台
 const platforms = [
-  { platform: 'darwin', arch: 'arm64', ext: 'tar.gz' },
-  { platform: 'darwin', arch: 'x64', ext: 'tar.gz' },
-  { platform: 'win32', arch: 'x64', ext: 'zip' }
+  { platform: 'darwin', arch: 'arm64', ext: 'tar.gz', distName: 'darwin-arm64' },
+  { platform: 'darwin', arch: 'x64', ext: 'tar.gz', distName: 'darwin-x64' },
+  { platform: 'win32', arch: 'x64', ext: 'zip', distName: 'win-x64' }
 ];
 
 async function downloadFile(url, dest) {
@@ -101,7 +101,7 @@ async function extractZip(zipPath, destDir) {
   }
 }
 
-async function prepareNodeForPlatform(platform, arch, ext) {
+async function prepareNodeForPlatform(platform, arch, ext, distName) {
   const platformKey = `${platform}-${arch}`;
   console.log(`\n📥 准备 ${platformKey}...`);
 
@@ -121,8 +121,8 @@ async function prepareNodeForPlatform(platform, arch, ext) {
     fs.mkdirSync(targetDir, { recursive: true });
   }
 
-  // 构建下载 URL
-  const nodeDistName = `node-v${NODE_VERSION}-${platform}-${arch}`;
+  // 构建下载 URL - 使用 distName 而不是 platform-arch
+  const nodeDistName = `node-v${NODE_VERSION}-${distName}`;
   const downloadUrl = `https://nodejs.org/dist/v${NODE_VERSION}/${nodeDistName}.${ext}`;
   
   console.log(`   下载地址: ${downloadUrl}`);
@@ -196,8 +196,8 @@ async function main() {
 
   try {
     // 下载所有平台的 Node.js
-    for (const { platform, arch, ext } of platforms) {
-      await prepareNodeForPlatform(platform, arch, ext);
+    for (const { platform, arch, ext, distName } of platforms) {
+      await prepareNodeForPlatform(platform, arch, ext, distName);
     }
 
     console.log('\n✅ 所有平台的 Node.js 准备完成！');
