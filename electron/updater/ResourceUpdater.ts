@@ -101,9 +101,10 @@ export class ResourceUpdater {
 
       const latestVersion = latestRelease.tag_name.replace(/^v/, '')
       
-      // 版本对比：只有远程版本更新时才提示
-      if (this.compareVersions(latestVersion, currentVersion) <= 0) {
-        console.log(`[ResourceUpdater] Already on latest version (${currentVersion})`)
+      // 版本对比：如果远程版本更旧，直接返回无更新
+      const versionCompare = this.compareVersions(latestVersion, currentVersion)
+      if (versionCompare < 0) {
+        console.log(`[ResourceUpdater] Remote version (${latestVersion}) is older than current (${currentVersion})`)
         return {
           hasUpdate: false,
           currentVersion,
@@ -111,7 +112,7 @@ export class ResourceUpdater {
         }
       }
 
-      // 下载远程清单
+      // 下载远程清单（即使版本相同，也要检查文件是否有变化）
       const remoteManifest = await this.fetchRemoteManifest(latestRelease)
       
       if (!remoteManifest) {
@@ -123,17 +124,40 @@ export class ResourceUpdater {
         }
       }
 
-      // 计算需要更新的文件
+      // 如果远程版本更新，肯定有更新
+      if (versionCompare > 0) {
+        const filesToUpdate = this.calculateUpdateFiles(localManifest, remoteManifest)
+        const updateSize = filesToUpdate.reduce((sum, file) => sum + file.size, 0)
+        
+        console.log(`[ResourceUpdater] Found newer version: ${latestVersion} > ${currentVersion}`)
+        console.log(`[ResourceUpdater] Found ${filesToUpdate.length} files to update (${this.formatBytes(updateSize)})`)
+
+        return {
+          hasUpdate: filesToUpdate.length > 0,
+          currentVersion,
+          latestVersion,
+          updateSize,
+          changelog: latestRelease.body,
+          filesToUpdate: filesToUpdate.length
+        }
+      }
+
+      // 版本相同，检查文件是否有变化
       const filesToUpdate = this.calculateUpdateFiles(localManifest, remoteManifest)
       const updateSize = filesToUpdate.reduce((sum, file) => sum + file.size, 0)
 
-      console.log(`[ResourceUpdater] Found ${filesToUpdate.length} files to update (${this.formatBytes(updateSize)})`)
+      if (filesToUpdate.length > 0) {
+        console.log(`[ResourceUpdater] Same version (${currentVersion}) but files changed: ${filesToUpdate.length} files need update`)
+        console.log(`[ResourceUpdater] Update size: ${this.formatBytes(updateSize)}`)
+      } else {
+        console.log(`[ResourceUpdater] Already on latest version (${currentVersion}) with no file changes`)
+      }
 
       return {
         hasUpdate: filesToUpdate.length > 0,
         currentVersion,
         latestVersion,
-        updateSize,
+        updateSize: filesToUpdate.length > 0 ? updateSize : undefined,
         changelog: latestRelease.body,
         filesToUpdate: filesToUpdate.length
       }
@@ -341,15 +365,20 @@ export class ResourceUpdater {
    */
   private async fetchRemoteManifest(release: any): Promise<ResourceManifest | null> {
     try {
+      console.log(`[ResourceUpdater] Release assets: ${release.assets?.map((a: any) => a.name).join(', ') || 'none'}`)
+      
       // 查找清单文件资源
       const manifestAsset = release.assets.find(
         (asset: any) => asset.name === 'resource-manifest.json'
       )
 
       if (!manifestAsset) {
-        console.warn('[ResourceUpdater] No manifest found in release')
+        console.warn(`[ResourceUpdater] No manifest found in release ${release.tag_name}`)
+        console.warn(`[ResourceUpdater] Available assets: ${release.assets?.map((a: any) => a.name).join(', ') || 'none'}`)
         return null
       }
+      
+      console.log(`[ResourceUpdater] Found manifest: ${manifestAsset.name} (${manifestAsset.size} bytes)`)
 
       const response = await fetch(manifestAsset.browser_download_url)
       if (!response.ok) {
