@@ -162,6 +162,7 @@ jobs:
             release/*/*.exe
             release/*/*.AppImage
             release/*/*.deb
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -173,5 +174,6 @@ jobs:
           files: |
             resource-manifest.json
             resources-*.zip
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
