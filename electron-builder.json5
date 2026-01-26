@@ -3,7 +3,7 @@
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
   "appId": "com.qacowork.app",
   "asar": true,
-  "productName": "测试助手",
+  "productName": "QACowork",
 
   "directories": {
     "output": "release/${version}"
@@ -102,7 +102,7 @@
       "AppImage",
       "deb"
     ],
-    "maintainer": "Safphere <a976466014@gmail.com>",
+    "maintainer": "shileima <mashilei@meituan.com>",
     "category": "Utility",
     "icon": "public/icon.png",
     "artifactName": "${productName}-Linux-${version}.${ext}"

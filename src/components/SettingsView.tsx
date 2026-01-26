@@ -1539,7 +1539,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                 </div>
                                 <div className="space-y-2">
                                     <h3 className="text-xl font-bold text-stone-800 dark:text-zinc-100">
-                                        {appInfo?.name || '测试助手'}
+                                        QACowork
                                     </h3>
                                     <p className="text-sm font-mono text-stone-500 dark:text-zinc-500">
                                         v{appInfo?.version || '1.0.0'}
@@ -1548,26 +1548,26 @@ export function SettingsView({ onClose }: SettingsViewProps) {
 
                                 <div className="w-full max-w-sm bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-stone-100 dark:divide-zinc-800">
                                     <a
-                                        href="https://github.com/Safphere"
+                                        href="https://github.com/shileima"
                                         target="_blank"
                                         rel="noreferrer"
                                         className="flex items-center justify-between p-3.5 hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors group"
                                     >
                                         <span className="text-sm text-stone-500 dark:text-zinc-400">{t('author') || 'Author'}</span>
                                         <div className="flex items-center gap-1.5">
-                                            <span className="text-sm font-medium text-stone-700 dark:text-zinc-200 group-hover:text-orange-500 transition-colors">{appInfo?.author || 'Safphere'}</span>
+                                            <span className="text-sm font-medium text-stone-700 dark:text-zinc-200 group-hover:text-orange-500 transition-colors">shileima</span>
                                             <ExternalLink size={14} className="text-stone-400 dark:text-zinc-500 group-hover:text-orange-500 transition-colors" />
                                         </div>
                                     </a>
                                     <a
-                                        href={appInfo?.homepage || '#'}
+                                        href="https://github.com/shileima/opencowork"
                                         target="_blank"
                                         rel="noreferrer"
                                         className="flex items-center justify-between p-3.5 hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors group"
                                     >
                                         <span className="text-sm text-stone-500 dark:text-zinc-400">{t('homepage') || 'Homepage'}</span>
                                         <div className="flex items-center gap-1.5">
-                                            <span className="text-sm font-medium text-stone-700 dark:text-zinc-200 group-hover:text-orange-500 transition-colors">Safphere/qacowork</span>
+                                            <span className="text-sm font-medium text-stone-700 dark:text-zinc-200 group-hover:text-orange-500 transition-colors">shileima/opencowork</span>
                                             <ExternalLink size={14} className="text-stone-400 dark:text-zinc-500 group-hover:text-orange-500 transition-colors" />
                                         </div>
                                     </a>
