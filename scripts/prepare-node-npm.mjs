@@ -12,13 +12,34 @@
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 
 console.log('📦 准备 Node.js 和 npm 资源...');
+
+// 确定目标平台和架构
+const platform = process.platform;
+const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+
+// Linux 和 Windows 平台不需要准备 npm
+if (platform === 'linux') {
+  console.log('ℹ️  Linux 平台不需要准备 npm，跳过');
+  process.exit(0);
+}
+
+if (platform === 'win32') {
+  console.log('ℹ️  Windows 平台暂时跳过 npm 准备');
+  console.log('   Windows 应用会直接使用下载的 node.exe 和 npm');
+  process.exit(0);
+}
+
+// 只有 macOS 平台需要复制 npm
+if (platform !== 'darwin') {
+  console.error(`❌ 不支持的平台: ${platform}`);
+  process.exit(1);
+}
 
 // 获取系统 Node.js 路径
 let systemNodePath;
@@ -52,28 +73,13 @@ for (const testPath of npmPaths) {
 
 if (!npmPath) {
   console.error('❌ 无法找到 npm');
+  console.error('   尝试的路径：');
+  npmPaths.forEach(p => console.error(`   - ${p}`));
   process.exit(1);
 }
 
-// 确定目标平台和架构
-const platform = process.platform;
-const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
-
-// Linux 平台不需要准备 npm（Linux 构建不打包 Node.js 运行时）
-if (platform === 'linux') {
-  console.log('ℹ️  Linux 平台不需要准备 npm，跳过');
-  process.exit(0);
-}
-
-let targetDir;
-if (platform === 'darwin') {
-  targetDir = path.join(projectRoot, 'resources', 'node', `darwin-${arch}`);
-} else if (platform === 'win32') {
-  targetDir = path.join(projectRoot, 'resources', 'node', 'win32-x64');
-} else {
-  console.error(`❌ 不支持的平台: ${platform}`);
-  process.exit(1);
-}
+// 目标目录
+const targetDir = path.join(projectRoot, 'resources', 'node', `darwin-${arch}`);
 
 // 确保目标目录存在
 if (!fs.existsSync(targetDir)) {
@@ -82,7 +88,7 @@ if (!fs.existsSync(targetDir)) {
 }
 
 // 检查 node 是否存在
-const nodePath = path.join(targetDir, platform === 'win32' ? 'node.exe' : 'node');
+const nodePath = path.join(targetDir, 'node');
 if (!fs.existsSync(nodePath)) {
   console.warn(`⚠️  警告: Node.js 二进制文件不存在: ${nodePath}`);
   console.warn('   请先确保 Node.js 已复制到 resources/node/');
@@ -100,9 +106,8 @@ try {
 }
 
 // 复制 npm 可执行文件
-// npm 在 bin 目录下通常是一个包装脚本，我们需要从 lib/node_modules/npm/bin/ 复制
-const npmBinPath = path.join(systemNodeRoot, 'lib', 'node_modules', 'npm', 'bin', platform === 'win32' ? 'npm.cmd' : 'npm');
-const targetNpmPath = path.join(targetDir, platform === 'win32' ? 'npm.cmd' : 'npm');
+const npmBinPath = path.join(systemNodeRoot, 'lib', 'node_modules', 'npm', 'bin', 'npm');
+const targetNpmPath = path.join(targetDir, 'npm');
 
 // 优先使用 lib/node_modules/npm/bin/npm（这是实际的 npm 脚本）
 const sourceNpmPath = fs.existsSync(npmBinPath) ? npmBinPath : npmRealPath;
