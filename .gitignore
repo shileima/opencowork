@@ -7,9 +7,6 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Built-in Node.js binaries (large files)
-resources/node/
-
 node_modules
 dist
 dist-ssr
@@ -32,5 +29,6 @@ build
 .qa-cowork
 .opencowork
 
-# Built-in Playwright (large files)
-resources/playwright/
+# playright
+resources/playwright
+
