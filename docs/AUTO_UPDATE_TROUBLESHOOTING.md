@@ -18,6 +18,12 @@ npm ci can only install packages when your package.json and
 package-lock.json or npm-shrinkwrap.json are in sync.
 ```
 
+### 问题3: GitHub Actions npm 缓存问题 (已修复)
+
+**失败原因:** GitHub Actions 使用了旧的 npm 缓存,即使 `package-lock.json` 已更新
+
+**解决方案:** 禁用 npm 缓存或清除缓存
+
 ## 🔍 原因分析
 
 ### 问题1: 文件名不匹配
@@ -69,6 +75,20 @@ git push opencowork :refs/tags/v0.0.14-test
 git push opencowork v0.0.14-test
 ```
 
+### 修复3: 禁用 GitHub Actions npm 缓存
+
+编辑 `.github/workflows/release.yml`:
+
+```yaml
+- name: Install Node.js
+  uses: actions/setup-node@v4
+  with:
+    node-version: 20
+    # 移除 cache: 'npm' 避免缓存问题
+```
+
+或者在 Actions 界面手动清除缓存。
+
 ## 🔧 已修复
 
 ### 第一次修复 (文件名匹配)
@@ -98,6 +118,20 @@ fix: 更新 package-lock.json 以包含 adm-zip 依赖
 
 **修改文件:**
 - `package-lock.json` (添加 adm-zip 相关依赖)
+
+### 第三次修复 (npm 缓存)
+
+**提交信息:**
+```
+fix: 禁用 GitHub Actions npm 缓存
+
+- 移除 cache: 'npm' 配置
+- 确保使用最新的 package-lock.json
+- 避免缓存导致的依赖不同步问题
+```
+
+**修改文件:**
+- `.github/workflows/release.yml` (line 63-67)
 
 ## 📝 验证步骤
 
