@@ -162,9 +162,13 @@ app.whenReady().then(() => {
 
   // 7. Initialize resource updater and start auto-check
   resourceUpdater = new ResourceUpdater()
+  
+  // 开发环境也启用自动更新检查 (用于测试)
   if (app.isPackaged) {
-    // 仅在打包版本中启用自动更新检查
-    resourceUpdater.startAutoUpdateCheck(24) // 每24小时检查一次
+    resourceUpdater.startAutoUpdateCheck(1 / 60) // 每1分钟检查一次 (测试用)
+  } else {
+    // 开发环境: 每1分钟检查一次
+    resourceUpdater.startAutoUpdateCheck(1 / 60)
   }
 
   // 7.5 Initialize Playwright manager and check status
