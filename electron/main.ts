@@ -10,6 +10,7 @@ import { scriptStore } from './config/ScriptStore'
 import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
 import { getBuiltinNodePath } from './utils/NodePath'
+import { ResourceUpdater } from './updater/ResourceUpdater'
 import Anthropic from '@anthropic-ai/sdk'
 
 // Extend App type to include isQuitting property
@@ -68,6 +69,7 @@ let floatingBallWin: BrowserWindow | null = null
 let tray: Tray | null = null
 let mainAgent: AgentRuntime | null = null  // Agent for main window
 let floatingBallAgent: AgentRuntime | null = null  // Independent agent for floating ball
+let resourceUpdater: ResourceUpdater | null = null  // Resource updater
 
 // Ball state
 let isBallExpanded = false
@@ -77,6 +79,10 @@ const EXPANDED_HEIGHT = 320   // Compact height for less dramatic expansion
 
 app.on('before-quit', async () => {
   app.isQuitting = true
+  // Stop resource updater
+  if (resourceUpdater) {
+    resourceUpdater.stopAutoUpdateCheck()
+  }
   // Clean up both agent resources
   const agents = [mainAgent, floatingBallAgent].filter((agent): agent is AgentRuntime => agent !== null)
   if (agents.length > 0) {
@@ -151,6 +157,13 @@ app.whenReady().then(() => {
 
   // 6.5 Clean up empty sessions on startup
   sessionStore.cleanupEmptySessions()
+
+  // 7. Initialize resource updater and start auto-check
+  resourceUpdater = new ResourceUpdater()
+  if (app.isPackaged) {
+    // 仅在打包版本中启用自动更新检查
+    resourceUpdater.startAutoUpdateCheck(24) // 每24小时检查一次
+  }
 
   // 4. Create system tray
   createTray()
@@ -628,6 +641,55 @@ ipcMain.handle('app:check-update', async () => {
     console.error('Update check failed:', error);
     return { success: false, error: error.message };
   }
+})
+
+// 检查资源更新
+ipcMain.handle('resource:check-update', async () => {
+  try {
+    if (!resourceUpdater) {
+      return { success: false, error: 'Resource updater not initialized' }
+    }
+
+    const result = await resourceUpdater.checkForUpdates()
+    return { success: true, ...result }
+  } catch (error: any) {
+    console.error('Resource update check failed:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+// 执行资源更新
+ipcMain.handle('resource:perform-update', async () => {
+  try {
+    if (!resourceUpdater) {
+      return { success: false, error: 'Resource updater not initialized' }
+    }
+
+    // 发送更新进度
+    const success = await resourceUpdater.performUpdate((progress) => {
+      mainWin?.webContents.send('resource:update-progress', progress)
+      floatingBallWin?.webContents.send('resource:update-progress', progress)
+    })
+
+    if (success) {
+      // 更新完成后提示用户重启应用
+      return { 
+        success: true, 
+        message: 'Resource update completed! Please restart the app to apply changes.' 
+      }
+    }
+
+    return { success: false, error: 'Update failed' }
+  } catch (error: any) {
+    console.error('Resource update failed:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+// 应用更新后重启
+ipcMain.handle('resource:restart-app', () => {
+  app.relaunch()
+  app.quit()
 })
 
 // Helper for version comparison
