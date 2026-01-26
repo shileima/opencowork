@@ -168,6 +168,18 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     const [checkingUpdate, setCheckingUpdate] = useState(false);
 
     const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean, latestVersion: string, releaseUrl: string } | null>(null);
+    
+    // Resource update states
+    const [checkingResourceUpdate, setCheckingResourceUpdate] = useState(false);
+    const [resourceUpdateInfo, setResourceUpdateInfo] = useState<{
+        hasUpdate: boolean;
+        currentVersion: string;
+        latestVersion: string;
+        updateSize?: number;
+        changelog?: string;
+    } | null>(null);
+    const [updatingResources, setUpdatingResources] = useState(false);
+    const [updateProgress, setUpdateProgress] = useState<{ total: number; downloaded: number; current: string } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
@@ -197,6 +209,70 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         } finally {
             setCheckingUpdate(false);
         }
+    };
+
+    // 检查资源更新
+    const handleCheckResourceUpdate = async () => {
+        setCheckingResourceUpdate(true);
+        setResourceUpdateInfo(null);
+        try {
+            const result = await window.ipcRenderer?.invoke('resource:check-update') as any;
+            if (result && result.success) {
+                setResourceUpdateInfo({
+                    hasUpdate: result.hasUpdate,
+                    currentVersion: result.currentVersion,
+                    latestVersion: result.latestVersion,
+                    updateSize: result.updateSize,
+                    changelog: result.changelog
+                });
+            }
+        } catch (error) {
+            console.error('Check resource update failed', error);
+        } finally {
+            setCheckingResourceUpdate(false);
+        }
+    };
+
+    // 执行资源更新
+    const handlePerformResourceUpdate = async () => {
+        setUpdatingResources(true);
+        setUpdateProgress(null);
+        try {
+            // 监听更新进度
+            const removeListener = window.ipcRenderer?.on('resource:update-progress', (_event: any, progress: any) => {
+                setUpdateProgress(progress);
+            });
+
+            const result = await window.ipcRenderer?.invoke('resource:perform-update') as any;
+            
+            if (removeListener) {
+                removeListener();
+            }
+
+            if (result && result.success) {
+                // 显示成功消息并提示重启
+                if (confirm('Resource update completed! Restart now?')) {
+                    await window.ipcRenderer?.invoke('resource:restart-app');
+                }
+            } else {
+                alert('Resource update failed. Please try again.');
+            }
+        } catch (error) {
+            console.error('Resource update failed', error);
+            alert('Resource update failed. Please try again.');
+        } finally {
+            setUpdatingResources(false);
+            setUpdateProgress(null);
+        }
+    };
+
+    // 格式化字节大小
+    const formatBytes = (bytes: number): string => {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
     };
 
     // Reset test result when provider changes
@@ -1525,6 +1601,71 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                             )}
                                         </div>
                                     )}
+
+                                    {/* 资源更新区域 */}
+                                    <div className="border-t border-stone-200 dark:border-zinc-700 pt-4 mt-4">
+                                        <p className="text-xs text-stone-500 dark:text-zinc-400 mb-2 text-center">
+                                            资源热更新 (无需重装应用)
+                                        </p>
+                                        <button
+                                            onClick={handleCheckResourceUpdate}
+                                            disabled={checkingResourceUpdate || updatingResources}
+                                            className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 flex items-center gap-2 mx-auto"
+                                        >
+                                            {checkingResourceUpdate && <Loader2 size={14} className="animate-spin" />}
+                                            {checkingResourceUpdate ? '检查中...' : '检查资源更新'}
+                                        </button>
+
+                                        {resourceUpdateInfo && (
+                                            <div className="mt-3 text-sm animate-in fade-in slide-in-from-top-2">
+                                                {resourceUpdateInfo.hasUpdate ? (
+                                                    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg p-3 space-y-2">
+                                                        <p className="text-amber-800 dark:text-amber-200 font-medium">
+                                                            发现新资源版本!
+                                                        </p>
+                                                        <div className="text-xs text-amber-700 dark:text-amber-300 space-y-1">
+                                                            <p>当前: v{resourceUpdateInfo.currentVersion}</p>
+                                                            <p>最新: v{resourceUpdateInfo.latestVersion}</p>
+                                                            {resourceUpdateInfo.updateSize && (
+                                                                <p>大小: {formatBytes(resourceUpdateInfo.updateSize)}</p>
+                                                            )}
+                                                        </div>
+                                                        <button
+                                                            onClick={handlePerformResourceUpdate}
+                                                            disabled={updatingResources}
+                                                            className="w-full px-3 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                                        >
+                                                            {updatingResources && <Loader2 size={14} className="animate-spin" />}
+                                                            {updatingResources ? '更新中...' : '立即更新'}
+                                                        </button>
+                                                        {updateProgress && (
+                                                            <div className="mt-2 space-y-1">
+                                                                <div className="flex justify-between text-xs text-amber-700 dark:text-amber-300">
+                                                                    <span>进度: {updateProgress.downloaded}/{updateProgress.total}</span>
+                                                                    <span>{Math.round((updateProgress.downloaded / updateProgress.total) * 100)}%</span>
+                                                                </div>
+                                                                <div className="w-full h-1.5 bg-amber-200 dark:bg-amber-800 rounded-full overflow-hidden">
+                                                                    <div
+                                                                        className="h-full bg-amber-500 transition-all duration-300"
+                                                                        style={{ width: `${(updateProgress.downloaded / updateProgress.total) * 100}%` }}
+                                                                    />
+                                                                </div>
+                                                                <p className="text-xs text-amber-600 dark:text-amber-400 truncate">
+                                                                    {updateProgress.current}
+                                                                </p>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg p-3">
+                                                        <p className="text-green-700 dark:text-green-300 text-center">
+                                                            ✓ 资源已是最新版本
+                                                        </p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 <p className="text-xs text-stone-400 dark:text-zinc-600 max-w-xs leading-relaxed">

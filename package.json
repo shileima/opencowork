@@ -14,6 +14,7 @@
     "build": "node scripts/verify-builtin-resources.cjs && tsc && vite build && electron-builder",
     "build:dir": "node scripts/verify-builtin-resources.cjs && tsc && vite build && electron-builder --dir",
     "build:icons": "node scripts/build-icons.mjs",
+    "build:manifest": "node scripts/generate-resource-manifest.mjs",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives",
     "preview": "vite preview",
     "verify:resources": "node scripts/verify-builtin-resources.cjs",
@@ -27,6 +28,7 @@
     "@anthropic-ai/sdk": "^0.71.2",
     "@modelcontextprotocol/sdk": "^1.25.2",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "adm-zip": "^0.5.10",
     "clsx": "^2.1.1",
     "dotenv": "^17.2.3",
     "electron-store": "^11.0.2",
@@ -44,6 +46,7 @@
     "zod": "^4.3.5"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.5",
     "@types/dotenv": "^6.1.1",
     "@types/js-yaml": "^4.0.9",
     "@types/react": "^18.2.64",
