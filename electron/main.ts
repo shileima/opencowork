@@ -411,7 +411,7 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
     
     // 获取当前会话ID（如果存在），否则创建新会话
     let currentSessionId = sessionStore.getSessionId(isFloatingBall)
-    let sessionTitle = `执行脚本: ${script.name}`
+    const sessionTitle = `执行脚本: ${script.name}`
     
     if (!currentSessionId) {
       // 如果没有当前会话，创建新会话
