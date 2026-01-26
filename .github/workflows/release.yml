@@ -162,6 +162,15 @@ jobs:
             release/*/*.exe
             release/*/*.AppImage
             release/*/*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      -
+        name: Upload resource files to Release (Linux only)
+        uses: softprops/action-gh-release@v2
+        if: success() && matrix.platform == 'linux'
+        with:
+          files: |
             resource-manifest.json
             resources-*.zip
         env:
