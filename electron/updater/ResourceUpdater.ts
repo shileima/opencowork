@@ -47,7 +47,7 @@ export class ResourceUpdater {
   private tempDir: string
   private hotUpdateDir: string
   private manifestPath: string
-  private githubRepo = 'Safphere/qacowork'
+  private githubRepo = 'shileima/opencowork'
   private updateCheckInterval: NodeJS.Timeout | null = null
 
   constructor() {
