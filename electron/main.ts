@@ -11,6 +11,7 @@ import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
 import { getBuiltinNodePath } from './utils/NodePath'
 import { ResourceUpdater } from './updater/ResourceUpdater'
+import { PlaywrightManager } from './utils/PlaywrightManager'
 import Anthropic from '@anthropic-ai/sdk'
 
 // Extend App type to include isQuitting property
@@ -70,6 +71,7 @@ let tray: Tray | null = null
 let mainAgent: AgentRuntime | null = null  // Agent for main window
 let floatingBallAgent: AgentRuntime | null = null  // Independent agent for floating ball
 let resourceUpdater: ResourceUpdater | null = null  // Resource updater
+let playwrightManager: PlaywrightManager | null = null  // Playwright manager
 
 // Ball state
 let isBallExpanded = false
@@ -164,6 +166,10 @@ app.whenReady().then(() => {
     // 仅在打包版本中启用自动更新检查
     resourceUpdater.startAutoUpdateCheck(24) // 每24小时检查一次
   }
+
+  // 7.5 Initialize Playwright manager and check status
+  playwrightManager = new PlaywrightManager()
+  checkPlaywrightStatus()
 
   // 4. Create system tray
   createTray()
@@ -690,6 +696,98 @@ ipcMain.handle('resource:perform-update', async () => {
 ipcMain.handle('resource:restart-app', () => {
   app.relaunch()
   app.quit()
+})
+
+// ========== Playwright 管理 ==========
+
+// 检查 Playwright 安装状态
+async function checkPlaywrightStatus() {
+  if (!playwrightManager) return
+
+  try {
+    const status = await playwrightManager.getInstallStatus()
+    
+    if (status.needsInstall && mainWin) {
+      // 通知前端需要安装
+      mainWin.webContents.send('playwright:status', {
+        installed: false,
+        ...status
+      })
+    }
+  } catch (error) {
+    console.error('检查 Playwright 状态失败:', error)
+  }
+}
+
+// 获取 Playwright 安装状态
+ipcMain.handle('playwright:get-status', async () => {
+  try {
+    if (!playwrightManager) {
+      return { success: false, error: 'Playwright manager not initialized' }
+    }
+
+    const status = await playwrightManager.getInstallStatus()
+    return { success: true, ...status }
+  } catch (error) {
+    console.error('Get Playwright status failed:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+// 安装 Playwright 和浏览器
+ipcMain.handle('playwright:install', async () => {
+  try {
+    if (!playwrightManager) {
+      return { success: false, error: 'Playwright manager not initialized' }
+    }
+
+    // 发送进度更新
+    const onProgress = (message: string) => {
+      mainWin?.webContents.send('playwright:install-progress', message)
+    }
+
+    const result = await playwrightManager.installAll(onProgress)
+    
+    if (result.success) {
+      // 通知前端安装完成
+      mainWin?.webContents.send('playwright:status', {
+        installed: true,
+        playwrightInstalled: true,
+        browserInstalled: true,
+        needsInstall: false
+      })
+    }
+
+    return result
+  } catch (error) {
+    console.error('Install Playwright failed:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+// 卸载 Playwright
+ipcMain.handle('playwright:uninstall', async () => {
+  try {
+    if (!playwrightManager) {
+      return { success: false, error: 'Playwright manager not initialized' }
+    }
+
+    const result = await playwrightManager.uninstall()
+    
+    if (result.success) {
+      mainWin?.webContents.send('playwright:status', {
+        installed: false,
+        playwrightInstalled: false,
+        browserInstalled: false,
+        needsInstall: true
+      })
+    }
+
+    return result
+  } catch (error) {
+    console.error('Uninstall Playwright failed:', error)
+    return { success: false, error: error.message }
+  }
 })
 
 // Helper for version comparison
