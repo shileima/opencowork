@@ -164,7 +164,14 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     const [showApiKey, setShowApiKey] = useState(false);
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
-    const [appInfo, setAppInfo] = useState<{ name: string; version: string; author: string; homepage: string } | null>(null);
+    const [appInfo, setAppInfo] = useState<{ 
+        name: string; 
+        version: string; 
+        appVersion?: string;
+        hotUpdateVersion?: string | null;
+        author: string; 
+        homepage: string 
+    } | null>(null);
     const [checkingUpdate, setCheckingUpdate] = useState(false);
 
     const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean, latestVersion: string, releaseUrl: string } | null>(null);
@@ -1568,6 +1575,11 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                     <p className="text-sm font-mono text-stone-500 dark:text-zinc-500">
                                         v{appInfo?.version || '1.0.0'}
                                     </p>
+                                    {appInfo?.hotUpdateVersion && appInfo.hotUpdateVersion !== appInfo.appVersion && (
+                                        <p className="text-xs text-green-600 dark:text-green-400">
+                                            资源版本: v{appInfo.hotUpdateVersion}
+                                        </p>
+                                    )}
                                 </div>
 
                                 <div className="w-full max-w-sm bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-stone-100 dark:divide-zinc-800">

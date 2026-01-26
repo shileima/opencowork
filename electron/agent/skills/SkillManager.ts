@@ -40,6 +40,27 @@ export class SkillManager {
         }
     }
 
+    /**
+     * 获取内置技能源目录
+     * 优先使用热更新目录，否则使用内置资源
+     */
+    private async getBuiltinSkillsSourceDir(): Promise<string | null> {
+        // 优先检查热更新目录
+        const hotUpdateSkillsDir = directoryManager.getHotUpdateSkillsDir();
+        if (await this.pathExists(hotUpdateSkillsDir)) {
+            console.log('[SkillManager] Using hot-update skills directory');
+            return hotUpdateSkillsDir;
+        }
+
+        // 回退到内置资源
+        const builtinDir = directoryManager.getBuiltinSkillsDir();
+        if (await this.pathExists(builtinDir)) {
+            return builtinDir;
+        }
+
+        return null;
+    }
+
     async initializeDefaults() {
         console.log('[SkillManager] Initializing default skills...');
         console.log(`[SkillManager] App packaged: ${app.isPackaged}`);
@@ -48,16 +69,15 @@ export class SkillManager {
         console.log(`[SkillManager] process.resourcesPath exists: ${app.isPackaged ? await this.pathExists(process.resourcesPath) : 'N/A'}`);
 
         try {
-            // 使用 DirectoryManager 获取内置技能目录
-            const sourceDir = directoryManager.getBuiltinSkillsDir();
-            console.log(`[SkillManager] Using builtin skills directory: ${sourceDir}`);
-
-            if (!await this.pathExists(sourceDir)) {
-                console.error('[SkillManager] ❌ Could not find default skills directory:', sourceDir);
+            // 获取内置技能目录（优先热更新）
+            const sourceDir = await this.getBuiltinSkillsSourceDir();
+            
+            if (!sourceDir) {
+                console.error('[SkillManager] ❌ Could not find default skills directory');
                 return;
             }
-
-            console.log(`[SkillManager] Using source directory: ${sourceDir}`);
+            
+            console.log(`[SkillManager] Using builtin skills directory: ${sourceDir}`);
 
             // Ensure target directory exists
             try {

@@ -8,30 +8,42 @@ import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
+import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from './NodePath'
 
 const execAsync = promisify(exec)
 
 export class PlaywrightManager {
-  private resourcesPath: string
   private playwrightPath: string
   private browsersPath: string
 
   constructor() {
-    this.resourcesPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'resources')
-      : path.join(app.getAppPath(), 'resources')
+    // 注意：Playwright 安装在 process.resourcesPath/playwright 目录下
+    // 而不是 process.resourcesPath/resources/playwright
+    // 这与 PlaywrightPath.ts 中的路径保持一致
+    this.playwrightPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'playwright')
+      : path.join(app.getAppPath(), 'resources', 'playwright')
     
-    this.playwrightPath = path.join(this.resourcesPath, 'playwright')
     this.browsersPath = path.join(this.playwrightPath, 'browsers')
   }
 
   /**
    * 检查 Playwright 是否已安装
+   * 支持多种可能的安装路径
    */
   async isPlaywrightInstalled(): Promise<boolean> {
     try {
-      const packagePath = path.join(this.playwrightPath, 'package', 'package.json')
-      return fs.existsSync(packagePath)
+      // 检查多个可能的 Playwright 安装位置
+      const possiblePaths = [
+        // 方式1：npm install playwright 后的标准路径
+        path.join(this.playwrightPath, 'node_modules', 'playwright', 'package.json'),
+        // 方式2：package 目录（旧版安装方式）
+        path.join(this.playwrightPath, 'package', 'package.json'),
+        // 方式3：playwright-core
+        path.join(this.playwrightPath, 'node_modules', 'playwright-core', 'package.json'),
+      ]
+      
+      return possiblePaths.some(p => fs.existsSync(p))
     } catch (error) {
       return false
     }
@@ -88,19 +100,30 @@ export class PlaywrightManager {
         fs.mkdirSync(this.playwrightPath, { recursive: true })
       }
 
-      // 使用内置的 npm 安装 playwright
-      const nodePath = this.getNodePath()
-      const npmPath = this.getNpmPath()
+      // 使用内置的 node 和 npm（复用 NodePath.ts 的逻辑）
+      const nodePath = getBuiltinNodePath()
+      const npmCliJsPath = getBuiltinNpmCliJsPath()
+      const npmPath = getBuiltinNpmPath()
+      const npmEnv = getNpmEnvVars()
 
       onProgress?.('正在安装 Playwright 包...')
       
+      // 优先使用 npm-cli.js（更可靠），否则使用 npm 脚本
+      let npmCommand: string
+      if (npmCliJsPath) {
+        npmCommand = `"${nodePath}" "${npmCliJsPath}" install playwright`
+      } else {
+        npmCommand = `"${nodePath}" "${npmPath}" install playwright`
+      }
+      
       // 安装 playwright
       await execAsync(
-        `"${nodePath}" "${npmPath}" install playwright`,
+        npmCommand,
         {
           cwd: this.playwrightPath,
           env: {
             ...process.env,
+            ...npmEnv,
             PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' // 先不下载浏览器
           }
         }
@@ -125,16 +148,24 @@ export class PlaywrightManager {
     try {
       onProgress?.('开始安装 Chromium 浏览器...')
 
-      const nodePath = this.getNodePath()
-      const playwrightCli = path.join(
-        this.playwrightPath,
-        'node_modules',
-        '@playwright',
-        'browser-chromium',
-        'cli.js'
-      )
+      const nodePath = getBuiltinNodePath()
+      
+      // 尝试多个可能的 Playwright CLI 路径
+      const possibleCliPaths = [
+        path.join(this.playwrightPath, 'node_modules', '@playwright', 'browser-chromium', 'cli.js'),
+        path.join(this.playwrightPath, 'node_modules', 'playwright', 'cli.js'),
+        path.join(this.playwrightPath, 'node_modules', 'playwright-core', 'cli.js'),
+      ]
+      
+      let playwrightCli: string | null = null
+      for (const cliPath of possibleCliPaths) {
+        if (fs.existsSync(cliPath)) {
+          playwrightCli = cliPath
+          break
+        }
+      }
 
-      if (!fs.existsSync(playwrightCli)) {
+      if (!playwrightCli) {
         throw new Error('Playwright CLI 不存在,请先安装 Playwright')
       }
 
@@ -195,50 +226,6 @@ export class PlaywrightManager {
       const errorMessage = error instanceof Error ? error.message : String(error)
       return { success: false, error: errorMessage }
     }
-  }
-
-  /**
-   * 获取内置 Node.js 路径
-   */
-  private getNodePath(): string {
-    const platform = process.platform
-    const arch = process.arch
-
-    let nodePath: string
-    
-    if (platform === 'win32') {
-      nodePath = path.join(this.resourcesPath, 'node', `${platform}-${arch}`, 'node.exe')
-    } else {
-      nodePath = path.join(this.resourcesPath, 'node', `${platform}-${arch}`, 'node')
-    }
-
-    if (!fs.existsSync(nodePath)) {
-      throw new Error(`内置 Node.js 不存在: ${nodePath}`)
-    }
-
-    return nodePath
-  }
-
-  /**
-   * 获取内置 npm 路径
-   */
-  private getNpmPath(): string {
-    const platform = process.platform
-    const arch = process.arch
-
-    let npmPath: string
-    
-    if (platform === 'win32') {
-      npmPath = path.join(this.resourcesPath, 'node', `${platform}-${arch}`, 'npm.cmd')
-    } else {
-      npmPath = path.join(this.resourcesPath, 'node', `${platform}-${arch}`, 'npm')
-    }
-
-    if (!fs.existsSync(npmPath)) {
-      throw new Error(`内置 npm 不存在: ${npmPath}`)
-    }
-
-    return npmPath
   }
 
   /**

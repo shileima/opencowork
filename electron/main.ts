@@ -35,6 +35,30 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
+/**
+ * 获取前端资源目录路径
+ * 生产环境下优先使用热更新目录，否则使用内置资源
+ */
+function getRendererDistPath(): string {
+  if (VITE_DEV_SERVER_URL) {
+    // 开发模式直接返回默认路径
+    return RENDERER_DIST
+  }
+
+  // 生产模式：检查热更新目录
+  const hotUpdateDistDir = directoryManager.getHotUpdateDistDir()
+  const hotUpdateIndexPath = path.join(hotUpdateDistDir, 'index.html')
+  
+  if (fs.existsSync(hotUpdateIndexPath)) {
+    console.log('[Main] Using hot-update dist directory')
+    return hotUpdateDistDir
+  }
+
+  // 回退到内置资源
+  console.log('[Main] Using built-in dist directory')
+  return RENDERER_DIST
+}
+
 // Helper to get icon path for both dev and prod
 function getIconPath(): string {
   // Try PNG first as it's always available
@@ -616,16 +640,23 @@ ipcMain.handle('config:test-connection', async (_, { apiKey, apiUrl, model }) =>
 })
 
 ipcMain.handle('app:info', () => {
+  // 获取有效版本（优先热更新版本）
+  const effectiveVersion = resourceUpdater?.getCurrentVersion() || app.getVersion()
+  const hotUpdateVersion = directoryManager.getHotUpdateVersion()
+  
   return {
-    name: 'OpenCowork', // app.getName() might be lowercase 'opencowork'
-    version: app.getVersion(),
-    author: 'shileima', // Hardcoded from package.json
-    homepage: 'https://github.com/shileima/opencowork'
+    name: 'QACowork',
+    version: effectiveVersion,
+    appVersion: app.getVersion(), // 原始应用版本
+    hotUpdateVersion: hotUpdateVersion, // 热更新版本（如果有）
+    author: 'Safphere',
+    homepage: 'https://github.com/Safphere/qacowork'
   };
 })
 
 ipcMain.handle('app:get-version', () => {
-  return app.getVersion()
+  // 返回有效版本（优先热更新版本）
+  return resourceUpdater?.getCurrentVersion() || app.getVersion()
 })
 
 ipcMain.handle('app:check-update', async () => {
@@ -918,6 +949,29 @@ ipcMain.handle('window:close', () => mainWin?.hide())
 
 
 // MCP Configuration Handlers
+
+/**
+ * 获取内置MCP配置文件路径
+ * 优先使用热更新目录，否则使用内置资源
+ */
+function getBuiltinMcpConfigPath(): string | null {
+  // 优先检查热更新目录
+  const hotUpdateMcpDir = directoryManager.getHotUpdateMcpDir()
+  const hotUpdateMcpConfig = path.join(hotUpdateMcpDir, 'builtin-mcp.json')
+  if (fs.existsSync(hotUpdateMcpConfig)) {
+    console.log('[MCP] Using hot-update MCP config')
+    return hotUpdateMcpConfig
+  }
+
+  // 回退到内置资源
+  const builtinPath = directoryManager.getBuiltinMcpConfigPath()
+  if (fs.existsSync(builtinPath)) {
+    return builtinPath
+  }
+
+  return null
+}
+
 // Ensure built-in MCP config exists
 function ensureBuiltinMcpConfig() {
   try {
@@ -928,13 +982,13 @@ function ensureBuiltinMcpConfig() {
 
     console.log('[MCP] Initializing default configuration...');
 
-    // 使用 DirectoryManager 获取内置MCP配置文件路径
-    const sourcePath = directoryManager.getBuiltinMcpConfigPath();
+    // 获取内置MCP配置文件路径（优先热更新）
+    const sourcePath = getBuiltinMcpConfigPath();
 
-    if (fs.existsSync(sourcePath)) {
+    if (sourcePath && fs.existsSync(sourcePath)) {
       const configContent = fs.readFileSync(sourcePath, 'utf-8');
 
-      // Ensure directory exists (DirectoryManager 应该已经创建了，但为了安全起见再检查一次)
+      // Ensure directory exists
       const configDir = directoryManager.getMcpDir();
       if (!fs.existsSync(configDir)) {
         fs.mkdirSync(configDir, { recursive: true });
@@ -943,7 +997,7 @@ function ensureBuiltinMcpConfig() {
       fs.writeFileSync(mcpConfigPath, configContent, 'utf-8');
       console.log(`[MCP] Created default config at ${mcpConfigPath}`);
     } else {
-      console.warn(`[MCP] Could not find builtin-mcp.json at ${sourcePath}`);
+      console.warn(`[MCP] Could not find builtin-mcp.json`);
     }
   } catch (err) {
     console.error('[MCP] Failed to ensure builtin config:', err);
@@ -997,16 +1051,39 @@ ipcMain.handle('mcp:open-config-folder', async () => {
 // 使用 DirectoryManager 获取技能目录（在需要时获取，避免在模块加载时初始化）
 const getSkillsDir = () => directoryManager.getSkillsDir();
 
+/**
+ * 获取内置技能目录路径
+ * 优先使用热更新目录，否则使用内置资源
+ */
+const getBuiltinSkillsSourceDir = (): string | null => {
+  // 优先检查热更新目录
+  const hotUpdateSkillsDir = directoryManager.getHotUpdateSkillsDir()
+  if (fs.existsSync(hotUpdateSkillsDir)) {
+    console.log('[Skills] Using hot-update skills directory')
+    return hotUpdateSkillsDir
+  }
+
+  // 回退到内置资源
+  if (app.isPackaged) {
+    const possiblePaths = [
+      path.join(process.resourcesPath, 'resources', 'skills'),
+      path.join(process.resourcesPath, 'skills')
+    ]
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) return p
+    }
+  } else {
+    const devPath = path.join(process.cwd(), 'resources', 'skills')
+    if (fs.existsSync(devPath)) return devPath
+  }
+  return null
+}
+
 // Helper to get built-in skill names
 const getBuiltinSkillNames = () => {
   try {
-    let sourceDir = path.join(process.cwd(), 'resources', 'skills');
-    if (app.isPackaged) {
-      const possiblePath = path.join(process.resourcesPath, 'resources', 'skills');
-      if (fs.existsSync(possiblePath)) sourceDir = possiblePath;
-      else sourceDir = path.join(process.resourcesPath, 'skills');
-    }
-    if (fs.existsSync(sourceDir)) {
+    const sourceDir = getBuiltinSkillsSourceDir()
+    if (sourceDir && fs.existsSync(sourceDir)) {
       return fs.readdirSync(sourceDir).filter(f => fs.statSync(path.join(sourceDir, f)).isDirectory());
     }
   } catch (e) { console.error(e) }
@@ -1520,7 +1597,8 @@ function createMainWindow() {
   if (VITE_DEV_SERVER_URL) {
     mainWin.loadURL(VITE_DEV_SERVER_URL)
   } else {
-    mainWin.loadFile(path.join(RENDERER_DIST, 'index.html'))
+    const distPath = getRendererDistPath()
+    mainWin.loadFile(path.join(distPath, 'index.html'))
   }
 }
 
@@ -1547,7 +1625,8 @@ function createFloatingBallWindow() {
   if (VITE_DEV_SERVER_URL) {
     floatingBallWin.loadURL(`${VITE_DEV_SERVER_URL}#/floating-ball`)
   } else {
-    floatingBallWin.loadFile(path.join(RENDERER_DIST, 'index.html'), { hash: 'floating-ball' })
+    const distPath = getRendererDistPath()
+    floatingBallWin.loadFile(path.join(distPath, 'index.html'), { hash: 'floating-ball' })
   }
 
   floatingBallWin.on('closed', () => {

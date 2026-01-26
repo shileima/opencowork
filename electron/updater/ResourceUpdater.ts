@@ -2,17 +2,17 @@
  * Resource Updater - 资源动态更新系统
  * 
  * 功能:
- * 1. 检测远程资源版本
+ * 1. 检测远程资源版本（包括前端、技能、MCP等所有内置资源）
  * 2. 增量下载更新的资源文件
- * 3. 热更新前端资源和 resources 目录
- * 4. 支持断点续传和错误重试
+ * 3. 热更新到用户目录，不修改应用安装包
+ * 4. 应用启动时优先从热更新目录加载资源
  */
 
 import { app } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-// import crypto from 'node:crypto'  // 保留以备将来计算文件hash时使用
 import AdmZip from 'adm-zip'
+import { directoryManager } from '../config/DirectoryManager'
 
 interface ResourceManifest {
   version: string
@@ -27,44 +27,65 @@ interface FileInfo {
 }
 
 interface UpdateProgress {
+  stage: 'checking' | 'downloading' | 'extracting' | 'applying' | 'completed'
   total: number
   downloaded: number
   current: string
+  percentage: number
+}
+
+interface UpdateCheckResult {
+  hasUpdate: boolean
+  currentVersion: string
+  latestVersion: string
+  updateSize?: number
+  changelog?: string
+  filesToUpdate?: number
 }
 
 export class ResourceUpdater {
-  private updateDir: string
+  private tempDir: string
+  private hotUpdateDir: string
   private manifestPath: string
-  private githubRepo = 'shileima/opencowork'
+  private githubRepo = 'Safphere/qacowork'
   private updateCheckInterval: NodeJS.Timeout | null = null
 
   constructor() {
-    // 更新文件存储在 userData 目录
-    this.updateDir = path.join(app.getPath('userData'), 'updates')
-    this.manifestPath = path.join(this.updateDir, 'manifest.json')
-    this.ensureUpdateDir()
+    // 临时下载目录
+    this.tempDir = path.join(app.getPath('userData'), 'update-temp')
+    // 热更新目录（资源实际存放位置）
+    this.hotUpdateDir = directoryManager.getHotUpdateDir()
+    // 清单文件路径
+    this.manifestPath = directoryManager.getHotUpdateManifestPath()
+    this.ensureDirs()
   }
 
-  private ensureUpdateDir() {
-    if (!fs.existsSync(this.updateDir)) {
-      fs.mkdirSync(this.updateDir, { recursive: true })
+  private ensureDirs() {
+    if (!fs.existsSync(this.tempDir)) {
+      fs.mkdirSync(this.tempDir, { recursive: true })
     }
+    if (!fs.existsSync(this.hotUpdateDir)) {
+      fs.mkdirSync(this.hotUpdateDir, { recursive: true })
+    }
+  }
+
+  /**
+   * 获取当前有效版本
+   * 优先返回热更新版本，否则返回应用版本
+   */
+  public getCurrentVersion(): string {
+    const hotUpdateVersion = directoryManager.getHotUpdateVersion()
+    return hotUpdateVersion || app.getVersion()
   }
 
   /**
    * 检查资源更新
    */
-  async checkForUpdates(): Promise<{
-    hasUpdate: boolean
-    currentVersion: string
-    latestVersion: string
-    updateSize?: number
-    changelog?: string
-  }> {
+  async checkForUpdates(): Promise<UpdateCheckResult> {
     try {
       console.log('[ResourceUpdater] Checking for resource updates...')
 
-      const currentVersion = app.getVersion()
+      const currentVersion = this.getCurrentVersion()
       const localManifest = this.loadLocalManifest()
 
       // 从 GitHub Releases 获取最新版本的资源清单
@@ -80,9 +101,9 @@ export class ResourceUpdater {
 
       const latestVersion = latestRelease.tag_name.replace(/^v/, '')
       
-      // 版本对比
+      // 版本对比：只有远程版本更新时才提示
       if (this.compareVersions(latestVersion, currentVersion) <= 0) {
-        console.log('[ResourceUpdater] Already on latest version')
+        console.log(`[ResourceUpdater] Already on latest version (${currentVersion})`)
         return {
           hasUpdate: false,
           currentVersion,
@@ -113,7 +134,8 @@ export class ResourceUpdater {
         currentVersion,
         latestVersion,
         updateSize,
-        changelog: latestRelease.body
+        changelog: latestRelease.body,
+        filesToUpdate: filesToUpdate.length
       }
     } catch (error) {
       console.error('[ResourceUpdater] Check for updates failed:', error)
@@ -130,6 +152,15 @@ export class ResourceUpdater {
     try {
       console.log('[ResourceUpdater] Starting resource update...')
 
+      // 阶段1: 检查
+      onProgress?.({
+        stage: 'checking',
+        total: 100,
+        downloaded: 0,
+        current: 'Fetching release info...',
+        percentage: 0
+      })
+
       const latestRelease = await this.fetchLatestRelease()
       if (!latestRelease) {
         throw new Error('Failed to fetch latest release')
@@ -145,11 +176,27 @@ export class ResourceUpdater {
 
       if (filesToUpdate.length === 0) {
         console.log('[ResourceUpdater] No files to update')
+        onProgress?.({
+          stage: 'completed',
+          total: 100,
+          downloaded: 100,
+          current: 'Already up to date',
+          percentage: 100
+        })
         return true
       }
 
+      // 阶段2: 下载
+      onProgress?.({
+        stage: 'downloading',
+        total: filesToUpdate.length,
+        downloaded: 0,
+        current: 'Downloading resource package...',
+        percentage: 10
+      })
+
       // 下载资源包
-      const downloadDir = path.join(this.updateDir, 'download', remoteManifest.version)
+      const downloadDir = path.join(this.tempDir, 'download', remoteManifest.version)
       if (!fs.existsSync(downloadDir)) {
         fs.mkdirSync(downloadDir, { recursive: true })
       }
@@ -159,16 +206,50 @@ export class ResourceUpdater {
         latestRelease,
         filesToUpdate,
         downloadDir,
-        onProgress
+        (extractProgress) => {
+          onProgress?.({
+            stage: 'extracting',
+            total: extractProgress.total,
+            downloaded: extractProgress.downloaded,
+            current: extractProgress.current,
+            percentage: 10 + (extractProgress.downloaded / extractProgress.total) * 60
+          })
+        }
       )
 
-      // 应用更新
-      await this.applyUpdate(downloadDir, remoteManifest)
+      // 阶段3: 应用更新到热更新目录
+      onProgress?.({
+        stage: 'applying',
+        total: filesToUpdate.length,
+        downloaded: 0,
+        current: 'Applying updates...',
+        percentage: 70
+      })
+
+      await this.applyUpdate(downloadDir, remoteManifest, (applyProgress) => {
+        onProgress?.({
+          stage: 'applying',
+          total: applyProgress.total,
+          downloaded: applyProgress.downloaded,
+          current: applyProgress.current,
+          percentage: 70 + (applyProgress.downloaded / applyProgress.total) * 25
+        })
+      })
 
       // 保存新的清单
       this.saveManifest(remoteManifest)
 
+      // 阶段4: 完成
+      onProgress?.({
+        stage: 'completed',
+        total: 100,
+        downloaded: 100,
+        current: 'Update completed!',
+        percentage: 100
+      })
+
       console.log('[ResourceUpdater] Resource update completed successfully')
+      console.log(`[ResourceUpdater] New version: ${remoteManifest.version}`)
       return true
     } catch (error) {
       console.error('[ResourceUpdater] Update failed:', error)
@@ -179,7 +260,7 @@ export class ResourceUpdater {
   /**
    * 自动检查更新(定时)
    */
-  startAutoUpdateCheck(intervalHours: number = 24, onUpdateFound?: (updateInfo: any) => void) {
+  startAutoUpdateCheck(intervalHours: number = 24, onUpdateFound?: (updateInfo: UpdateCheckResult) => void) {
     // 清除旧的定时器
     if (this.updateCheckInterval) {
       clearInterval(this.updateCheckInterval)
@@ -197,8 +278,8 @@ export class ResourceUpdater {
       }
     }
 
-    // 立即检查一次
-    checkAndNotify()
+    // 延迟5秒后检查一次（避免启动时阻塞）
+    setTimeout(checkAndNotify, 5000)
 
     // 设置定时检查
     const interval = intervalHours * 60 * 60 * 1000
@@ -213,6 +294,21 @@ export class ResourceUpdater {
   }
 
   /**
+   * 清理热更新目录（回退到内置版本）
+   */
+  async clearHotUpdate(): Promise<void> {
+    try {
+      if (fs.existsSync(this.hotUpdateDir)) {
+        fs.rmSync(this.hotUpdateDir, { recursive: true, force: true })
+        console.log('[ResourceUpdater] Hot update directory cleared')
+      }
+    } catch (error) {
+      console.error('[ResourceUpdater] Failed to clear hot update:', error)
+      throw error
+    }
+  }
+
+  /**
    * 从 GitHub Releases 获取最新版本信息
    */
   private async fetchLatestRelease(): Promise<any> {
@@ -221,13 +317,15 @@ export class ResourceUpdater {
         `https://api.github.com/repos/${this.githubRepo}/releases/latest`,
         {
           headers: {
-            'User-Agent': 'OpenCowork-App',
+            'User-Agent': 'QACowork-App',
             'Accept': 'application/vnd.github.v3+json'
           }
         }
       )
 
       if (!response.ok) {
+        const errorText = await response.text()
+        console.error(`[ResourceUpdater] GitHub API error: ${response.status} - ${errorText}`)
         throw new Error(`GitHub API returned ${response.status}`)
       }
 
@@ -266,7 +364,7 @@ export class ResourceUpdater {
   }
 
   /**
-   * 加载本地清单
+   * 加载本地清单（从热更新目录）
    */
   private loadLocalManifest(): ResourceManifest | null {
     try {
@@ -283,10 +381,15 @@ export class ResourceUpdater {
   }
 
   /**
-   * 保存清单文件
+   * 保存清单文件到热更新目录
    */
   private saveManifest(manifest: ResourceManifest) {
+    const dir = path.dirname(this.manifestPath)
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true })
+    }
     fs.writeFileSync(this.manifestPath, JSON.stringify(manifest, null, 2))
+    console.log(`[ResourceUpdater] Saved manifest: version ${manifest.version}`)
   }
 
   /**
@@ -297,7 +400,7 @@ export class ResourceUpdater {
     remoteManifest: ResourceManifest
   ): FileInfo[] {
     if (!localManifest) {
-      // 如果没有本地清单,返回所有文件
+      // 如果没有本地清单，返回所有文件
       return Object.values(remoteManifest.files)
     }
 
@@ -316,16 +419,13 @@ export class ResourceUpdater {
   }
 
   /**
-   * 下载文件
-   */
-  /**
    * 下载并解压资源包
    */
   private async downloadAndExtractResources(
     release: any,
     filesToUpdate: FileInfo[],
     downloadDir: string,
-    onProgress?: (progress: UpdateProgress) => void
+    onProgress?: (progress: { total: number; downloaded: number; current: string }) => void
   ): Promise<void> {
     try {
       // 查找资源包
@@ -340,7 +440,7 @@ export class ResourceUpdater {
       console.log(`[ResourceUpdater] Downloading resource package: ${resourceAsset.name}`)
       
       // 下载 zip 包
-      const zipPath = path.join(this.updateDir, 'temp.zip')
+      const zipPath = path.join(this.tempDir, 'temp.zip')
       const response = await fetch(resourceAsset.browser_download_url)
       
       if (!response.ok) {
@@ -377,7 +477,6 @@ export class ResourceUpdater {
           const content = zip.readFile(zipEntry)
           if (content) {
             fs.writeFileSync(targetPath, content)
-            console.log(`[ResourceUpdater] Extracted: ${file.path}`)
           }
         } else {
           console.warn(`[ResourceUpdater] File not found in zip: ${file.path}`)
@@ -390,7 +489,7 @@ export class ResourceUpdater {
       onProgress?.({
         total,
         downloaded: total,
-        current: 'Completed'
+        current: 'Extraction completed'
       })
 
       // 清理临时文件
@@ -403,54 +502,64 @@ export class ResourceUpdater {
   }
 
   /**
-   * 应用更新
+   * 应用更新到热更新目录
+   * 
+   * 重要：不再修改应用安装包，而是写入热更新目录
+   * 应用启动时会优先从热更新目录加载资源
    */
   private async applyUpdate(
     downloadDir: string,
-    manifest: ResourceManifest
+    manifest: ResourceManifest,
+    onProgress?: (progress: { total: number; downloaded: number; current: string }) => void
   ): Promise<void> {
     try {
-      console.log('[ResourceUpdater] Applying updates...')
+      console.log('[ResourceUpdater] Applying updates to hot-update directory...')
 
-      // 备份当前文件
-      const backupDir = path.join(this.updateDir, 'backup', Date.now().toString())
-      fs.mkdirSync(backupDir, { recursive: true })
+      const files = Object.values(manifest.files)
+      let processed = 0
+      const total = files.length
 
-      // 复制新文件到应用目录
-      for (const file of Object.values(manifest.files)) {
+      // 复制新文件到热更新目录
+      for (const file of files) {
         const sourcePath = path.join(downloadDir, file.path)
-        const targetPath = this.resolveAppPath(file.path)
+        const targetPath = path.join(this.hotUpdateDir, file.path)
+
+        onProgress?.({
+          total,
+          downloaded: processed,
+          current: file.path
+        })
 
         if (!fs.existsSync(sourcePath)) {
           console.warn(`[ResourceUpdater] Source file not found: ${sourcePath}`)
+          processed++
           continue
         }
 
-        // 备份旧文件
-        if (fs.existsSync(targetPath)) {
-          const backupPath = path.join(backupDir, file.path)
-          const backupParent = path.dirname(backupPath)
-          if (!fs.existsSync(backupParent)) {
-            fs.mkdirSync(backupParent, { recursive: true })
-          }
-          fs.copyFileSync(targetPath, backupPath)
-        }
-
-        // 复制新文件
+        // 确保目标目录存在
         const targetParent = path.dirname(targetPath)
         if (!fs.existsSync(targetParent)) {
           fs.mkdirSync(targetParent, { recursive: true })
         }
-        fs.copyFileSync(sourcePath, targetPath)
 
-        console.log(`[ResourceUpdater] Updated: ${file.path}`)
+        // 复制文件到热更新目录
+        fs.copyFileSync(sourcePath, targetPath)
+        processed++
       }
+
+      onProgress?.({
+        total,
+        downloaded: total,
+        current: 'All files applied'
+      })
 
       // 清理下载目录
       fs.rmSync(downloadDir, { recursive: true, force: true })
 
-      // 只保留最近3个备份
-      this.cleanupOldBackups(path.dirname(backupDir), 3)
+      // 清理临时目录中的旧下载
+      this.cleanupTempDir()
+
+      console.log(`[ResourceUpdater] Applied ${processed} files to hot-update directory`)
     } catch (error) {
       console.error('[ResourceUpdater] Failed to apply update:', error)
       throw error
@@ -458,54 +567,18 @@ export class ResourceUpdater {
   }
 
   /**
-   * 解析应用内路径
+   * 清理临时下载目录
    */
-  private resolveAppPath(relativePath: string): string {
-    if (relativePath.startsWith('dist/')) {
-      // 前端资源
-      return path.join(process.resourcesPath || app.getAppPath(), relativePath)
-    } else if (relativePath.startsWith('resources/')) {
-      // extraResources
-      return path.join(process.resourcesPath || app.getAppPath(), relativePath)
-    }
-    return path.join(app.getAppPath(), relativePath)
-  }
-
-  /**
-   * 清理旧备份
-   */
-  private cleanupOldBackups(backupRootDir: string, keepCount: number) {
+  private cleanupTempDir() {
     try {
-      if (!fs.existsSync(backupRootDir)) {
-        return
-      }
-
-      const backups = fs.readdirSync(backupRootDir)
-        .map(name => ({
-          name,
-          path: path.join(backupRootDir, name),
-          time: parseInt(name)
-        }))
-        .filter(b => !isNaN(b.time))
-        .sort((a, b) => b.time - a.time)
-
-      // 删除多余的备份
-      for (let i = keepCount; i < backups.length; i++) {
-        fs.rmSync(backups[i].path, { recursive: true, force: true })
-        console.log(`[ResourceUpdater] Removed old backup: ${backups[i].name}`)
+      const downloadRoot = path.join(this.tempDir, 'download')
+      if (fs.existsSync(downloadRoot)) {
+        fs.rmSync(downloadRoot, { recursive: true, force: true })
       }
     } catch (error) {
-      console.error('[ResourceUpdater] Failed to cleanup backups:', error)
+      console.error('[ResourceUpdater] Failed to cleanup temp dir:', error)
     }
   }
-
-  /**
-   * 计算文件 hash (备用方法,当前未使用但保留以备将来需要)
-   */
-  // private calculateFileHash(filePath: string): string {
-  //   const content = fs.readFileSync(filePath)
-  //   return crypto.createHash('sha256').update(content).digest('hex')
-  // }
 
   /**
    * 版本比较
