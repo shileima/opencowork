@@ -163,9 +163,15 @@ export class DirectoryManager {
     public getHotUpdateVersion(): string | null {
         try {
             const manifestPath = this.getHotUpdateManifestPath();
+            console.log(`[DirectoryManager] Checking hot update manifest at: ${manifestPath}`);
             if (fs.existsSync(manifestPath)) {
-                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-                return manifest.version || null;
+                const manifestContent = fs.readFileSync(manifestPath, 'utf-8');
+                const manifest = JSON.parse(manifestContent);
+                const version = manifest.version || null;
+                console.log(`[DirectoryManager] Found hot update version: ${version}`);
+                return version;
+            } else {
+                console.log(`[DirectoryManager] Hot update manifest not found at: ${manifestPath}`);
             }
         } catch (error) {
             console.error('[DirectoryManager] Failed to read hot update version:', error);

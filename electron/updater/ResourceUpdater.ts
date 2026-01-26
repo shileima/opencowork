@@ -80,7 +80,10 @@ export class ResourceUpdater {
    */
   public getCurrentVersion(): string {
     const hotUpdateVersion = directoryManager.getHotUpdateVersion()
-    return hotUpdateVersion || app.getVersion()
+    const appVersion = app.getVersion()
+    const effectiveVersion = hotUpdateVersion || appVersion
+    console.log(`[ResourceUpdater] getCurrentVersion: hotUpdate=${hotUpdateVersion}, app=${appVersion}, effective=${effectiveVersion}`)
+    return effectiveVersion
   }
 
   /**
@@ -641,12 +644,26 @@ export class ResourceUpdater {
    * 保存清单文件到热更新目录
    */
   private saveManifest(manifest: ResourceManifest) {
-    const dir = path.dirname(this.manifestPath)
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true })
+    try {
+      const dir = path.dirname(this.manifestPath)
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true })
+      }
+      const manifestContent = JSON.stringify(manifest, null, 2)
+      fs.writeFileSync(this.manifestPath, manifestContent, 'utf-8')
+      console.log(`[ResourceUpdater] Saved manifest: version ${manifest.version} to ${this.manifestPath}`)
+      
+      // 验证保存是否成功
+      if (fs.existsSync(this.manifestPath)) {
+        const savedManifest = JSON.parse(fs.readFileSync(this.manifestPath, 'utf-8'))
+        console.log(`[ResourceUpdater] Verified manifest saved: version ${savedManifest.version}`)
+      } else {
+        console.error(`[ResourceUpdater] ERROR: Manifest file not found after save: ${this.manifestPath}`)
+      }
+    } catch (error) {
+      console.error(`[ResourceUpdater] ERROR: Failed to save manifest:`, error)
+      throw error
     }
-    fs.writeFileSync(this.manifestPath, JSON.stringify(manifest, null, 2))
-    console.log(`[ResourceUpdater] Saved manifest: version ${manifest.version}`)
   }
 
   /**
