@@ -85,6 +85,66 @@ jobs:
           npx electron-builder --${{ matrix.platform }} --publish never
 
       -
+        name: Generate Resource Manifest
+        if: success()
+        run: npm run build:manifest
+
+      -
+        name: Package Resources
+        if: success() && matrix.platform == 'linux'  # 只在 Linux 平台执行一次
+        run: |
+          # 提取版本号
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Packaging resources for version ${VERSION}"
+          
+          # 创建临时目录
+          mkdir -p temp-resources
+          
+          # 复制前端资源
+          if [ -d "dist" ]; then
+            echo "Copying dist/"
+            cp -r dist temp-resources/
+          fi
+          
+          # 创建 resources 目录
+          mkdir -p temp-resources/resources
+          
+          # 复制各个资源子目录(使用 || true 避免目录不存在时失败)
+          if [ -d "resources/skills" ]; then
+            echo "Copying resources/skills/"
+            cp -r resources/skills temp-resources/resources/
+          fi
+          
+          if [ -d "resources/mcp" ]; then
+            echo "Copying resources/mcp/"
+            cp -r resources/mcp temp-resources/resources/
+          fi
+          
+          if [ -d "resources/node" ]; then
+            echo "Copying resources/node/"
+            cp -r resources/node temp-resources/resources/
+          fi
+          
+          if [ -d "resources/playwright" ]; then
+            echo "Copying resources/playwright/"
+            cp -r resources/playwright temp-resources/resources/
+          fi
+          
+          # 打包为 zip
+          cd temp-resources
+          zip -r ../resources-v${VERSION}.zip . -x "*.DS_Store" -x "__MACOSX/*"
+          cd ..
+          
+          # 验证 zip 文件
+          ls -lh resources-v${VERSION}.zip
+          unzip -l resources-v${VERSION}.zip | head -20
+          
+          # 清理临时目录
+          rm -rf temp-resources
+          
+          echo "Resource package created: resources-v${VERSION}.zip"
+
+      -
         name: Upload executables to Release
         uses: softprops/action-gh-release@v2
         if: success()
@@ -94,5 +154,7 @@ jobs:
             release/*/OpenCowork*.exe
             release/*/OpenCowork*.AppImage
             release/*/OpenCowork*.deb
+            resource-manifest.json
+            resources-*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
