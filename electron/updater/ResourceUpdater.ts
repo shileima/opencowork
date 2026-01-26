@@ -35,7 +35,7 @@ interface UpdateProgress {
 export class ResourceUpdater {
   private updateDir: string
   private manifestPath: string
-  private githubRepo = 'Safphere/opencowork'
+  private githubRepo = 'shileima/opencowork'
   private updateCheckInterval: NodeJS.Timeout | null = null
 
   constructor() {
