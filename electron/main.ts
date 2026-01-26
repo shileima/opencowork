@@ -729,8 +729,9 @@ ipcMain.handle('playwright:get-status', async () => {
     const status = await playwrightManager.getInstallStatus()
     return { success: true, ...status }
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     console.error('Get Playwright status failed:', error)
-    return { success: false, error: error.message }
+    return { success: false, error: errorMessage }
   }
 })
 
@@ -760,8 +761,9 @@ ipcMain.handle('playwright:install', async () => {
 
     return result
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     console.error('Install Playwright failed:', error)
-    return { success: false, error: error.message }
+    return { success: false, error: errorMessage }
   }
 })
 
@@ -785,8 +787,9 @@ ipcMain.handle('playwright:uninstall', async () => {
 
     return result
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     console.error('Uninstall Playwright failed:', error)
-    return { success: false, error: error.message }
+    return { success: false, error: errorMessage }
   }
 })
 

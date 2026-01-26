@@ -24,7 +24,8 @@ export function PlaywrightPrompt({ onDismiss }: PlaywrightPromptProps) {
     checkStatus()
 
     // 监听状态更新
-    const removeStatusListener = window.ipcRenderer.on('playwright:status', (_event, newStatus: PlaywrightStatus) => {
+    const removeStatusListener = window.ipcRenderer.on('playwright:status', (_event, ...args) => {
+      const newStatus = args[0] as PlaywrightStatus
       setStatus(newStatus)
       if (newStatus.installed) {
         setInstalling(false)
@@ -32,7 +33,8 @@ export function PlaywrightPrompt({ onDismiss }: PlaywrightPromptProps) {
     })
 
     // 监听安装进度
-    const removeProgressListener = window.ipcRenderer.on('playwright:install-progress', (_event, message: string) => {
+    const removeProgressListener = window.ipcRenderer.on('playwright:install-progress', (_event, ...args) => {
+      const message = args[0] as string
       setProgress(message)
     })
 
@@ -44,13 +46,20 @@ export function PlaywrightPrompt({ onDismiss }: PlaywrightPromptProps) {
 
   const checkStatus = async () => {
     try {
-      const result = await window.ipcRenderer.invoke('playwright:get-status')
+      const result = await window.ipcRenderer.invoke('playwright:get-status') as {
+        success: boolean
+        playwrightInstalled?: boolean
+        browserInstalled?: boolean
+        needsInstall?: boolean
+        error?: string
+      }
+      
       if (result.success) {
         setStatus({
           installed: !result.needsInstall,
-          playwrightInstalled: result.playwrightInstalled,
-          browserInstalled: result.browserInstalled,
-          needsInstall: result.needsInstall
+          playwrightInstalled: result.playwrightInstalled || false,
+          browserInstalled: result.browserInstalled || false,
+          needsInstall: result.needsInstall || false
         })
       }
     } catch (err) {
@@ -64,7 +73,10 @@ export function PlaywrightPrompt({ onDismiss }: PlaywrightPromptProps) {
     setProgress('准备安装...')
 
     try {
-      const result = await window.ipcRenderer.invoke('playwright:install')
+      const result = await window.ipcRenderer.invoke('playwright:install') as {
+        success: boolean
+        error?: string
+      }
       
       if (!result.success) {
         setError(result.error || '安装失败')
