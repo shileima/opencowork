@@ -64,7 +64,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          # Disable cache to ensure fresh install with updated package-lock.json
 
       -
         name: Install dependencies
