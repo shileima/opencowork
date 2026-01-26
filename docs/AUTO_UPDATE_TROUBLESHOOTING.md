@@ -4,7 +4,23 @@
 
 在推送 `v0.0.14-test` 标签后,GitHub Actions 工作流失败了。
 
+### 问题1: 文件名匹配错误 (已修复)
+
+**失败原因:** GitHub Actions 无法找到安装包文件
+
+### 问题2: package-lock.json 不同步 (已修复)
+
+**失败原因:** `npm ci` 要求 `package.json` 和 `package-lock.json` 完全同步
+
+错误信息:
+```
+npm ci can only install packages when your package.json and 
+package-lock.json or npm-shrinkwrap.json are in sync.
+```
+
 ## 🔍 原因分析
+
+### 问题1: 文件名不匹配
 
 查看代码发现问题出在 `.github/workflows/release.yml` 的文件上传步骤:
 
@@ -23,7 +39,7 @@ files: |
 
 ## ✅ 解决方案
 
-修改文件匹配模式为通配符,支持任意文件名:
+### 修复1: 文件名匹配模式
 
 ```yaml
 files: |
@@ -35,7 +51,27 @@ files: |
   resources-*.zip
 ```
 
+### 修复2: 更新 package-lock.json
+
+当添加新依赖后,需要更新 `package-lock.json`:
+
+```bash
+# 更新 package-lock.json
+npm install
+
+# 提交更改
+git add package-lock.json
+git commit -m "fix: 更新 package-lock.json"
+git push opencowork master
+
+# 重新推送标签
+git push opencowork :refs/tags/v0.0.14-test
+git push opencowork v0.0.14-test
+```
+
 ## 🔧 已修复
+
+### 第一次修复 (文件名匹配)
 
 **提交信息:**
 ```
@@ -48,6 +84,20 @@ fix: 修正 GitHub Actions 文件名匹配模式
 
 **修改文件:**
 - `.github/workflows/release.yml` (line 152-157)
+
+### 第二次修复 (依赖同步)
+
+**提交信息:**
+```
+fix: 更新 package-lock.json 以包含 adm-zip 依赖
+
+- 添加 adm-zip@0.5.10 及其依赖
+- 修复 GitHub Actions npm ci 失败问题
+- 同步 package.json 和 package-lock.json
+```
+
+**修改文件:**
+- `package-lock.json` (添加 adm-zip 相关依赖)
 
 ## 📝 验证步骤
 
