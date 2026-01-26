@@ -906,9 +906,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             <div className="flex-1 overflow-y-auto px-4 py-6" ref={scrollRef}>
                 <div className="max-w-xl mx-auto space-y-5">
                     {/* Playwright Installation Prompt - 在 automation 模式或启动时显示 */}
-                    {(mode === 'automation' || relevantHistory.length === 0) && (
-                        <PlaywrightPrompt />
-                    )}
+                    <PlaywrightPrompt />
                     
                     {relevantHistory.length === 0 && !streamingText ? (
                         <EmptyState mode={mode} workingDir={workingDir} />
