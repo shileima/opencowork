@@ -387,6 +387,55 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         return () => document.removeEventListener('switch-settings-tab', handleSwitch as EventListener);
     }, []);
 
+    // Listen for trigger resource update event (from CoworkView banner)
+    useEffect(() => {
+        const handleTriggerUpdate = async () => {
+            console.log('[SettingsView] Trigger resource update event received');
+            // 切换到关于页
+            setActiveTab('about');
+            
+            // 如果没有更新信息，先检查更新
+            if (!resourceUpdateInfo?.hasUpdate) {
+                console.log('[SettingsView] No update info, checking for updates first...');
+                setCheckingResourceUpdate(true);
+                setResourceUpdateInfo(null);
+                try {
+                    const result = await window.ipcRenderer?.invoke('resource:check-update') as any;
+                    if (result && result.success && result.hasUpdate) {
+                        setResourceUpdateInfo({
+                            hasUpdate: result.hasUpdate,
+                            currentVersion: result.currentVersion,
+                            latestVersion: result.latestVersion,
+                            updateSize: result.updateSize,
+                            changelog: result.changelog
+                        });
+                        // 自动触发更新
+                        setTimeout(() => {
+                            handlePerformResourceUpdate();
+                        }, 500);
+                    } else {
+                        setResourceUpdateInfo({
+                            hasUpdate: false,
+                            currentVersion: result?.currentVersion || '',
+                            latestVersion: result?.latestVersion || ''
+                        });
+                    }
+                } catch (error) {
+                    console.error('Check resource update failed', error);
+                } finally {
+                    setCheckingResourceUpdate(false);
+                }
+            } else {
+                // 已有更新信息，直接执行更新
+                console.log('[SettingsView] Update info exists, performing update...');
+                handlePerformResourceUpdate();
+            }
+        };
+        
+        document.addEventListener('trigger-resource-update', handleTriggerUpdate);
+        return () => document.removeEventListener('trigger-resource-update', handleTriggerUpdate);
+    }, [resourceUpdateInfo]);
+
     useEffect(() => {
         setIsLoading(true);
         // 获取用户角色和标识符

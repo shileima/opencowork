@@ -946,7 +946,10 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                         <button
                                             onClick={() => {
                                                 onOpenSettings();
-                                                // 切换到关于标签会在 SettingsView 的监听器中处理
+                                                // 延迟触发，确保设置页面已打开
+                                                setTimeout(() => {
+                                                    document.dispatchEvent(new CustomEvent('trigger-resource-update'));
+                                                }, 100);
                                             }}
                                             className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors flex items-center gap-2"
                                         >
