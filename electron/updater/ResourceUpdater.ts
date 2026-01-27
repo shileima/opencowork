@@ -109,6 +109,9 @@ export class ResourceUpdater {
 
       const currentVersion = this.getCurrentVersion()
       const localManifest = this.loadLocalManifest()
+      
+      console.log(`[ResourceUpdater] Current version: ${currentVersion}`)
+      console.log(`[ResourceUpdater] Local manifest: ${localManifest ? `found (version ${localManifest.version}, ${Object.keys(localManifest.files).length} files)` : 'not found (using built-in resources)'}`)
 
       // 从 GitHub Releases 获取最新版本的资源清单
       const latestRelease = await this.fetchLatestRelease()
@@ -123,6 +126,7 @@ export class ResourceUpdater {
       }
 
       const latestVersion = latestRelease.tag_name.replace(/^v/, '')
+      console.log(`[ResourceUpdater] Latest release version: ${latestVersion}`)
       
       // 版本对比：如果远程版本更旧，直接返回无更新
       const versionCompare = this.compareVersions(latestVersion, currentVersion)
@@ -147,6 +151,8 @@ export class ResourceUpdater {
         }
       }
 
+      console.log(`[ResourceUpdater] Remote manifest: version ${remoteManifest.version}, ${Object.keys(remoteManifest.files).length} files`)
+
       // 如果远程版本更新，肯定有更新
       if (versionCompare > 0) {
         const filesToUpdate = this.calculateUpdateFiles(localManifest, remoteManifest)
@@ -154,6 +160,10 @@ export class ResourceUpdater {
         
         console.log(`[ResourceUpdater] Found newer version: ${latestVersion} > ${currentVersion}`)
         console.log(`[ResourceUpdater] Found ${filesToUpdate.length} files to update (${this.formatBytes(updateSize)})`)
+        
+        if (filesToUpdate.length === 0) {
+          console.warn(`[ResourceUpdater] WARNING: Newer version detected but no files to update. This may indicate a manifest issue.`)
+        }
 
         const hasUpdate = filesToUpdate.length > 0
         console.log(`[ResourceUpdater] Check result: hasUpdate=${hasUpdate}, current=${currentVersion}, latest=${latestVersion}, files=${filesToUpdate.length}`)
@@ -177,6 +187,8 @@ export class ResourceUpdater {
         console.log(`[ResourceUpdater] Update size: ${this.formatBytes(updateSize)}`)
       } else {
         console.log(`[ResourceUpdater] Already on latest version (${currentVersion}) with no file changes`)
+        console.log(`[ResourceUpdater] Local manifest has ${localManifest ? Object.keys(localManifest.files).length : 0} files, remote has ${Object.keys(remoteManifest.files).length} files`)
+        console.log(`[ResourceUpdater] All file hashes match - no update needed`)
       }
 
       const hasUpdate = filesToUpdate.length > 0
@@ -675,19 +687,31 @@ export class ResourceUpdater {
   ): FileInfo[] {
     if (!localManifest) {
       // 如果没有本地清单，返回所有文件
+      console.log(`[ResourceUpdater] No local manifest found, all ${Object.keys(remoteManifest.files).length} files need update`)
       return Object.values(remoteManifest.files)
     }
 
     const filesToUpdate: FileInfo[] = []
+    let matchedCount = 0
+    let missingCount = 0
+    let hashMismatchCount = 0
 
     for (const [filePath, remoteFile] of Object.entries(remoteManifest.files)) {
       const localFile = localManifest.files[filePath]
 
       // 文件不存在或 hash 不匹配
-      if (!localFile || localFile.hash !== remoteFile.hash) {
+      if (!localFile) {
         filesToUpdate.push(remoteFile)
+        missingCount++
+      } else if (localFile.hash !== remoteFile.hash) {
+        filesToUpdate.push(remoteFile)
+        hashMismatchCount++
+      } else {
+        matchedCount++
       }
     }
+
+    console.log(`[ResourceUpdater] File comparison: ${matchedCount} matched, ${missingCount} missing, ${hashMismatchCount} hash mismatched, ${filesToUpdate.length} total to update`)
 
     return filesToUpdate
   }
