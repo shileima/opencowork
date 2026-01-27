@@ -1683,8 +1683,11 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                             <p>当前: v{resourceUpdateInfo.currentVersion}</p>
                                                             <p>最新: v{resourceUpdateInfo.latestVersion}</p>
                                                             {resourceUpdateInfo.updateSize && (
-                                                                <p>大小: {formatBytes(resourceUpdateInfo.updateSize)}</p>
+                                                                <p>变更文件: {formatBytes(resourceUpdateInfo.updateSize)}</p>
                                                             )}
+                                                            <p className="text-amber-600/70 dark:text-amber-400/70 text-[10px]">
+                                                                注: 首次更新需下载完整资源包
+                                                            </p>
                                                         </div>
                                                         <button
                                                             onClick={handlePerformResourceUpdate}
