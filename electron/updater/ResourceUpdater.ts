@@ -717,7 +717,34 @@ export class ResourceUpdater {
   }
 
   /**
+   * 获取缓存的 zip 包路径
+   */
+  private getCachedZipPath(version: string): string {
+    return path.join(this.tempDir, `resources-${version}.zip`)
+  }
+
+  /**
+   * 检查是否有缓存的 zip 包
+   */
+  private hasCachedZip(version: string, expectedSize: number): boolean {
+    const cachedPath = this.getCachedZipPath(version)
+    if (!fs.existsSync(cachedPath)) {
+      return false
+    }
+    // 验证文件大小
+    const stats = fs.statSync(cachedPath)
+    return stats.size === expectedSize
+  }
+
+  /**
    * 下载并解压资源包
+   * 
+   * 注意：当前实现会下载完整的资源包，然后只解压需要更新的文件。
+   * 这是因为 GitHub Releases 不支持单文件下载，资源包是预编译的产物。
+   * 
+   * 优化措施：
+   * 1. 缓存已下载的 zip 包，相同版本不重复下载
+   * 2. 只解压需要更新的文件
    */
   private async downloadAndExtractResources(
     release: any,
@@ -735,151 +762,170 @@ export class ResourceUpdater {
         throw new Error('Resource package not found in release')
       }
 
-      console.log(`[ResourceUpdater] Downloading resource package: ${resourceAsset.name} (${this.formatBytes(resourceAsset.size)})`)
-      
-      // 下载 zip 包（支持重试和进度显示）
-      const zipPath = path.join(this.tempDir, 'temp.zip')
+      const version = release.tag_name.replace(/^v/, '')
+      const zipPath = this.getCachedZipPath(version)
       const totalSize = resourceAsset.size || 0
-      let retries = 3
-      let downloaded = 0
+      const updateSize = filesToUpdate.reduce((sum, file) => sum + file.size, 0)
+
+      console.log(`[ResourceUpdater] Resource package: ${resourceAsset.name} (${this.formatBytes(totalSize)})`)
+      console.log(`[ResourceUpdater] Files to update: ${filesToUpdate.length} (${this.formatBytes(updateSize)})`)
       
-      for (let attempt = 0; attempt < retries; attempt++) {
-        let timeoutId: NodeJS.Timeout | null = null
-        try {
-          const headers: Record<string, string> = {}
-          if (this.githubToken) {
-            headers['Authorization'] = `token ${this.githubToken}`
-          }
-          
-          // 创建超时控制器（大文件需要更长的超时时间：每 MB 10 秒，最少 60 秒，最多 30 分钟）
-          const timeoutMs = Math.min(Math.max(totalSize / 1024 / 1024 * 10000, 60000), 30 * 60 * 1000)
-          const abortController = new AbortController()
-          timeoutId = setTimeout(() => {
-            abortController.abort()
-          }, timeoutMs)
-          
-          console.log(`[ResourceUpdater] Download attempt ${attempt + 1}/${retries}, timeout: ${Math.round(timeoutMs / 1000)}s`)
-          
-          const response = await fetch(resourceAsset.browser_download_url, {
-            headers,
-            signal: abortController.signal
-          })
-          
-          if (timeoutId) {
-            clearTimeout(timeoutId)
-            timeoutId = null
-          }
-          
-          if (!response.ok) {
-            // 处理速率限制
-            if (response.status === 403) {
-              const errorText = await response.text()
-              if (errorText.includes('rate limit')) {
-                const resetTime = response.headers.get('x-ratelimit-reset')
-                const resetDate = resetTime ? new Date(parseInt(resetTime) * 1000) : null
-                const waitMinutes = resetDate ? Math.ceil((resetDate.getTime() - Date.now()) / 60000) : 60
-                
-                console.warn(`[ResourceUpdater] Rate limit exceeded while downloading. Reset in ~${waitMinutes} minutes`)
-                
-                if (attempt < retries - 1) {
-                  const waitTime = Math.min(60000 * Math.pow(2, attempt), 300000)
-                  console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
-                  await new Promise(resolve => setTimeout(resolve, waitTime))
-                  continue
+      // 检查是否有缓存的 zip 包
+      if (this.hasCachedZip(version, totalSize)) {
+        console.log(`[ResourceUpdater] Using cached zip package for version ${version}`)
+        onProgress?.({
+          total: 100,
+          downloaded: 100,
+          current: `使用缓存的资源包 v${version}`
+        })
+      } else {
+        // 清理旧版本的缓存
+        this.cleanupOldCaches(version)
+        
+        console.log(`[ResourceUpdater] Downloading resource package: ${resourceAsset.name}`)
+        console.log(`[ResourceUpdater] Note: Downloading full package (${this.formatBytes(totalSize)}), will extract ${filesToUpdate.length} files (${this.formatBytes(updateSize)})`)
+        
+        let retries = 3
+        let downloaded = 0
+        
+        for (let attempt = 0; attempt < retries; attempt++) {
+          let timeoutId: NodeJS.Timeout | null = null
+          try {
+            const headers: Record<string, string> = {}
+            if (this.githubToken) {
+              headers['Authorization'] = `token ${this.githubToken}`
+            }
+            
+            // 创建超时控制器（大文件需要更长的超时时间：每 MB 10 秒，最少 60 秒，最多 30 分钟）
+            const timeoutMs = Math.min(Math.max(totalSize / 1024 / 1024 * 10000, 60000), 30 * 60 * 1000)
+            const abortController = new AbortController()
+            timeoutId = setTimeout(() => {
+              abortController.abort()
+            }, timeoutMs)
+            
+            console.log(`[ResourceUpdater] Download attempt ${attempt + 1}/${retries}, timeout: ${Math.round(timeoutMs / 1000)}s`)
+            
+            const response = await fetch(resourceAsset.browser_download_url, {
+              headers,
+              signal: abortController.signal
+            })
+            
+            if (timeoutId) {
+              clearTimeout(timeoutId)
+              timeoutId = null
+            }
+            
+            if (!response.ok) {
+              // 处理速率限制
+              if (response.status === 403) {
+                const errorText = await response.text()
+                if (errorText.includes('rate limit')) {
+                  const resetTime = response.headers.get('x-ratelimit-reset')
+                  const resetDate = resetTime ? new Date(parseInt(resetTime) * 1000) : null
+                  const waitMinutes = resetDate ? Math.ceil((resetDate.getTime() - Date.now()) / 60000) : 60
+                  
+                  console.warn(`[ResourceUpdater] Rate limit exceeded while downloading. Reset in ~${waitMinutes} minutes`)
+                  
+                  if (attempt < retries - 1) {
+                    const waitTime = Math.min(60000 * Math.pow(2, attempt), 300000)
+                    console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
+                    await new Promise(resolve => setTimeout(resolve, waitTime))
+                    continue
+                  }
                 }
               }
+              
+              if (attempt === retries - 1) {
+                throw new Error(`Failed to download resource package: ${response.status}`)
+              }
+              
+              // 其他错误，等待后重试
+              const waitTime = 2000 * Math.pow(2, attempt)
+              await new Promise(resolve => setTimeout(resolve, waitTime))
+              continue
+            }
+
+            // 流式下载，显示进度
+            const contentLength = parseInt(response.headers.get('content-length') || '0', 10)
+            const reader = response.body?.getReader()
+            
+            if (!reader) {
+              throw new Error('Response body is not readable')
+            }
+
+            const chunks: Uint8Array[] = []
+            downloaded = 0
+
+            while (true) {
+              const { done, value } = await reader.read()
+              
+              if (done) {
+                break
+              }
+              
+              chunks.push(value)
+              downloaded += value.length
+              
+              // 更新下载进度
+              if (onProgress && contentLength > 0) {
+                const percentage = Math.round((downloaded / contentLength) * 100)
+                onProgress({
+                  total: contentLength,
+                  downloaded,
+                  current: `下载资源包中: ${this.formatBytes(downloaded)} / ${this.formatBytes(contentLength)} (${percentage}%)`
+                })
+              }
+            }
+
+            // 合并所有 chunks 并写入文件
+            const buffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)))
+            fs.writeFileSync(zipPath, buffer)
+            
+            console.log(`[ResourceUpdater] Download completed: ${this.formatBytes(downloaded)}`)
+            break // 下载成功，退出重试循环
+            
+          } catch (error: any) {
+            if (timeoutId) {
+              clearTimeout(timeoutId)
+              timeoutId = null
+            }
+            
+            // 检查是否是超时错误
+            if (error.name === 'AbortError' || error.code === 'UND_ERR_CONNECT_TIMEOUT') {
+              console.error(`[ResourceUpdater] Download timeout (attempt ${attempt + 1}/${retries})`)
+              if (attempt === retries - 1) {
+                throw new Error(`Download timeout after ${retries} attempts. File may be too large or network too slow.`)
+              }
+              // 等待后重试
+              const waitTime = 5000 * Math.pow(2, attempt)
+              console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
+              await new Promise(resolve => setTimeout(resolve, waitTime))
+              continue
             }
             
             if (attempt === retries - 1) {
-              throw new Error(`Failed to download resource package: ${response.status}`)
+              throw error
             }
             
             // 其他错误，等待后重试
             const waitTime = 2000 * Math.pow(2, attempt)
             await new Promise(resolve => setTimeout(resolve, waitTime))
-            continue
           }
-
-          // 流式下载，显示进度
-          const contentLength = parseInt(response.headers.get('content-length') || '0', 10)
-          const reader = response.body?.getReader()
-          
-          if (!reader) {
-            throw new Error('Response body is not readable')
-          }
-
-          const chunks: Uint8Array[] = []
-          downloaded = 0
-
-          while (true) {
-            const { done, value } = await reader.read()
-            
-            if (done) {
-              break
-            }
-            
-            chunks.push(value)
-            downloaded += value.length
-            
-            // 更新下载进度
-            if (onProgress && contentLength > 0) {
-              const percentage = Math.round((downloaded / contentLength) * 100)
-              onProgress({
-                total: contentLength,
-                downloaded,
-                current: `Downloading: ${this.formatBytes(downloaded)} / ${this.formatBytes(contentLength)} (${percentage}%)`
-              })
-            }
-          }
-
-          // 合并所有 chunks 并写入文件
-          const buffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)))
-          fs.writeFileSync(zipPath, buffer)
-          
-          console.log(`[ResourceUpdater] Download completed: ${this.formatBytes(downloaded)}`)
-          break // 下载成功，退出重试循环
-          
-        } catch (error: any) {
-          if (timeoutId) {
-            clearTimeout(timeoutId)
-            timeoutId = null
-          }
-          
-          // 检查是否是超时错误
-          if (error.name === 'AbortError' || error.code === 'UND_ERR_CONNECT_TIMEOUT') {
-            console.error(`[ResourceUpdater] Download timeout (attempt ${attempt + 1}/${retries})`)
-            if (attempt === retries - 1) {
-              throw new Error(`Download timeout after ${retries} attempts. File may be too large or network too slow.`)
-            }
-            // 等待后重试
-            const waitTime = 5000 * Math.pow(2, attempt)
-            console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
-            await new Promise(resolve => setTimeout(resolve, waitTime))
-            continue
-          }
-          
-          if (attempt === retries - 1) {
-            throw error
-          }
-          
-          // 其他错误，等待后重试
-          const waitTime = 2000 * Math.pow(2, attempt)
-          await new Promise(resolve => setTimeout(resolve, waitTime))
         }
       }
 
-      console.log(`[ResourceUpdater] Extracting ${filesToUpdate.length} files...`)
+      console.log(`[ResourceUpdater] Extracting ${filesToUpdate.length} files (${this.formatBytes(updateSize)})...`)
 
       // 解压指定文件
       const zip = new AdmZip(zipPath)
       let extracted = 0
-      const total = filesToUpdate.length
+      let extractedSize = 0
 
       for (const file of filesToUpdate) {
         onProgress?.({
-          total,
-          downloaded: extracted,
-          current: file.path
+          total: updateSize,
+          downloaded: extractedSize,
+          current: `解压文件: ${file.path}`
         })
 
         const zipEntry = zip.getEntry(file.path)
@@ -901,18 +947,17 @@ export class ResourceUpdater {
         }
 
         extracted++
+        extractedSize += file.size
       }
 
       // 最后一次进度更新
       onProgress?.({
-        total,
-        downloaded: total,
-        current: 'Extraction completed'
+        total: updateSize,
+        downloaded: updateSize,
+        current: `解压完成: ${extracted} 个文件`
       })
 
-      // 清理临时文件
-      fs.unlinkSync(zipPath)
-      console.log(`[ResourceUpdater] Extraction completed`)
+      console.log(`[ResourceUpdater] Extraction completed: ${extracted} files (${this.formatBytes(extractedSize)})`)
     } catch (error) {
       console.error('[ResourceUpdater] Failed to download and extract resources:', error)
       throw error
@@ -981,6 +1026,35 @@ export class ResourceUpdater {
     } catch (error) {
       console.error('[ResourceUpdater] Failed to apply update:', error)
       throw error
+    }
+  }
+
+  /**
+   * 清理旧版本的缓存 zip 包
+   */
+  private cleanupOldCaches(currentVersion: string) {
+    try {
+      if (!fs.existsSync(this.tempDir)) {
+        return
+      }
+      
+      const files = fs.readdirSync(this.tempDir)
+      const currentZipName = `resources-${currentVersion}.zip`
+      
+      for (const file of files) {
+        // 只清理 resources-*.zip 文件，保留当前版本
+        if (file.startsWith('resources-') && file.endsWith('.zip') && file !== currentZipName) {
+          const filePath = path.join(this.tempDir, file)
+          try {
+            fs.unlinkSync(filePath)
+            console.log(`[ResourceUpdater] Cleaned up old cache: ${file}`)
+          } catch (e) {
+            console.warn(`[ResourceUpdater] Failed to delete old cache ${file}:`, e)
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[ResourceUpdater] Failed to cleanup old caches:', error)
     }
   }
 
