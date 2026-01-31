@@ -17,14 +17,14 @@ export class PlaywrightManager {
   private browsersPath: string
 
   constructor() {
-    // 注意：Playwright 安装在 process.resourcesPath/playwright 目录下
-    // 而不是 process.resourcesPath/resources/playwright
-    // 这与 PlaywrightPath.ts 中的路径保持一致
+    // 打包后：playwright 包在 Resources，浏览器在 userData（未签名的 Chromium 不能打入 app bundle）
     this.playwrightPath = app.isPackaged
       ? path.join(process.resourcesPath, 'playwright')
       : path.join(app.getAppPath(), 'resources', 'playwright')
-    
-    this.browsersPath = path.join(this.playwrightPath, 'browsers')
+
+    this.browsersPath = app.isPackaged
+      ? path.join(app.getPath('userData'), 'playwright', 'browsers')
+      : path.join(this.playwrightPath, 'browsers')
   }
 
   /**
@@ -147,6 +147,12 @@ export class PlaywrightManager {
   ): Promise<{ success: boolean; error?: string }> {
     try {
       onProgress?.('开始安装 Chromium 浏览器...')
+
+      // 确保 userData 下的 playwright 目录存在（打包后浏览器安装到此目录）
+      const browsersDir = path.dirname(this.browsersPath)
+      if (!fs.existsSync(browsersDir)) {
+        fs.mkdirSync(browsersDir, { recursive: true })
+      }
 
       const nodePath = getBuiltinNodePath()
       
