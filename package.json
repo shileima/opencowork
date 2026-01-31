@@ -1,7 +1,7 @@
 {
   "name": "qacowork",
   "private": true,
-  "version": "0.0.30",
+  "version": "0.0.32",
   "description": "QACowork - 你的数字测试同事",
   "author": {
     "name": "shileima",
@@ -57,7 +57,7 @@
     "@typescript-eslint/parser": "^7.1.1",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.23",
-    "electron": "^30.0.1",
+    "electron": "30.5.1",
     "electron-builder": "^24.13.3",
     "eslint": "^8.57.0",
     "eslint-plugin-react-hooks": "^4.6.0",
@@ -71,5 +71,8 @@
     "vite-plugin-electron": "^0.28.6",
     "vite-plugin-electron-renderer": "^0.14.5"
   },
-  "main": "dist-electron/main.js"
+  "main": "dist-electron/main.js",
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron"]
+  }
 }
