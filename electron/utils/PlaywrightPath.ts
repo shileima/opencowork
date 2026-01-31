@@ -23,23 +23,18 @@ export function getBuiltinPlaywrightPath(): string | null {
 }
 
 /**
- * 获取内置 Playwright 浏览器路径
- * 
- * @returns Playwright 浏览器路径，如果不存在则返回 null
+ * 获取 Playwright 浏览器路径
+ *
+ * 打包后：使用 userData 目录，避免将未签名的 Chromium 打入 app bundle（会导致 macOS Hardened Runtime 拒绝启动）
+ * 开发环境：返回 null，使用默认路径（~/.cache/ms-playwright/）
+ *
+ * @returns Playwright 浏览器路径
  */
 export function getBuiltinPlaywrightBrowsersPath(): string | null {
   if (!app.isPackaged) {
-    // 开发环境：使用默认路径（~/.cache/ms-playwright/）
     return null;
   }
-
-  const browsersPath = path.join(process.resourcesPath, 'playwright', 'browsers');
-  
-  if (fs.existsSync(browsersPath)) {
-    return browsersPath;
-  }
-
-  return null;
+  return path.join(app.getPath('userData'), 'playwright', 'browsers');
 }
 
 /**
@@ -72,7 +67,7 @@ export function getPlaywrightEnvVars(): Record<string, string> {
   }
   
   if (browsersPath) {
-    // 设置 PLAYWRIGHT_BROWSERS_PATH 让 Playwright 使用内置浏览器
+    // 设置 PLAYWRIGHT_BROWSERS_PATH（打包后为 userData/playwright/browsers，需首次运行时下载）
     env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
   }
   

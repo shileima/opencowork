@@ -111,10 +111,10 @@ if (builderConfig.includes('resources/mcp')) {
     console.error('❌ MCP directory NOT included in extraResources');
 }
 
-if (builderConfig.includes('resources/playwright')) {
-    console.log('✅ Playwright directory included in extraResources');
+if (builderConfig.includes('resources/playwright') || builderConfig.includes('playwright/package')) {
+    console.log('✅ Playwright package included in extraResources');
 } else {
-    console.warn('⚠️  Playwright directory NOT included in extraResources');
+    console.warn('⚠️  Playwright package NOT included in extraResources');
 }
 
 // Check SkillManager implementation
@@ -148,50 +148,20 @@ for (const check of checks) {
 
 console.log(`\n✅ SkillManager checks: ${skillManagerChecks}/${checks.length}`);
 
-// Check Playwright browsers
-console.log('\n🌐 Checking Playwright browsers...');
+// Check Playwright package (browsers 不再打包，首次运行时下载到 userData)
+console.log('\n🌐 Checking Playwright...');
 
-const playwrightBrowsersPath = path.join(__dirname, '../resources/playwright/browsers');
+const playwrightPackagePath = path.join(__dirname, '../resources/playwright/package');
 
-function getDirSize(dirPath) {
-    let totalSize = 0;
-    try {
-        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-        for (const entry of entries) {
-            const entryPath = path.join(dirPath, entry.name);
-            if (entry.isDirectory()) {
-                totalSize += getDirSize(entryPath);
-            } else {
-                totalSize += fs.statSync(entryPath).size;
-            }
-        }
-    } catch (error) {
-        // 忽略错误
-    }
-    return totalSize;
-}
-
-if (fs.existsSync(playwrightBrowsersPath)) {
-    try {
-        const entries = fs.readdirSync(playwrightBrowsersPath, { withFileTypes: true });
-        const chromiumDirs = entries
-            .filter(d => d.isDirectory() && d.name.includes('chromium'))
-            .map(d => d.name);
-        
-        if (chromiumDirs.length > 0) {
-            console.log(`✅ Found Playwright Chromium browsers: ${chromiumDirs.join(', ')}`);
-            const size = getDirSize(playwrightBrowsersPath);
-            console.log(`   Size: ${(size / 1024 / 1024).toFixed(2)} MB`);
-        } else {
-            console.warn('⚠️  Warning: Playwright browsers directory exists but no Chromium found');
-            console.warn('   Run: npm run prepare:playwright');
-        }
-    } catch (error) {
-        console.warn('⚠️  Warning: Error checking Playwright browsers:', error.message);
+if (fs.existsSync(playwrightPackagePath)) {
+    const pkgJsonPath = path.join(playwrightPackagePath, 'playwright', 'package.json');
+    if (fs.existsSync(pkgJsonPath)) {
+        console.log('✅ Playwright package found (browsers will be downloaded at first run)');
+    } else {
+        console.warn('⚠️  Playwright package directory exists but playwright/package.json not found');
     }
 } else {
-    console.warn('⚠️  Warning: Playwright browsers directory not found');
-    console.warn('   Run: npm run prepare:playwright');
+    console.warn('⚠️  Playwright package not found - run: npm run prepare:playwright');
 }
 
 // Summary
