@@ -110,7 +110,8 @@ export function FloatingBallPage() {
         });
 
         const removeErrorListener = window.ipcRenderer.on('agent:error', (_event, ...args) => {
-            const error = args[0] as string;
+            const payload = args[0] as string | { message: string; taskId?: string };
+            const error = typeof payload === 'string' ? payload : (payload?.message ?? '');
             console.error('Agent Error:', error);
 
             // Add error message to chat so user can see it

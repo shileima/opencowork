@@ -11,6 +11,8 @@ interface ChatInputProps {
     mode: 'chat' | 'work' | 'automation';
     config: any;
     setConfig: (config: any) => void;
+    /** Project 模式：锁定项目名称，不显示文件夹选择按钮 */
+    lockedProjectName?: string | null;
 }
 
 export function ChatInput({
@@ -21,7 +23,8 @@ export function ChatInput({
     onSelectFolder,
     mode,
     config,
-    setConfig
+    setConfig,
+    lockedProjectName
 }: ChatInputProps) {
     const { t } = useI18n();
     const [input, setInput] = useState('');
@@ -192,14 +195,24 @@ export function ChatInput({
                         {/* Toolbar Row */}
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-0.5">
-                                <button
-                                    type="button"
-                                    onClick={onSelectFolder}
-                                    className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
-                                    title={t('selectWorkingDir')}
-                                >
-                                    <FolderOpen size={16} />
-                                </button>
+                                {lockedProjectName ? (
+                                    <div
+                                        className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-stone-600 dark:text-zinc-400 bg-stone-100/80 dark:bg-zinc-800 rounded-lg cursor-default"
+                                        title={t('currentProject') || '当前项目'}
+                                    >
+                                        <FolderOpen size={14} className="shrink-0" />
+                                        <span className="truncate max-w-[100px]">{lockedProjectName}</span>
+                                    </div>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={onSelectFolder}
+                                        className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                                        title={t('selectWorkingDir')}
+                                    >
+                                        <FolderOpen size={16} />
+                                    </button>
+                                )}
 
                                 <button
                                     type="button"
