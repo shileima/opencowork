@@ -4,7 +4,7 @@ import { ChatInput } from './ChatInput';
 import { useI18n } from '../i18n/I18nContext';
 import { logger } from '../services/logger';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { TodoBar } from './TodoBar';
+// import { TodoBar } from './TodoBar'; // ⚠️ 暂时禁用
 import { ThinkingBubble } from './ThinkingBubble';
 import Anthropic from '@anthropic-ai/sdk';
 import { CopyButton } from './CopyButton';
@@ -59,8 +59,8 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
     const [streamingTextMap, setStreamingTextMap] = useState<Map<string, string>>(new Map());
     // ⚠️ 实时思考内容：只用于当前正在流式的消息（不是累积的）
     const [currentThinkingText, setCurrentThinkingText] = useState<string>('');
-    // ⚠️ 新增：Todo 列表状态（每个会话独立）
-    const [todosMap, setTodosMap] = useState<Map<string, Array<{ id: string; content: string; activeForm: string; status: 'pending' | 'in_progress' | 'completed' }>>>(new Map());
+    // ⚠️ 新增：Todo 列表状态（每个会话独立）- 暂时禁用
+    // const [todosMap, setTodosMap] = useState<Map<string, Array<{ id: string; content: string; activeForm: string; status: 'pending' | 'in_progress' | 'completed' }>>>(new Map());
 
     const [workingDir, setWorkingDir] = useState<string | null>(null);
     const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
@@ -989,15 +989,9 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
                         </div>
                     </div>
 
-                    {/* ⚠️ 新增：任务进度条（在输入框上方） */}
-                    <div className="px-4 pt-2 flex-shrink-0">
+                    {/* ⚠️ 暂时禁用任务进度显示 */}
+                    {/* <div className="px-4 pt-2 flex-shrink-0">
                         <div className="max-w-xl md:max-w-2xl lg:max-w-3xl xl:max-w-4xl 2xl:max-w-5xl mx-auto">
-                            {/* ⚠️ 显示待发送上下文提示 */}
-                            {currentSessionId && (pendingContextMap.get(currentSessionId)?.length || 0) > 0 && (
-                                <div className="mb-2 px-3 py-1.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300">
-                                    <span className="font-medium">💬 {pendingContextMap.get(currentSessionId)?.length || 0} 条消息等待 AI 完成后发送</span>
-                                </div>
-                            )}
                             <TodoBar
                                 todos={currentSessionId ? (todosMap.get(currentSessionId) || []) : []}
                                 onTodosChange={(newTodos) => {
@@ -1012,7 +1006,7 @@ export function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOp
                                 isProcessing={isProcessing}
                             />
                         </div>
-                    </div>
+                    </div> */}
 
                     {/* ⚠️ 用户问题选择框 */}
                     {userQuestion && (
