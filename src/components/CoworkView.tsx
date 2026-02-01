@@ -222,10 +222,12 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             setPermissionRequest(null);
         });
 
-        // Listen for error events
-        const removeErrorListener = window.ipcRenderer.on('agent:error', (_event, msg) => {
+        // Listen for error events (payload can be string or { message, taskId })
+        const removeErrorListener = window.ipcRenderer.on('agent:error', (_event, ...args) => {
+            const payload = args[0] as string | { message: string; taskId?: string };
+            const msg = typeof payload === 'string' ? payload : (payload?.message ?? '');
             console.error('[CoworkView] Received agent error:', msg);
-            setError(msg as string);
+            setError(msg);
             setStreamingText(''); // Stop streaming effect on error
         });
 

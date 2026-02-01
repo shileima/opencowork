@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { BrowserWindow } from 'electron';
 
-import { FileSystemTools, ReadFileSchema, WriteFileSchema, ListDirSchema, RunCommandSchema } from './tools/FileSystemTools';
+import { FileSystemTools, ReadFileSchema, WriteFileSchema, ListDirSchema, RunCommandSchema, OpenBrowserPreviewSchema } from './tools/FileSystemTools';
 import { SkillManager } from './skills/SkillManager';
 import { MCPClientService } from './mcp/MCPClientService';
 import { permissionManager } from './security/PermissionManager';
@@ -488,7 +488,7 @@ export class AgentRuntime {
             this.notifyUpdate();
 
             // Start the agent loop
-            await this.runLoop();
+            await this.runLoop(taskId);
 
         } catch (error: unknown) {
             const err = error as { status?: number; message?: string; error?: { message?: string; type?: string } };
@@ -527,34 +527,35 @@ export class AgentRuntime {
             }
 
             // [Fix] Handle MiniMax/provider sensitive content errors gracefully
+            const errorTaskId = taskId || undefined;
             if (err.status === 500 && (err.message?.includes('sensitive') || JSON.stringify(error).includes('1027'))) {
-                this.broadcast('agent:error', 'AI Provider Error: The generated content was flagged as sensitive and blocked by the provider.');
+                this.broadcast('agent:error', 'AI Provider Error: The generated content was flagged as sensitive and blocked by the provider.', errorTaskId);
             } else if (err.error?.type === 'invalid_request_error' && err.error?.message?.includes('tools[')) {
                 // Tool name validation error - provide helpful message
-                this.broadcast('agent:error', `配置错误: MCP 工具名称格式不正确\n\n详细信息: ${err.error.message}\n\n这通常是因为 MCP 服务器返回的工具名称包含了特殊字符（如中文）。请尝试：\n1. 禁用有问题的 MCP 服务器\n2. 或联系开发者修复此问题\n\n错误代码: ${err.status || 400}`);
+                this.broadcast('agent:error', `配置错误: MCP 工具名称格式不正确\n\n详细信息: ${err.error.message}\n\n这通常是因为 MCP 服务器返回的工具名称包含了特殊字符（如中文）。请尝试：\n1. 禁用有问题的 MCP 服务器\n2. 或联系开发者修复此问题\n\n错误代码: ${err.status || 400}`, errorTaskId);
             } else if (err.status === 400) {
                 // Generic 400 error with details
                 const details = err.error?.message || err.message || 'Unknown error';
-                this.broadcast('agent:error', `请求错误 (400): ${details}\n\n请检查：\n- API Key 是否正确\n- API 地址是否有效\n- 模型名称是否正确`);
+                this.broadcast('agent:error', `请求错误 (400): ${details}\n\n请检查：\n- API Key 是否正确\n- API 地址是否有效\n- 模型名称是否正确`, errorTaskId);
             } else if (err.status === 401) {
-                this.broadcast('agent:error', `认证失败 (401): API Key 无效或已过期\n\n请检查您的 API Key 配置。`);
+                this.broadcast('agent:error', `认证失败 (401): API Key 无效或已过期\n\n请检查您的 API Key 配置。`, errorTaskId);
             } else if (err.status === 429) {
-                this.broadcast('agent:error', `请求过多 (429): API 调用频率超限\n\n请稍后再试或升级您的 API 套餐。`);
+                this.broadcast('agent:error', `请求过多 (429): API 调用频率超限\n\n请稍后再试或升级您的 API 套餐。`, errorTaskId);
             } else if (err.status === 500) {
-                this.broadcast('agent:error', `服务器错误 (500): AI 服务提供商出现问题\n\n${err.message || '请稍后再试。'}`);
+                this.broadcast('agent:error', `服务器错误 (500): AI 服务提供商出现问题\n\n${err.message || '请稍后再试。'}`, errorTaskId);
             } else if (err.status === 503) {
-                this.broadcast('agent:error', `服务不可用 (503): AI 服务暂时无法访问\n\n请稍后再试或检查服务状态。`);
+                this.broadcast('agent:error', `服务不可用 (503): AI 服务暂时无法访问\n\n请稍后再试或检查服务状态。`, errorTaskId);
             } else {
                 // Generic error with full details
                 const errorMsg = err.message || err.error?.message || 'An unknown error occurred';
                 const statusInfo = err.status ? `[${err.status}] ` : '';
-                this.broadcast('agent:error', `${statusInfo}${errorMsg}`, taskId || undefined);
+                this.broadcast('agent:error', `${statusInfo}${errorMsg}`, errorTaskId);
             }
         }
     }
     
 
-    private async runLoop() {
+    private async runLoop(taskId?: string) {
         let keepGoing = true;
         let iterationCount = 0;
         const MAX_ITERATIONS = 30;
@@ -569,14 +570,15 @@ export class AgentRuntime {
                 WriteFileSchema,
                 ListDirSchema,
                 RunCommandSchema,
+                OpenBrowserPreviewSchema,
                 ...(this.skillManager.getTools() as Anthropic.Tool[]),
                 ...(await this.mcpService.getTools() as Anthropic.Tool[])
             ];
 
-            // Build working directory context
+            // Build working directory context (Project 模式下 Primary = 当前已选项目路径)
             const authorizedFolders = permissionManager.getAuthorizedFolders();
             const workingDirContext = authorizedFolders.length > 0
-                ? `\n\nWORKING DIRECTORY:\n- Primary: ${authorizedFolders[0]}\n- All authorized: ${authorizedFolders.join(', ')}\n\nYou should primarily work within these directories. Always use absolute paths.`
+                ? `\n\nWORKING DIRECTORY:\n- Primary (current selected project): ${authorizedFolders[0]}\n- All authorized: ${authorizedFolders.join(', ')}\n\nYou MUST primarily work within the Primary directory. When user does NOT specify a project (e.g. start/stop service), use ONLY the Primary. Always use absolute paths.`
                 : '\n\nNote: No working directory has been selected yet. Ask the user to select a folder first.';
 
             const skillsDir = os.homedir() + '/.qa-cowork/skills';
@@ -621,6 +623,16 @@ You are OpenCowork, an advanced AI desktop assistant designed for efficient task
 1. **Skills First**: Before any task, check for relevant skills in \`${skillsDir}\`
 2. **MCP Integration**: Leverage available MCP servers for enhanced capabilities
 3. **Tool Prefixes**: MCP tools use namespace prefixes (e.g., \`tool_name__action\`)
+
+### Development Server & Browser Preview
+When starting or stopping a dev server, **always use the Primary Working Directory** (current selected project). Do NOT look in other directories (e.g. ~/.qa-cowork) for projects—use the Primary path directly.
+When you start a local development server (e.g., \`npm run dev\`, \`pnpm dev\`, \`yarn dev\`), **always call \`open_browser_preview\`** with the preview URL to show the user the result in the built-in browser tab. **Development servers are always started on port 3000** (Vite, CRA, Next.js, etc.). Use **http://localhost:3000** for open_browser_preview and when answering questions about the dev server port.
+
+### Closing/Stopping Local Services (CRITICAL)
+When the user asks to close/stop a service **without specifying which one** (e.g. "关闭服务", "关闭本地服务", "stop the server"):
+- **Scope**: ONLY consider services running from the **current project** (Primary Working Directory above). That is the user's selected project.
+- **NEVER include** the OpenCowork application's own Vite dev server. Its app directory is: \`${process.env.APP_ROOT || process.cwd()}\`. Exclude any process whose cwd or command path is under this directory.
+- **Action**: When listing processes (e.g. \`lsof -i :PORT\`, \`ps aux | grep node\`), filter out processes belonging to the OpenCowork app. Then close/stop only the remaining processes (the user's project). Do NOT ask "which one?"—assume the user means the current project's service.
 
 ### Browser Automation Guidelines (chrome-agent scripts)
 When executing Playwright automation scripts:
@@ -861,8 +873,27 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
 
                                     if (approved) {
                                         result = await this.fsTools.runCommand(args, defaultCwd);
+                                        // 开发服务器启动后自动打开内置浏览器并导航到预览地址，并标记任务完成（聊天显示完成态）
+                                        if (result.includes('[Dev server started in background]')) {
+                                            const urlMatch = result.match(/Preview URL:\s*(https?:\/\/\S+)/);
+                                            const previewUrl = urlMatch?.[1]?.trim() || 'http://localhost:3000';
+                                            this.broadcast('agent:open-browser-preview', previewUrl);
+                                            this.broadcast('agent:done', { timestamp: Date.now(), taskId }, taskId);
+                                        }
                                     } else {
                                         result = 'User denied the command execution.';
+                                    }
+                                } else if (toolUse.name === 'open_browser_preview') {
+                                    const args = toolUse.input as { url: string };
+                                    let url = (args?.url || '').trim();
+                                    if (!url) {
+                                        result = 'Error: url is required. Example: http://localhost:3000';
+                                    } else {
+                                        if (!/^https?:\/\//i.test(url)) {
+                                            url = `http://${url}`;
+                                        }
+                                        this.broadcast('agent:open-browser-preview', url);
+                                        result = `Opened browser preview tab with URL: ${url}`;
                                     }
                                 } else {
                                     const skillInfo = this.skillManager.getSkillInfo(toolUse.name);
@@ -999,10 +1030,14 @@ ${skillInfo.instructions}
                 } else if (hasSuccessfulScriptExecution && (loopErr.status === 400 || loopErr.status === 429 || loopErr.status === 500 || loopErr.status === 503)) {
                     // 如果脚本已经执行成功，对于后续的 API 调用错误，优雅处理
                     console.warn(`[AgentRuntime] Script execution succeeded, but subsequent AI call failed (${loopErr.status}). Ending loop gracefully.`);
+                    
+                    // 检查是否有已创建的文件
+                    const createdFiles = this.artifacts.filter(a => a.type === 'file').map(a => a.name).join('、') || '无';
+                    
                     // 添加一个友好的提示消息
                     const friendlyMessage: Anthropic.MessageParam = {
                         role: 'assistant',
-                        content: `✅ 脚本执行已完成。\n\n注意：后续的 AI 响应处理遇到了问题（状态码 ${loopErr.status}），但这不影响脚本的执行结果。`
+                        content: `✅ 脚本执行已完成。\n\n📁 已生成的文件：${createdFiles}\n\n⚠️ 注意：后续的 AI 响应处理遇到了问题（状态码 ${loopErr.status}），但这不影响脚本的执行结果。如果文件已生成，请在文件资源管理器中查看。`
                     };
                     this.history.push(friendlyMessage);
                     this.notifyUpdate();
@@ -1017,11 +1052,14 @@ ${skillInfo.instructions}
         }
     }
 
-    // Broadcast to all windows
+    // Broadcast to all windows. When taskId is provided, always attach it to payload so renderer can update task status.
     private broadcast(channel: string, data?: unknown, taskId?: string) {
-        const payload = taskId && typeof data === 'object' && data !== null 
-            ? { ...data as object, taskId } 
-            : data;
+        let payload: unknown = data;
+        if (taskId !== undefined) {
+            payload = typeof data === 'object' && data !== null
+                ? { ...(data as object), taskId }
+                : { message: data, taskId };
+        }
         for (const win of this.windows) {
             if (!win.isDestroyed()) {
                 win.webContents.send(channel, payload);

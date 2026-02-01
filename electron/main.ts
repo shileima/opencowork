@@ -7,6 +7,7 @@ import { AgentRuntime } from './agent/AgentRuntime'
 import { configStore, TrustLevel } from './config/ConfigStore'
 import { sessionStore } from './config/SessionStore'
 import { scriptStore } from './config/ScriptStore'
+import { projectStore } from './config/ProjectStore'
 import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
 import { getBuiltinNodePath } from './utils/NodePath'
@@ -84,6 +85,9 @@ if (VITE_DEV_SERVER_URL) {
   }
   app.setPath('userData', devUserData);
 }
+
+// [Fix] 抑制 GPU/网络服务崩溃相关错误（M 系列 Mac 内置 iframe 预览时常见）
+app.commandLine.appendSwitch('disable-gpu-sandbox');
 
 // Internal MCP Server Runner
 // MiniMax startup removed
@@ -317,6 +321,26 @@ ipcMain.handle('session:save', (event, messages: Anthropic.MessageParam[]) => {
     // Update the appropriate current session ID
     if (sessionId) {
       sessionStore.setSessionId(sessionId, isFloatingBall)
+      
+      // 如果是项目视图，尝试更新当前任务的 sessionId
+      const currentProject = projectStore.getCurrentProject()
+      if (currentProject && currentTaskIdForSession) {
+        const task = projectStore.getTasks(currentProject.id).find(t => t.id === currentTaskIdForSession)
+        if (task && (!task.sessionId || task.sessionId === '')) {
+          // 关联 session 到当前任务
+          projectStore.updateTask(currentProject.id, currentTaskIdForSession, { sessionId })
+          console.log(`[Project] Associated session ${sessionId} with task ${currentTaskIdForSession} (${task.title})`)
+        }
+      } else if (currentProject) {
+        // 如果没有当前任务ID，尝试找到最新的没有 sessionId 的任务
+        const tasks = projectStore.getTasks(currentProject.id)
+        const tasksWithoutSession = tasks.filter(t => !t.sessionId || t.sessionId === '').sort((a, b) => b.updatedAt - a.updatedAt)
+        if (tasksWithoutSession.length > 0) {
+          const taskToUpdate = tasksWithoutSession[0]
+          projectStore.updateTask(currentProject.id, taskToUpdate.id, { sessionId })
+          console.log(`[Project] Associated session ${sessionId} with latest task without session ${taskToUpdate.id} (${taskToUpdate.title})`)
+        }
+      }
     }
 
     return { success: true, sessionId: sessionId || undefined }
@@ -961,6 +985,15 @@ ipcMain.handle('window:maximize', () => {
   }
 })
 ipcMain.handle('window:close', () => mainWin?.hide())
+ipcMain.handle('window:set-maximized', (_event, maximized: boolean) => {
+  if (mainWin) {
+    if (maximized) {
+      mainWin.maximize()
+    } else {
+      mainWin.unmaximize()
+    }
+  }
+})
 
 
 // MCP Configuration Handlers
@@ -1328,6 +1361,460 @@ ipcMain.handle('permission:remove-preset-admin', (_, username: string) => {
   return { success, error: success ? undefined : 'Failed to remove preset admin' };
 });
 
+// Project Management Handlers
+ipcMain.handle('project:create', async (event, { name, path: projectPath }: { name: string, path: string }) => {
+  try {
+    // 确保目录存在
+    if (!fs.existsSync(projectPath)) {
+      fs.mkdirSync(projectPath, { recursive: true });
+    }
+    const project = projectStore.createProject(name, projectPath);
+    // Project 模式：授权目录，主工作目录为 ~/.qa-cowork
+    notifyProjectSwitched(event, project);
+    // 通知前端项目已创建
+    const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('project:created', project);
+    }
+    return { success: true, project };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('project:list', () => {
+  return projectStore.getProjects();
+});
+
+// Project 模式：主工作目录优先使用当前已选项目的目录，其次 ~/.qa-cowork
+const applyProjectWorkingDirs = (project: { path: string }) => {
+  const folders = configStore.getAll().authorizedFolders || [];
+  const baseDir = directoryManager.getBaseDir();
+  const normalizedBase = path.normalize(baseDir).replace(/\/$/, '');
+  const normalizedProject = path.normalize(project.path).replace(/\/$/, '');
+  const ensureFolder = (p: string, trust: TrustLevel = 'standard') => {
+    const np = path.normalize(p).replace(/\/$/, '');
+    const existing = folders.find((f: { path: string }) => path.normalize(f.path).replace(/\/$/, '') === np);
+    return existing || { path: np, trustLevel: trust, addedAt: Date.now() };
+  };
+  const baseFolder = ensureFolder(baseDir, 'strict');
+  const projectFolder = ensureFolder(project.path, 'standard');
+  const otherFolders = folders.filter((f: { path: string }) => {
+    const np = path.normalize(f.path).replace(/\/$/, '');
+    return np !== normalizedBase && np !== normalizedProject;
+  });
+  // 已选项目路径作为 Primary，确保启动/关闭服务、文件操作等优先作用于当前项目
+  const primaryFolders = normalizedBase === normalizedProject
+    ? [baseFolder]
+    : [projectFolder, baseFolder];
+  configStore.setAll({ ...configStore.getAll(), authorizedFolders: [...primaryFolders, ...otherFolders] });
+};
+
+const notifyProjectSwitched = (event: Electron.IpcMainInvokeEvent, project: { id: string; name: string; path: string }) => {
+  applyProjectWorkingDirs(project);
+  const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.webContents.send('project:switched', project);
+  }
+};
+
+ipcMain.handle('project:open', (event, id: string) => {
+  const success = projectStore.openProject(id);
+  if (success) {
+    const project = projectStore.getProject(id);
+    if (project) {
+      projectStore.updateProject(id, { updatedAt: Date.now() });
+      notifyProjectSwitched(event, project);
+    }
+  }
+  return { success };
+});
+
+ipcMain.handle('project:open-folder', async (event, dirPath: string) => {
+  if (!dirPath || typeof dirPath !== 'string') return { success: false, error: 'Invalid path' };
+  const normalized = path.normalize(dirPath).replace(/\/$/, '');
+  try {
+    const existing = projectStore.getProjectByPath(normalized);
+    if (existing) {
+      projectStore.openProject(existing.id);
+      projectStore.updateProject(existing.id, { updatedAt: Date.now() });
+      const project = projectStore.getProject(existing.id);
+      if (project) notifyProjectSwitched(event, project);
+      return { success: true };
+    }
+    if (!fs.existsSync(normalized)) {
+      fs.mkdirSync(normalized, { recursive: true });
+    }
+    const name = path.basename(normalized) || 'Project';
+    const project = projectStore.createProject(name, normalized);
+    notifyProjectSwitched(event, project);
+    const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('project:created', project);
+      targetWindow.webContents.send('project:switched', project);
+    }
+    return { success: true, project };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+});
+
+// 新建项目：在 ~/.qa-cowork/projects 下创建目录，重名则加后缀 -1、-2…
+ipcMain.handle('project:create-new', async (event, name: string) => {
+  if (!name || typeof name !== 'string') return { success: false, error: 'Invalid project name' };
+  const sanitized = name.trim().replace(/[/\\:*?"<>|]/g, '-').replace(/-+/g, '-') || 'project';
+  const baseDir = directoryManager.getBaseDir();
+  const projectsDir = path.join(baseDir, 'projects');
+  try {
+    if (!fs.existsSync(projectsDir)) {
+      fs.mkdirSync(projectsDir, { recursive: true });
+    }
+    let dirName = sanitized;
+    let dirPath = path.join(projectsDir, dirName);
+    let n = 1;
+    while (fs.existsSync(dirPath)) {
+      dirName = `${sanitized}-${n}`;
+      dirPath = path.join(projectsDir, dirName);
+      n += 1;
+    }
+    fs.mkdirSync(dirPath, { recursive: true });
+    const project = projectStore.createProject(dirName, dirPath);
+    notifyProjectSwitched(event, project);
+    const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('project:created', project);
+      targetWindow.webContents.send('project:switched', project);
+    }
+    return { success: true, project };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+});
+
+ipcMain.handle('project:get-current', () => {
+  return projectStore.getCurrentProject();
+});
+
+// Project 模式：切换到项目视图时，确保主工作目录为 ~/.qa-cowork（不发送 project:switched 事件）
+ipcMain.handle('project:ensure-working-dir', () => {
+  const project = projectStore.getCurrentProject();
+  if (project) applyProjectWorkingDirs(project);
+});
+
+ipcMain.handle('project:delete', (_, id: string) => {
+  return { success: projectStore.deleteProject(id) };
+});
+
+// Project Task Handlers
+ipcMain.handle('project:task:create', async (event, projectId: string, title: string) => {
+  try {
+    const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
+    const isFloatingBall = event.sender === floatingBallWin?.webContents;
+    const targetWindow = isFloatingBall ? floatingBallWin : mainWin;
+    
+    // 创建任务（先创建任务，不关联 session）
+    const task = projectStore.createTask(projectId, title, '');
+    if (!task) return { success: false, error: 'Project not found' };
+
+    // 设置当前任务ID，用于后续 session 绑定
+    currentTaskIdForSession = task.id;
+
+    // 清空历史并设置 session 为 null（新任务）
+    if (targetAgent) {
+      targetAgent.clearHistory(); // 这会触发 agent:history-update 事件，发送空历史
+      sessionStore.setSessionId(null, isFloatingBall);
+    }
+
+    // 确保前端收到历史更新通知（显示空状态）
+    if (targetWindow && !targetWindow.isDestroyed() && targetAgent) {
+      targetWindow.webContents.send('agent:history-update', []);
+      targetWindow.webContents.send('project:task:created', task);
+    }
+
+    return { success: true, task };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('project:task:list', (_, projectId: string) => {
+  return projectStore.getTasks(projectId);
+});
+
+// 存储当前任务ID，用于 session 绑定
+let currentTaskIdForSession: string | null = null;
+
+ipcMain.handle('project:task:switch', async (event, projectId: string, taskId: string) => {
+  try {
+    const task = projectStore.getTasks(projectId).find(t => t.id === taskId);
+    if (!task) {
+      return { success: false, error: 'Task not found' };
+    }
+    const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
+    const isFloatingBall = event.sender === floatingBallWin?.webContents;
+    
+    if (!targetAgent) {
+      return { success: false, error: 'Agent not initialized' };
+    }
+    
+    // 设置当前任务ID，用于后续 session 绑定
+    currentTaskIdForSession = taskId;
+    
+    const targetWindow = isFloatingBall ? floatingBallWin : mainWin;
+    
+    // 加载关联的 session
+    if (task.sessionId) {
+      const session = sessionStore.getSession(task.sessionId);
+      if (session) {
+        sessionStore.setSessionId(task.sessionId, isFloatingBall);
+        targetAgent.loadHistory(session.messages);
+        // loadHistory 会触发 notifyUpdate，但为了确保前端收到更新，我们再次发送
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', session.messages);
+        }
+      } else {
+        // Session 不存在，清空历史
+        targetAgent.clearHistory();
+        sessionStore.setSessionId(null, isFloatingBall);
+        // clearHistory 会触发 notifyUpdate，但为了确保前端收到更新，我们再次发送
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', []);
+        }
+      }
+    } else {
+      // 任务没有 sessionId，清空历史（新任务）
+      targetAgent.clearHistory();
+      sessionStore.setSessionId(null, isFloatingBall);
+      // clearHistory 会触发 notifyUpdate，但为了确保前端收到更新，我们再次发送
+      if (targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('agent:history-update', []);
+      }
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('project:task:update', (event, projectId: string, taskId: string, updates: { title?: string, status?: 'active' | 'completed' | 'failed' }) => {
+  const success = projectStore.updateTask(projectId, taskId, updates);
+  if (success) {
+    const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('project:task:updated', { projectId, taskId, updates });
+    }
+  }
+  return { success };
+});
+
+ipcMain.handle('project:task:delete', (_, projectId: string, taskId: string) => {
+  return { success: projectStore.deleteTask(projectId, taskId) };
+});
+
+// File System Handlers
+ipcMain.handle('fs:read-file', async (_, filePath: string) => {
+  try {
+    // 权限检查
+    const folders = configStore.getAll().authorizedFolders || [];
+    const isAuthorized = folders.some(f => filePath.startsWith(f.path));
+    if (!isAuthorized) {
+      return { success: false, error: 'Path not authorized' };
+    }
+    const content = await fs.promises.readFile(filePath, 'utf-8');
+    return { success: true, content };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('fs:write-file', async (_, filePath: string, content: string) => {
+  try {
+    // 权限检查
+    const folders = configStore.getAll().authorizedFolders || [];
+    const isAuthorized = folders.some(f => filePath.startsWith(f.path));
+    if (!isAuthorized) {
+      return { success: false, error: 'Path not authorized' };
+    }
+    // 确保目录存在
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      await fs.promises.mkdir(dir, { recursive: true });
+    }
+    await fs.promises.writeFile(filePath, content, 'utf-8');
+    // 通知所有窗口文件已更改，用于刷新资源管理器
+    if (mainWin && !mainWin.isDestroyed()) {
+      mainWin.webContents.send('fs:file-changed', filePath);
+    }
+    if (floatingBallWin && !floatingBallWin.isDestroyed()) {
+      floatingBallWin.webContents.send('fs:file-changed', filePath);
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('fs:list-dir', async (_, dirPath: string) => {
+  try {
+    // 权限检查
+    const folders = configStore.getAll().authorizedFolders || [];
+    const isAuthorized = folders.some(f => dirPath.startsWith(f.path));
+    if (!isAuthorized) {
+      return { success: false, error: 'Path not authorized' };
+    }
+    const items = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    const result = items.map(item => ({
+      name: item.name,
+      isDirectory: item.isDirectory(),
+      path: path.join(dirPath, item.name)
+    }));
+    return { success: true, items: result };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('fs:create-dir', async (_, dirPath: string) => {
+  try {
+    // 权限检查
+    const folders = configStore.getAll().authorizedFolders || [];
+    const isAuthorized = folders.some(f => dirPath.startsWith(f.path));
+    if (!isAuthorized) {
+      return { success: false, error: 'Path not authorized' };
+    }
+    await fs.promises.mkdir(dirPath, { recursive: true });
+    // 通知所有窗口目录已创建，用于刷新资源管理器
+    if (mainWin && !mainWin.isDestroyed()) {
+      mainWin.webContents.send('fs:file-changed', dirPath);
+    }
+    if (floatingBallWin && !floatingBallWin.isDestroyed()) {
+      floatingBallWin.webContents.send('fs:file-changed', dirPath);
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('fs:rename', async (_, oldPath: string, newPath: string) => {
+  try {
+    // 权限检查
+    const folders = configStore.getAll().authorizedFolders || [];
+    const isAuthorized = folders.some(f => oldPath.startsWith(f.path) && newPath.startsWith(f.path));
+    if (!isAuthorized) {
+      return { success: false, error: 'Path not authorized' };
+    }
+    await fs.promises.rename(oldPath, newPath);
+    // 通知所有窗口文件已重命名，用于刷新资源管理器
+    if (mainWin && !mainWin.isDestroyed()) {
+      mainWin.webContents.send('fs:file-changed', oldPath);
+      mainWin.webContents.send('fs:file-changed', newPath);
+    }
+    if (floatingBallWin && !floatingBallWin.isDestroyed()) {
+      floatingBallWin.webContents.send('fs:file-changed', oldPath);
+      floatingBallWin.webContents.send('fs:file-changed', newPath);
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('fs:delete', async (_, filePath: string) => {
+  try {
+    // 权限检查
+    const folders = configStore.getAll().authorizedFolders || [];
+    const isAuthorized = folders.some(f => filePath.startsWith(f.path));
+    if (!isAuthorized) {
+      return { success: false, error: 'Path not authorized' };
+    }
+    const stat = await fs.promises.stat(filePath);
+    if (stat.isDirectory()) {
+      await fs.promises.rmdir(filePath, { recursive: true });
+    } else {
+      await fs.promises.unlink(filePath);
+    }
+    // 通知所有窗口文件已删除，用于刷新资源管理器
+    if (mainWin && !mainWin.isDestroyed()) {
+      mainWin.webContents.send('fs:file-changed', filePath);
+    }
+    if (floatingBallWin && !floatingBallWin.isDestroyed()) {
+      floatingBallWin.webContents.send('fs:file-changed', filePath);
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// Terminal Handlers
+const terminalSessions = new Map<string, { process: any, cwd: string, webContents: Electron.WebContents }>();
+
+function setupTerminalListeners(id: string, process: any, webContents: Electron.WebContents) {
+  process.stdout.on('data', (data: Buffer) => {
+    webContents.send('terminal:output', id, data.toString());
+  });
+  process.stderr.on('data', (data: Buffer) => {
+    webContents.send('terminal:output', id, data.toString());
+  });
+  process.on('exit', () => {
+    webContents.send('terminal:exit', id);
+    terminalSessions.delete(id);
+  });
+}
+
+ipcMain.handle('terminal:create', async (event, { id, cwd }: { id: string, cwd: string }) => {
+  try {
+    // 权限检查
+    const folders = configStore.getAll().authorizedFolders || [];
+    const isAuthorized = folders.some(f => cwd.startsWith(f.path));
+    if (!isAuthorized) {
+      return { success: false, error: 'Path not authorized' };
+    }
+    const shell = process.platform === 'win32' ? 'cmd.exe' : process.env.SHELL || '/bin/bash';
+    const { spawn } = await import('child_process');
+    const terminalProcess = spawn(shell, [], {
+      cwd,
+      env: { ...process.env, TERM: 'xterm-256color' }
+    });
+    const webContents = event.sender;
+    terminalSessions.set(id, { process: terminalProcess, cwd, webContents });
+    setupTerminalListeners(id, terminalProcess, webContents);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('terminal:write', (_, id: string, data: string) => {
+  const session = terminalSessions.get(id);
+  if (!session) {
+    return { success: false, error: 'Terminal session not found' };
+  }
+  session.process.stdin.write(data);
+  return { success: true };
+});
+
+ipcMain.handle('terminal:resize', (_, id: string, cols: number, rows: number) => {
+  const session = terminalSessions.get(id);
+  if (!session) {
+    return { success: false, error: 'Terminal session not found' };
+  }
+  // PTY resize (if using pty on Unix)
+  if (process.platform !== 'win32' && session.process.stdout.setDefaultEncoding) {
+    session.process.stdout.setDefaultEncoding('utf8');
+  }
+  return { success: true };
+});
+
+ipcMain.handle('terminal:destroy', (_, id: string) => {
+  const session = terminalSessions.get(id);
+  if (session) {
+    session.process.kill();
+    terminalSessions.delete(id);
+  }
+  return { success: true };
+});
 
 function initializeAgent() {
   const apiKey = configStore.getApiKey() || process.env.ANTHROPIC_API_KEY
@@ -1549,8 +2036,13 @@ function createMainWindow() {
     mainWin?.focus()
   })
 
-  // Handle external links
+  // Handle external links：localhost 用内置浏览器打开，不启动系统默认浏览器
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1') ||
+        url.startsWith('https://localhost') || url.startsWith('https://127.0.0.1')) {
+      mainWin?.webContents.send('agent:open-browser-preview', url)
+      return { action: 'deny' }
+    }
     if (url.startsWith('https:') || url.startsWith('http:')) {
       shell.openExternal(url)
       return { action: 'deny' }

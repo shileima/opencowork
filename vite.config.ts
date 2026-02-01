@@ -5,6 +5,19 @@ import react from '@vitejs/plugin-react'
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  server: {
+    // 确保 Electron 渲染进程能正确连接 HMR WebSocket
+    hmr: {
+      host: 'localhost',
+      protocol: 'ws',
+      clientPort: undefined, // 与 dev server 同端口
+    },
+    // 部分环境（如部分 macOS/网络盘）下 inotify 不触发，用轮询保证修改能被检测
+    watch: {
+      usePolling: true,
+      interval: 500,
+    },
+  },
   plugins: [
     react(),
     electron({
