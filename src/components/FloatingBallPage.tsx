@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Home, History, X, Plus, Check } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { FloatingInput } from './FloatingInput';
+import { useI18n } from '../i18n/I18nContext';
+import { logger } from '../services/logger';
 
 type BallState = 'collapsed' | 'input' | 'expanded';
 
@@ -24,16 +26,39 @@ interface Message {
     content: string | ContentBlock[];
 }
 
-import { useI18n } from '../i18n/I18nContext';
-
 export function FloatingBallPage() {
     const { t } = useI18n();
+
+    // ⚠️ 优化：环境检测，生产环境减少日志
+    const isDevelopment = process.env.NODE_ENV === 'development';
+
+    // ⚠️ 优化：创建日志工具函数
+    const log = isDevelopment
+        ? (...args: unknown[]) => console.log('[FloatingBall]', ...args)
+        : () => {}; // 生产环境空函数
+
+    const warn = isDevelopment
+        ? (...args: unknown[]) => logger.warn('[FloatingBall]', ...args)
+        : () => {};
+
+    const error = (...args: unknown[]) => logger.error('[FloatingBall]', ...args);
+
+    // ⚠️ 优化：历史哈希计算函数（用于重复更新检测）
+    const computeHistoryHash = (data: Message[]): string => {
+        // 简单哈希：取长度和前100个字符
+        const str = JSON.stringify(data);
+        return `${str.length}:${str.slice(0, 100)}`;
+    };
+
     const [ballState, setBallState] = useState<BallState>('collapsed');
     // input/images moved to FloatingInput, but we track presence for auto logic
     const [hasContent, setHasContent] = useState(false);
     const [messages, setMessages] = useState<Message[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [streamingText, setStreamingText] = useState('');
+
+    // ⚠️ 关键修复：使用 Map 存储每个会话的流式文本，支持会话切换时恢复流式显示
+    const [streamingTextMap, setStreamingTextMap] = useState<Map<string, string>>(new Map());
+
     const [showHistory, setShowHistory] = useState(false);
     const [sessions, setSessions] = useState<SessionSummary[]>([]);  // Add sessions state
     const [isHovering, setIsHovering] = useState(false);
@@ -42,6 +67,26 @@ export function FloatingBallPage() {
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [isNewSession, setIsNewSession] = useState(true); // Track if this is a new session
     const hasInitialized = useRef(false); // Track if we've initialized the first session
+    const currentSessionIdRef = useRef<string | null>(null); // Track current session ID for event filtering
+    const switchingSessionsRef = useRef<Set<string>>(new Set()); // ⚠️ 优化：使用队列管理多个会话切换
+    const historyVersionRef = useRef<Map<string, number>>(new Map()); // ⚠️ 版本号，防止旧数据覆盖新数据
+    const lastHistoryHashRef = useRef<Map<string, string>>(new Map()); // ⚠️ 重复更新检测
+    const pendingUpdateRef = useRef<{ sessionId: string; timestamp: number } | null>(null); // ⚠️ P2-2: 事件超时检测
+
+    // ⚠️ 计算属性：获取当前会话的流式文本
+    const streamingText = sessionId ? streamingTextMap.get(sessionId) || '' : '';
+
+    // 处理文件路径点击 - 打开主页并在文件画布中显示
+    const handleFilePathClick = useCallback((filePath: string) => {
+        log('File path clicked in floating ball:', filePath);
+        // 使用 Electron API 打开主页窗口并传递文件路径
+        window.ipcRenderer.invoke('open-main-with-file', { filePath });
+    }, [log]);
+
+    // Update ref when sessionId changes
+    useEffect(() => {
+        currentSessionIdRef.current = sessionId;
+    }, [sessionId]);
 
     // Fetch session list when history is opened
     useEffect(() => {
@@ -58,60 +103,120 @@ export function FloatingBallPage() {
             // Clear any previous history to start fresh
             window.ipcRenderer.invoke('agent:new-session');
             setMessages([]);
-            setStreamingText('');
+
+            // ⚠️ 关键修复：清空新会话的流式文本
+            if (sessionId) {
+                setStreamingTextMap(prev => {
+                    const newMap = new Map(prev);
+                    newMap.set(sessionId, '');
+                    return newMap;
+                });
+            }
+
             hasInitialized.current = true; // Mark as initialized
         }
-    }, [ballState, isNewSession]);
+    }, [ballState, isNewSession, sessionId]);
 
     // Listen for state changes and messages
     useEffect(() => {
+        // Get current session ID on mount
+        window.ipcRenderer.invoke('session:current').then((session: any) => {
+            setSessionId(session?.id || null);
+        });
+
         const removeUpdateListener = window.ipcRenderer.on('agent:history-update', async (_event, ...args) => {
-            const history = args[0] as Message[];
-            setMessages(history.filter(m => m.role !== 'system') || []);
-            setStreamingText('');
+            const eventData = args[0] as { sessionId: string; version?: number; data: Message[] };
 
-            // Auto-save session when history updates
-            if (history && history.length > 0) {
-                const hasRealContent = history.some(msg => {
-                    const content = msg.content;
-                    if (typeof content === 'string') {
-                        return content.trim().length > 0;
-                    } else if (Array.isArray(content)) {
-                        return content.some(block =>
-                            block.type === 'text' ? (block.text || '').trim().length > 0 : true
-                        );
-                    }
-                    return false;
-                });
-
-                if (hasRealContent) {
-                    try {
-                        // Save with current sessionId (null for new sessions, which creates a new session)
-                        const result = await window.ipcRenderer.invoke('session:save', history) as { success: boolean; sessionId?: string; error?: string };
-
-                        if (result.success) {
-                            // Update sessionId if this was a new session that got created
-                            if (result.sessionId && !sessionId) {
-                                setSessionId(result.sessionId);
-                            }
-                        } else {
-                            console.error('[FloatingBall] Failed to save session:', result.error);
-                        }
-                    } catch (error) {
-                        console.error('[FloatingBall] Error saving session:', error);
-                    }
+            // ⚠️ 优化1：switching 检查（队列机制）- 最快失败
+            if (switchingSessionsRef.current.size > 0) {
+                if (!switchingSessionsRef.current.has(eventData.sessionId)) {
+                    log('⚠️ Switching sessions: ignored history from', eventData.sessionId, 'waiting for:', Array.from(switchingSessionsRef.current));
+                    return;
                 }
             }
+
+            // ⚠️ 优化2：会话检查（第二快失败）
+            if (eventData.sessionId !== currentSessionIdRef.current) {
+                log('⚠️ Filtered history update: event sessionId=', eventData.sessionId, 'current=', currentSessionIdRef.current);
+                return;
+            }
+
+            // ⚠️ 优化3：版本号检查（智能同步）
+            if (eventData.version !== undefined) {
+                const lastVersion = historyVersionRef.current.get(eventData.sessionId) || 0;
+
+                // 如果是第一个事件（lastVersion = 0），接受任何版本号
+                if (lastVersion === 0 || eventData.version > lastVersion) {
+                  historyVersionRef.current.set(eventData.sessionId, eventData.version);
+                } else if (eventData.version <= lastVersion) {
+                  log('⚠️ Ignored old version', eventData.version, '(last:', lastVersion, ') for session', eventData.sessionId);
+                  return;
+                }
+            }
+
+            const history = eventData.data;
+
+            // ⚠️ 优化4：重复更新检测（避免不必要的重渲染）
+            const newHash = computeHistoryHash(history);
+            const lastHash = lastHistoryHashRef.current.get(eventData.sessionId);
+
+            if (lastHash === newHash) {
+                log('⚠️ Skipping duplicate history update for session', eventData.sessionId);
+                return; // 数据未变化，跳过更新
+            }
+
+            lastHistoryHashRef.current.set(eventData.sessionId, newHash);
+
+            // ⚠️ P2-2 优化：清除超时检测并记录延迟
+            if (pendingUpdateRef.current?.sessionId === eventData.sessionId) {
+                const latency = Date.now() - pendingUpdateRef.current.timestamp;
+                if (isDevelopment) {
+                    log('✅ agent:history-update received in', latency, 'ms for', eventData.sessionId);
+                }
+                pendingUpdateRef.current = null;
+            }
+
+            log('✅ Processing history update for current session', eventData.sessionId, ':', history.length, 'messages');
+            setMessages(history.filter(m => m.role !== 'system') || []);
+
+            // ⚠️ 关键修复：只清空当前会话的流式文本，保留其他会话
+            setStreamingTextMap(prev => {
+                const newMap = new Map(prev);
+                newMap.set(eventData.sessionId, '');
+                return newMap;
+            });
+
+            // Note: History is auto-saved by AgentRuntime when message completes
+            // No need to save here - just update the UI
         });
 
         const removeStreamListener = window.ipcRenderer.on('agent:stream-token', (_event, ...args) => {
-            const token = args[0] as string;
-            setStreamingText(prev => prev + token);
+            const eventData = args[0] as { sessionId: string; data: string };
+
+            // Filter events by session
+            if (eventData.sessionId !== currentSessionIdRef.current) {
+                return;
+            }
+
+            // ⚠️ 关键修复：更新 Map 中对应会话的流式文本
+            setStreamingTextMap(prev => {
+                const newMap = new Map(prev);
+                const currentText = newMap.get(eventData.sessionId) || '';
+                newMap.set(eventData.sessionId, currentText + eventData.data);
+                return newMap;
+            });
         });
 
         const removeErrorListener = window.ipcRenderer.on('agent:error', (_event, ...args) => {
-            const error = args[0] as string;
-            console.error('Agent Error:', error);
+            const eventData = args[0] as { sessionId: string; data: string };
+
+            // Filter events by session
+            if (eventData.sessionId !== currentSessionIdRef.current) {
+                return;
+            }
+
+            const err = eventData.data;
+            error('Agent Error:', err);
 
             // Add error message to chat so user can see it
             const errorMessage: Message = {
@@ -124,47 +229,175 @@ ${error}
             };
             setMessages(prev => [...prev, errorMessage]);
             setIsProcessing(false);
-            setStreamingText('');
+
+            // ⚠️ 关键修复：清空当前会话的流式文本
+            setStreamingTextMap(prev => {
+                const newMap = new Map(prev);
+                newMap.set(eventData.sessionId, '');
+                return newMap;
+            });
         });
 
-        const removeAbortListener = window.ipcRenderer.on('agent:aborted', () => {
+        const removeAbortListener = window.ipcRenderer.on('agent:aborted', (_event, ...args) => {
+            const eventData = args[0] as { sessionId: string; data: unknown };
+
+            // Only process abort for current session
+            if (eventData.sessionId !== currentSessionIdRef.current) {
+                return;
+            }
+
             setIsProcessing(false);
-            setStreamingText('');
+
+            // ⚠️ 关键修复：清空当前会话的流式文本
+            setStreamingTextMap(prev => {
+                const newMap = new Map(prev);
+                newMap.set(eventData.sessionId, '');
+                return newMap;
+            });
         });
 
-        const removeDoneListener = window.ipcRenderer.on('agent:done', () => {
+        const removeDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
+            const eventData = args[0] as { sessionId: string; data: unknown };
+
+            // Only process done for current session
+            if (eventData.sessionId !== currentSessionIdRef.current) {
+                return;
+            }
+
             setIsProcessing(false);
             setIsSuccess(true);
             setTimeout(() => setIsSuccess(false), 3000);
         });
 
-        return () => {
-            // Save session on unmount to prevent data loss
-            if (messages.length > 0) {
-                const hasRealContent = messages.some(msg => {
-                    const content = msg.content;
-                    if (typeof content === 'string') {
-                        return content.trim().length > 0;
-                    } else if (Array.isArray(content)) {
-                        return content.some(block =>
-                            block.type === 'text' ? (block.text || '').trim().length > 0 : true
-                        );
-                    }
-                    return false;
-                });
-
-                if (hasRealContent) {
-                    window.ipcRenderer.invoke('session:save', messages).catch(err => {
-                        console.error('[FloatingBall] Error saving session on unmount:', err);
-                    });
-                }
+        // Listen for session running status changes to update current session ID
+        const removeRunningListener = window.ipcRenderer.on('session:running-changed', (_event, data) => {
+            const { sessionId: newSessionId, isRunning } = data as { sessionId: string; isRunning: boolean; count: number };
+            // Update session ID if task starts and we don't have one
+            if (isRunning && !currentSessionIdRef.current) {
+                setSessionId(newSessionId);
             }
+        });
+
+        // Listen for session current changed events
+        const removeSessionChangedListener = window.ipcRenderer.on('session:current-changed', async (_event, data) => {
+            const { sessionId: newSessionId, isRunning } = data as { sessionId: string | null; isRunning?: boolean };
+            log('Session changed to:', newSessionId, 'running:', isRunning);
+
+            // ⚠️ 关键修复：使用队列管理多个会话切换
+            switchingSessionsRef.current.clear(); // 清空旧的切换标志
+            if (newSessionId !== null) {
+                switchingSessionsRef.current.add(newSessionId); // 添加新会话到切换队列
+            }
+
+            // ⚠️ 关键修复：立即同步更新 ref
+            currentSessionIdRef.current = newSessionId;
+            setSessionId(newSessionId);
+
+            // 如果是 null（新会话），清空消息
+            if (newSessionId === null) {
+                setMessages([]);
+                switchingSessionsRef.current.clear(); // 新会话不需要等待
+            } else {
+                // ⚠️ 关键修复：主动加载历史作为fallback，确保即使 agent:history-update 丢失/延迟也能显示数据
+                log('Loading history for session', newSessionId, '...');
+
+                try {
+                    const session = await window.ipcRenderer.invoke('session:get', newSessionId) as { messages: Message[] } | null;
+                    if (session && session.messages) {
+                        const filteredMessages = session.messages.filter(m => m.role !== 'system');
+                        log('✅ Loaded history for session', newSessionId, ':', filteredMessages.length, 'messages');
+                        setMessages(filteredMessages);
+                    } else {
+                        warn('Session', newSessionId, 'not found or has no messages');
+                        setMessages([]);
+                    }
+                } catch (err) {
+                    error('Error loading session', newSessionId, ':', err);
+                    setMessages([]);
+                }
+
+                // ⚠️ P2-2 优化：记录预期的更新，用于超时检测
+                pendingUpdateRef.current = {
+                    sessionId: newSessionId,
+                    timestamp: Date.now()
+                };
+
+                // ⚠️ P2-2 优化：设置超时检测（1秒后检查）
+                setTimeout(() => {
+                    if (pendingUpdateRef.current?.sessionId === newSessionId) {
+                        warn('⏱️ agent:history-update timeout for session', newSessionId, '- event may be lost');
+                        pendingUpdateRef.current = null;
+                    }
+                }, 1000);
+            }
+
+            // ⚠️ 延迟清除切换标志，给 agent:history-update 事件足够的时间到达
+            // 如果 agent:history-update 在这个期间到达，它会覆盖主动加载的历史（因为有版本号检查）
+            if (newSessionId !== null) {
+                setTimeout(() => {
+                    switchingSessionsRef.current.delete(newSessionId);
+                    log('✅ Session switch complete for:', newSessionId, ', remaining:', Array.from(switchingSessionsRef.current));
+                }, 500);
+            }
+
+            log('✅ Session ref and messages updated for:', newSessionId);
+        });
+
+        // ⚠️ P2-1 优化：内存清理机制 - 定期清理旧会话的版本号和哈希数据
+        const cleanupInterval = setInterval(() => {
+            const currentSession = currentSessionIdRef.current;
+            const versionKeys = Array.from(historyVersionRef.current.keys());
+            const hashKeys = Array.from(lastHistoryHashRef.current.keys());
+
+            // 只保留当前会话和最近 3 个活跃会话的数据
+            const toKeep = [currentSession, ...versionKeys.slice(0, 3)].filter(Boolean) as string[];
+
+            // 清理版本号 Map
+            let versionCleaned = false;
+            const newVersionMap = new Map<string, number>();
+            toKeep.forEach(id => {
+                const version = historyVersionRef.current.get(id);
+                if (version !== undefined) {
+                    newVersionMap.set(id, version);
+                }
+            });
+            if (newVersionMap.size < historyVersionRef.current.size) {
+                historyVersionRef.current = newVersionMap;
+                versionCleaned = true;
+            }
+
+            // 清理哈希 Map
+            let hashCleaned = false;
+            const newHashMap = new Map<string, string>();
+            toKeep.forEach(id => {
+                const hash = lastHistoryHashRef.current.get(id);
+                if (hash !== undefined) {
+                    newHashMap.set(id, hash);
+                }
+            });
+            if (newHashMap.size < lastHistoryHashRef.current.size) {
+                lastHistoryHashRef.current = newHashMap;
+                hashCleaned = true;
+            }
+
+            if ((versionCleaned || hashCleaned) && isDevelopment) {
+                log('🧹 Memory cleanup: versions', versionKeys.length, '→', newVersionMap.size,
+                    ', hashes', hashKeys.length, '→', newHashMap.size);
+            }
+        }, 5 * 60 * 1000); // 每 5 分钟清理一次
+
+        return () => {
+            // Note: History is auto-saved by AgentRuntime backend
+            // No need to manually save on unmount
 
             removeUpdateListener?.();
             removeStreamListener?.();
             removeErrorListener?.();
             removeAbortListener?.();
             removeDoneListener?.();
+            removeRunningListener?.();
+            removeSessionChangedListener?.();
+            clearInterval(cleanupInterval); // 清理定时器
         };
     }, []);
 
@@ -299,11 +532,44 @@ ${error}
 
     // Handle submit - send message and expand to full view
     const handleSubmit = async (content: string, images: string[]) => {
-        if ((!content.trim() && images.length === 0) || isProcessing) return;
-        // Removed sessionId check for single-session mode
+        // Validate input
+        if (!content.trim() && images.length === 0) return;
 
+        // Prevent concurrent message sending
+        if (isProcessing) {
+            warn('Message send blocked: task already running');
+            return;
+        }
+
+        // ⚠️ 关键修复：立即将用户消息添加到messages，让用户马上看到
+        const userMessage: Message = typeof content === 'string' && images.length === 0
+            ? { role: 'user' as const, content }
+            : {
+                role: 'user' as const,
+                content: [
+                    { type: 'text', text: content },
+                    ...(images || []).map(img => ({
+                        type: 'image',
+                        source: { media_type: 'image/jpeg', data: img.split(',')[1] }
+                    }))
+                ]
+            };
+
+        log('Adding user message to messages immediately:', userMessage);
+        setMessages(prev => [...prev, userMessage]);
+
+        // Set initial processing state
         setIsProcessing(true);
-        setStreamingText('');
+
+        // ⚠️ 关键修复：清空当前会话的流式文本，保留其他会话
+        if (sessionId) {
+            setStreamingTextMap(prev => {
+                const newMap = new Map(prev);
+                newMap.set(sessionId, '');
+                return newMap;
+            });
+        }
+
         setBallState('expanded'); // Expand to show conversation
 
         try {
@@ -314,9 +580,12 @@ ${error}
                 await window.ipcRenderer.invoke('agent:send-message', content.trim());
             }
         } catch (err) {
-            console.error(err);
+            error('Failed to send message:', err);
+            // Reset processing state on error - user can try again
             setIsProcessing(false);
         }
+
+        // Note: isProcessing will be managed by session:running-changed, agent:done, agent:error events
     };
 
     // Handle abort - stop the current task
@@ -560,7 +829,7 @@ ${error}
                                     if (block.type === 'text' && block.text) {
                                         return (
                                             <div key={i} className="text-sm text-stone-600 dark:text-zinc-300 leading-relaxed max-w-none">
-                                                <MarkdownRenderer content={block.text} className="prose-sm" isDark={true} />
+                                                <MarkdownRenderer content={block.text} className="prose-sm" isDark={true} onFilePathClick={handleFilePathClick} />
                                             </div>
                                         );
                                     }
@@ -580,7 +849,7 @@ ${error}
                     {/* Streaming */}
                     {streamingText && (
                         <div className="text-sm text-stone-600 leading-relaxed max-w-none">
-                            <MarkdownRenderer content={streamingText} className="prose-sm" />
+                            <MarkdownRenderer content={streamingText} className="prose-sm" onFilePathClick={handleFilePathClick} />
                             <span className="inline-block w-1.5 h-4 bg-orange-500 ml-0.5 animate-pulse" />
                         </div>
                     )}
@@ -615,7 +884,11 @@ ${error}
                             setIsNewSession(true); // Mark as new session
                             hasInitialized.current = false; // Reset initialization flag
                             setMessages([]);
-                            setStreamingText('');
+
+                            // ⚠️ 关键修复：清空当前会话的流式文本（但由于 sessionId 为 null，这里实际上清空了整个 Map）
+                            // 如果需要保留其他会话的流式文本，可以只清空当前 sessionId
+                            setStreamingTextMap(new Map());
+
                             // Keep the ball in input state for new conversation
                             setBallState('input');
                         }}
