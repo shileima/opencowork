@@ -37,27 +37,43 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
 /**
+ * 简单版本比较：a >= b 返回 true
+ * 用于判断热更新版本是否不低于应用版本，避免旧热更新导致黑屏
+ */
+function isVersionGte(a: string, b: string): boolean {
+  const parse = (v: string) => v.split('.').map(Number)
+  const [a0, a1, a2] = parse(a)
+  const [b0, b1, b2] = parse(b)
+  if (a0 !== b0) return a0 >= b0
+  if (a1 !== b1) return a1 >= b1
+  return (a2 ?? 0) >= (b2 ?? 0)
+}
+
+/**
  * 获取前端资源目录路径
- * 生产环境下优先使用热更新目录，否则使用内置资源
+ * 生产环境下优先使用热更新目录（仅当热更新版本>=应用版本），否则使用内置资源
  */
 function getRendererDistPath(): string {
   if (VITE_DEV_SERVER_URL) {
-    // 开发模式直接返回默认路径
     return RENDERER_DIST
   }
 
-  // 生产模式：检查热更新目录
   const hotUpdateDistDir = directoryManager.getHotUpdateDistDir()
   const hotUpdateIndexPath = path.join(hotUpdateDistDir, 'index.html')
-  
-  if (fs.existsSync(hotUpdateIndexPath)) {
-    console.log('[Main] Using hot-update dist directory')
-    return hotUpdateDistDir
+  if (!fs.existsSync(hotUpdateIndexPath)) {
+    console.log('[Main] Using built-in dist directory')
+    return RENDERER_DIST
   }
 
-  // 回退到内置资源
-  console.log('[Main] Using built-in dist directory')
-  return RENDERER_DIST
+  const appVersion = app.getVersion()
+  const hotUpdateVersion = directoryManager.getHotUpdateVersion()
+  if (!hotUpdateVersion || !isVersionGte(hotUpdateVersion, appVersion)) {
+    console.log(`[Main] Using built-in dist directory (hot-update ${hotUpdateVersion ?? '?'} < app ${appVersion})`)
+    return RENDERER_DIST
+  }
+
+  console.log('[Main] Using hot-update dist directory')
+  return hotUpdateDistDir
 }
 
 // Helper to get icon path for both dev and prod

@@ -13,8 +13,8 @@
   "scripts": {
     "dev": "vite",
     "dev:win": "chcp 65001 && vite",
-    "build": "node scripts/verify-builtin-resources.cjs && tsc && vite build && electron-builder",
-    "build:dir": "node scripts/verify-builtin-resources.cjs && tsc && vite build && electron-builder --dir",
+    "build": "node scripts/verify-builtin-resources.cjs && tsc && vite build && electron-builder --publish never",
+    "build:dir": "node scripts/verify-builtin-resources.cjs && tsc && vite build && electron-builder --dir --publish never",
     "build:icons": "node scripts/build-icons.mjs",
     "build:manifest": "node scripts/generate-resource-manifest.mjs",
     "lint": "oxlint",
