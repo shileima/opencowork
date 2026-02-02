@@ -7,7 +7,7 @@ export interface I18nContextType {
     language: Language;
     languageMode: LanguageMode;
     setLanguageMode: (mode: LanguageMode) => void;
-    t: (key: TranslationKey) => string;
+    t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }
 
 export const I18nContext = createContext<I18nContextType | null>(null);
@@ -42,8 +42,18 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         return () => window.removeEventListener('languagechange', listener);
     }, [languageMode]);
 
-    const t = (key: TranslationKey): string => {
-        return translations[language][key] || translations.en[key] || key;
+    const t = (key: TranslationKey, params?: Record<string, string | number>): string => {
+        let translation = translations[language][key] || translations.en[key] || key;
+
+        // Replace parameters in the translation string
+        if (params) {
+            Object.keys(params).forEach(paramKey => {
+                const placeholder = `{${paramKey}}`;
+                translation = translation.replace(new RegExp(placeholder, 'g'), String(params[paramKey]));
+            });
+        }
+
+        return translation;
     };
 
     return (

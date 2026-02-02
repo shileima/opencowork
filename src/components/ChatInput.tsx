@@ -8,11 +8,9 @@ interface ChatInputProps {
     isProcessing: boolean;
     workingDir: string | null;
     onSelectFolder: () => void;
-    mode: 'chat' | 'work' | 'automation';
+    mode: 'memory' | 'work';
     config: any;
     setConfig: (config: any) => void;
-    /** Project 模式：锁定项目名称，不显示文件夹选择按钮 */
-    lockedProjectName?: string | null;
 }
 
 export function ChatInput({
@@ -23,8 +21,7 @@ export function ChatInput({
     onSelectFolder,
     mode,
     config,
-    setConfig,
-    lockedProjectName
+    setConfig
 }: ChatInputProps) {
     const { t } = useI18n();
     const [input, setInput] = useState('');
@@ -90,11 +87,10 @@ export function ChatInput({
         e.preventDefault();
         if ((!input.trim() && images.length === 0) || isProcessing) return;
 
-        if (images.length > 0) {
-            onSendMessage({ content: input, images });
-        } else {
-            onSendMessage(input);
-        }
+        const messageContent = images.length > 0 ? { content: input, images } : input;
+
+        // All messages are sent asynchronously (fire and forget)
+        onSendMessage(messageContent);
 
         setInput('');
         setImages([]);
@@ -149,7 +145,7 @@ export function ChatInput({
 
     return (
         <div className="border-t border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 pt-3 pb-1 shadow-lg shadow-stone-200/50 dark:shadow-black/20">
-            <div className="max-w-xl mx-auto">
+            <div className="max-w-xl md:max-w-2xl lg:max-w-3xl xl:max-w-4xl 2xl:max-w-5xl mx-auto">
                 {/* Image Preview Area */}
                 {images.length > 0 && (
                     <div className="flex gap-2 mb-2 overflow-x-auto pb-1">
@@ -176,7 +172,7 @@ export function ChatInput({
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={handleKeyDown}
                             onPaste={handlePaste}
-                            placeholder={mode === 'chat' ? t('inputMessage') : mode === 'automation' ? t('describeTaskPlaceholder') : workingDir ? t('describeTaskPlaceholder') : t('selectWorkingDirFirst')}
+                            placeholder={mode === 'memory' ? t('inputMessage') : workingDir ? t('describeTaskPlaceholder') : t('selectWorkingDirFirst')}
                             rows={1}
                             className="w-full bg-transparent text-stone-800 dark:text-zinc-100 placeholder:text-stone-400 dark:placeholder:text-zinc-500 text-sm focus:outline-none resize-none overflow-y-auto min-h-[24px] max-h-[120px] leading-6 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0"
                             style={{
@@ -195,24 +191,14 @@ export function ChatInput({
                         {/* Toolbar Row */}
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-0.5">
-                                {lockedProjectName ? (
-                                    <div
-                                        className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-stone-600 dark:text-zinc-400 bg-stone-100/80 dark:bg-zinc-800 rounded-lg cursor-default"
-                                        title={t('currentProject') || '当前项目'}
-                                    >
-                                        <FolderOpen size={14} className="shrink-0" />
-                                        <span className="truncate max-w-[100px]">{lockedProjectName}</span>
-                                    </div>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        onClick={onSelectFolder}
-                                        className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
-                                        title={t('selectWorkingDir')}
-                                    >
-                                        <FolderOpen size={16} />
-                                    </button>
-                                )}
+                                <button
+                                    type="button"
+                                    onClick={onSelectFolder}
+                                    className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                                    title={t('selectWorkingDir')}
+                                >
+                                    <FolderOpen size={16} />
+                                </button>
 
                                 <button
                                     type="button"

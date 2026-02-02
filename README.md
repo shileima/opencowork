@@ -125,7 +125,7 @@ sudo xattr -rd com.apple.quarantine /Applications/OpenCowork.app
 
 > **Safety Guarantee:** The app is completely safe and open-source:
 > - View source code: [github.com/Safphere/opencowork](https://github.com/Safphere/opencowork)
-> - Build it yourself: `npm install && npm run build`
+> - Build it yourself: `bun install && npm run build`
 > - Join our community to ask other users
 
 ### Windows and Linux

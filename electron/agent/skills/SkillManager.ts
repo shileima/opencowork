@@ -1,8 +1,9 @@
 import fs from 'fs/promises';
 import path from 'path';
 import yaml from 'js-yaml';
+import os from 'os';
 import { app } from 'electron';
-import { directoryManager } from '../../config/DirectoryManager';
+import logger from '../../services/Logger';
 
 export interface SkillDefinition {
     name: string;
@@ -27,8 +28,7 @@ export class SkillManager {
     }
 
     constructor() {
-        // 使用 DirectoryManager 获取技能目录
-        this.skillsDir = directoryManager.getSkillsDir();
+        this.skillsDir = path.join(os.homedir(), '.opencowork', 'skills');
     }
 
     private async pathExists(testPath: string): Promise<boolean> {
@@ -40,114 +40,105 @@ export class SkillManager {
         }
     }
 
-    /**
-     * 获取内置技能源目录
-     * 优先使用热更新目录，否则使用内置资源
-     */
-    private async getBuiltinSkillsSourceDir(): Promise<string | null> {
-        // 优先检查热更新目录
-        const hotUpdateSkillsDir = directoryManager.getHotUpdateSkillsDir();
-        if (await this.pathExists(hotUpdateSkillsDir)) {
-            console.log('[SkillManager] Using hot-update skills directory');
-            return hotUpdateSkillsDir;
-        }
-
-        // 回退到内置资源
-        const builtinDir = directoryManager.getBuiltinSkillsDir();
-        if (await this.pathExists(builtinDir)) {
-            return builtinDir;
-        }
-
-        return null;
-    }
-
     async initializeDefaults() {
-        console.log('[SkillManager] Initializing default skills...');
-        console.log(`[SkillManager] App packaged: ${app.isPackaged}`);
-        console.log(`[SkillManager] Resources path: ${app.isPackaged ? process.resourcesPath : 'N/A (dev mode)'}`);
-        console.log(`[SkillManager] CWD: ${process.cwd()}`);
-        console.log(`[SkillManager] process.resourcesPath exists: ${app.isPackaged ? await this.pathExists(process.resourcesPath) : 'N/A'}`);
+        logger.debug('[SkillManager] Initializing default skills...');
+        logger.debug(`App packaged: ${app.isPackaged}`);
+        logger.debug(`Resources path: ${app.isPackaged ? process.resourcesPath : 'N/A (dev mode)'}`);
+        logger.debug(`CWD: ${process.cwd()}`);
+        logger.debug(`process.resourcesPath exists: ${app.isPackaged ? await this.pathExists(process.resourcesPath) : 'N/A'}`);
 
         try {
-            // 获取内置技能目录（优先热更新）
-            const sourceDir = await this.getBuiltinSkillsSourceDir();
-            
+            // Determine source directory for default skills
+            let sourceDir = '';
+            const possiblePaths: string[] = [];
+
+            if (app.isPackaged) {
+                // In production, try multiple possible locations
+                possiblePaths.push(
+                    path.join(process.resourcesPath, 'skills'),  // Our electron-builder config
+                    path.join(process.resourcesPath, 'resources', 'skills'),  // Alternative layout
+                    path.join(process.resourcesPath, 'app.asar.unpacked', 'skills')  // Unpacked asar
+                );
+            } else {
+                // In development
+                possiblePaths.push(
+                    path.join(process.cwd(), 'resources', 'skills'),
+                    path.join(process.cwd(), 'skills')  // Alternative dev layout
+                );
+            }
+
+            // Try each possible path
+            for (const testPath of possiblePaths) {
+                logger.debug(`Checking path: ${testPath}`);
+                try {
+                    await fs.access(testPath);
+                    sourceDir = testPath;
+                    logger.debug(`✓ Found skills directory at: ${testPath}`);
+                    break;
+                } catch {
+                    logger.debug(`✗ Path not found: ${testPath}`);
+                }
+            }
+
             if (!sourceDir) {
-                console.error('[SkillManager] ❌ Could not find default skills directory');
+                logger.error('[SkillManager] ❌ Could not find default skills directory in any of these locations:', possiblePaths);
                 return;
             }
-            
-            console.log(`[SkillManager] Using builtin skills directory: ${sourceDir}`);
+
+            logger.debug(`Using source directory: ${sourceDir}`);
 
             // Ensure target directory exists
             try {
                 await fs.access(this.skillsDir);
             } catch {
-                console.log(`[SkillManager] Creating target skills directory: ${this.skillsDir}`);
+                logger.debug(`Creating target skills directory: ${this.skillsDir}`);
                 await fs.mkdir(this.skillsDir, { recursive: true });
             }
 
-            // Copy files recursively (including awesome-claude-skills subdirectory)
-            console.log('[SkillManager] Reading source directory...');
+            // Copy files
+            logger.debug('[SkillManager] Reading source directory...');
             const files = await fs.readdir(sourceDir);
-            console.log(`[SkillManager] Found ${files.length} items in source directory`);
+            logger.debug(`Found ${files.length} items in source directory`);
 
             let installedCount = 0;
             let skippedCount = 0;
 
-            // Helper function to recursively copy skills
-            // Skills are flattened to the target directory (no nested structure)
-            const copySkillsRecursively = async (sourcePath: string, baseTargetPath: string) => {
-                const items = await fs.readdir(sourcePath);
-                
-                for (const item of items) {
-                    const itemSourcePath = path.join(sourcePath, item);
-                    let itemStats;
-                    try {
-                        itemStats = await fs.stat(itemSourcePath);
-                    } catch {
-                        console.log(`[SkillManager] Skipping inaccessible item: ${item}`);
+            for (const file of files) {
+                // Must be a directory (skills are folders now)
+                try {
+                    const stats = await fs.stat(path.join(sourceDir, file));
+                    if (!stats.isDirectory()) {
+                        logger.debug(`Skipping non-directory item: ${file}`);
                         continue;
                     }
-                    
-                    if (itemStats.isDirectory()) {
-                        // Check if this directory contains a SKILL.md (it's a skill)
-                        const skillMdPath = path.join(itemSourcePath, 'SKILL.md');
-                        try {
-                            await fs.access(skillMdPath);
-                            // This is a skill directory - copy it to target (flattened)
-                            const targetSkillPath = path.join(baseTargetPath, item);
-                            
-                            // Check if skill already exists
-                            try {
-                                await fs.access(targetSkillPath);
-                                console.log(`[SkillManager] ⊙ Skipped existing skill: ${item}`);
-                                skippedCount++;
-                            } catch {
-                                // Doesn't exist, proceed to copy
-                                try {
-                                    await fs.cp(itemSourcePath, targetSkillPath, { recursive: true });
-                                    console.log(`[SkillManager] ✓ Installed default skill: ${item}`);
-                                    installedCount++;
-                                } catch (e: any) {
-                                    console.error(`[SkillManager] ✗ Failed to install skill ${item}:`, e.message);
-                                }
-                            }
-                        } catch {
-                            // No SKILL.md, might be a container directory (like awesome-claude-skills)
-                            // Recursively process subdirectories
-                            await copySkillsRecursively(itemSourcePath, baseTargetPath);
-                        }
+                } catch {
+                    logger.debug(`Skipping inaccessible item: ${file}`);
+                    continue;
+                }
+
+                const targetPath = path.join(this.skillsDir, file);
+
+                // Check if skill already exists to avoid re-copying on every startup
+                try {
+                    await fs.access(targetPath);
+                    // Exists, skip
+                    logger.debug(`⊙ Skipped existing skill: ${file}`);
+                    skippedCount++;
+                } catch {
+                    // Doesn't exist, proceed to copy
+                    try {
+                        await fs.cp(path.join(sourceDir, file), targetPath, { recursive: true });
+                        logger.debug(`✓ Installed default skill: ${file}`);
+                        installedCount++;
+                    } catch (e) {
+                        logger.error(`✗ Failed to install skill ${file}:`, e);
                     }
                 }
-            };
+            }
 
-            // Process all skills recursively
-            await copySkillsRecursively(sourceDir, this.skillsDir);
-
-            console.log(`[SkillManager] ✅ Default skills initialization complete: ${installedCount} installed, ${skippedCount} skipped.`);
+            logger.debug(`✅ Default skills initialization complete: ${installedCount} installed, ${skippedCount} skipped.`);
         } catch (e) {
-            console.error('[SkillManager] ❌ Failed to initialize default skills:', e);
+            logger.error('[SkillManager] ❌ Failed to initialize default skills:', e);
         }
     }
 
@@ -158,18 +149,18 @@ export class SkillManager {
 
     async loadSkills(force = false) {
         if (this.isLoading) {
-            console.log('[SkillManager] Already loading skills, skipping concurrent request.');
+            logger.debug('[SkillManager] Already loading skills, skipping concurrent request.');
             return;
         }
 
         // Skip if loaded recently (unless forced)
         if (!force && Date.now() - this.lastLoaded < this.LOAD_COOLDOWN) {
-            console.log('[SkillManager] Skills loaded recently (cache hit), skipping reload.');
+            logger.debug('[SkillManager] Skills loaded recently (cache hit), skipping reload.');
             return;
         }
 
         this.isLoading = true;
-        console.log('[SkillManager] Starting loadSkills...');
+        logger.debug('[SkillManager] Starting loadSkills...');
 
         try {
             // Only initialize defaults ONCE per app session or if forced
@@ -180,25 +171,25 @@ export class SkillManager {
                     await Promise.race([this.initializeDefaults(), defaultsTimeout]);
                     this.defaultsInitialized = true;
                 } catch (e: any) {
-                    console.error(`[SkillManager] Defaults initialization warning: ${e.message}`);
+                    logger.error(`Defaults initialization warning: ${e.message}`);
                 }
             }
 
-            console.log('[SkillManager] Clearing existing skills...');
+            logger.debug('[SkillManager] Clearing existing skills...');
             this.skills.clear();
             try {
                 await fs.access(this.skillsDir);
             } catch {
-                console.log('[SkillManager] No skills directory found, skipping load.');
+                logger.debug('[SkillManager] No skills directory found, skipping load.');
                 return; // No skills directory
             }
 
-            console.log(`[SkillManager] Reading skills directory: ${this.skillsDir}`);
+            logger.debug(`Reading skills directory: ${this.skillsDir}`);
             const files = await fs.readdir(this.skillsDir);
-            console.log(`[SkillManager] Found ${files.length} files/folders.`);
+            logger.debug(`Found ${files.length} files/folders.`);
 
             for (const file of files) {
-                // console.log(`[SkillManager] Checking file: ${file}`); // Reduced verbosity
+                // logger.debug(`Checking file: ${file}`); // Reduced verbosity
                 const filePath = path.join(this.skillsDir, file);
                 let stats;
                 try {
@@ -210,19 +201,19 @@ export class SkillManager {
                     const skillMdPath = path.join(filePath, 'SKILL.md');
                     try {
                         await fs.access(skillMdPath);
-                        console.log(`[SkillManager] Parsing skill (directory): ${file}`);
+                        logger.debug(`Parsing skill (directory): ${file}`);
                         await this.parseSkill(skillMdPath);
                     } catch {
-                        // console.log(`[SkillManager] No SKILL.md found in ${file}`);
+                        // logger.debug(`No SKILL.md found in ${file}`);
                     }
                 } else if (file.endsWith('.md')) {
                     // Support legacy single-file skills
-                    console.log(`[SkillManager] Parsing skill (file): ${file}`);
+                    logger.debug(`Parsing skill (file): ${file}`);
                     await this.parseSkill(filePath);
                 }
             }
             this.lastLoaded = Date.now();
-            console.log(`[SkillManager] Loaded ${this.skills.size} skills total.`);
+            logger.debug(`Loaded ${this.skills.size} skills total.`);
         } finally {
             this.isLoading = false;
         }
@@ -230,11 +221,11 @@ export class SkillManager {
 
     private async parseSkill(filePath: string) {
         try {
-            console.log(`[SkillManager] Reading content of ${filePath}`);
+            logger.debug(`Reading content of ${filePath}`);
             const content = await fs.readFile(filePath, 'utf-8');
             const parts = content.split('---');
             if (parts.length < 3) {
-                console.warn(`[SkillManager] Invalid frontmatter structure in ${filePath}`);
+                logger.warn(`Invalid frontmatter structure in ${filePath}`);
                 return;
             }
 
@@ -247,10 +238,10 @@ export class SkillManager {
                 const sanitizedName = this.sanitizeName(originalName);
 
                 if (sanitizedName !== originalName) {
-                    console.log(`[SkillManager] Sanitized skill name: "${originalName}" -> "${sanitizedName}"`);
+                    logger.debug(`Sanitized skill name: "${originalName}" -> "${sanitizedName}"`);
                 }
 
-                console.log(`[SkillManager] Successfully loaded ${sanitizedName}`);
+                logger.debug(`Successfully loaded ${sanitizedName}`);
 
                 // Key map by sanitized name so the AgentRuntime can find it exactly as the model calls it
                 this.skills.set(sanitizedName, {
@@ -260,10 +251,10 @@ export class SkillManager {
                     instructions: instructions
                 });
             } else {
-                console.warn(`[SkillManager] Missing name/description in frontmatter of ${filePath}`);
+                logger.warn(`Missing name/description in frontmatter of ${filePath}`);
             }
         } catch (e) {
-            console.error(`[SkillManager] Failed to load skill from ${filePath}`, e);
+            logger.error(`Failed to load skill from ${filePath}`, e);
         }
     }
 

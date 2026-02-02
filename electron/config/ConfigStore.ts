@@ -1,4 +1,5 @@
 import Store from 'electron-store';
+import logger from '../services/Logger';
 
 export interface ToolPermission {
     tool: string;           // 'write_file', 'run_command', etc.
@@ -288,23 +289,23 @@ class ConfigStore {
 
     // === Helper for Main.ts set-all ===
     setAll(cfg: Partial<AppConfig>) {
-        console.log('[ConfigStore] setAll called with:', Object.keys(cfg));
+        logger.debug('[ConfigStore] setAll called with:', Object.keys(cfg));
 
         if (cfg.authorizedFolders !== undefined) {
             this.store.set('authorizedFolders', cfg.authorizedFolders);
-            console.log('[ConfigStore] Updated authorizedFolders');
+            logger.debug('[ConfigStore] Updated authorizedFolders');
         }
         if (cfg.networkAccess !== undefined) {
             this.store.set('networkAccess', cfg.networkAccess);
-            console.log('[ConfigStore] Updated networkAccess');
+            logger.debug('[ConfigStore] Updated networkAccess');
         }
         if (cfg.shortcut !== undefined) {
             this.store.set('shortcut', cfg.shortcut);
-            console.log('[ConfigStore] Updated shortcut');
+            logger.debug('[ConfigStore] Updated shortcut');
         }
         if (cfg.activeProviderId !== undefined) {
             this.store.set('activeProviderId', cfg.activeProviderId);
-            console.log('[ConfigStore] Updated activeProviderId:', cfg.activeProviderId);
+            logger.debug('[ConfigStore] Updated activeProviderId:', cfg.activeProviderId);
         }
         if (cfg.providers !== undefined) {
             // Merge with existing providers to preserve user data
@@ -329,12 +330,12 @@ class ConfigStore {
             }
 
             this.store.set('providers', mergedProviders);
-            console.log('[ConfigStore] Updated providers, keys:', Object.keys(mergedProviders));
+            logger.debug('[ConfigStore] Updated providers, keys:', Object.keys(mergedProviders));
         }
 
         // Verify the save
         const saved = this.store.get('providers');
-        console.log('[ConfigStore] Verification - saved providers:', Object.keys(saved || {}).length);
+        logger.debug('[ConfigStore] Verification - saved providers:', Object.keys(saved || {}).length);
     }
 
     // ... Keep Permissions methods

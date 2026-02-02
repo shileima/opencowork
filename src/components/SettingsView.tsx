@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Settings, FolderOpen, Server, Check, Plus, Trash2, Edit2, Zap, Eye, EyeOff, ExternalLink, AlertTriangle, ChevronDown, Loader2, Activity, Info, Shield, FolderTree, UserCog, Star } from 'lucide-react';
+import { X, Settings, FolderOpen, Server, Check, Plus, Trash2, Edit2, Zap, Eye, EyeOff, ExternalLink, AlertTriangle, ChevronDown, Loader2, Activity, Info, Shield } from 'lucide-react';
 
 import logo from '../assets/logo.png';
 import logoGlm from '../assets/logo-glm.png';
@@ -8,8 +8,10 @@ import logoMinimaxCn from '../assets/logo-minimax-cn.png';
 import logoMinimaxIntl from '../assets/logo-minimax-intl.png';
 import { SkillEditor } from './SkillEditor';
 import { MCPSettings } from './MCPSettings';
+import { MemorySettings } from './MemorySettings';
 import { useTheme } from '../theme/ThemeContext';
 import { useI18n } from '../i18n/I18nContext';
+import { logger } from '../services/logger';
 
 interface SettingsViewProps {
     onClose: () => void;
@@ -145,54 +147,15 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     const isFirstRender = useRef(true);
     // Track previous config to prevent redundant saves
     const prevConfigRef = useRef<string>('');
-    const [activeTab, setActiveTab] = useState<'api' | 'folders' | 'mcp' | 'skills' | 'directories' | 'admin' | 'advanced' | 'about'>('api');
-    const [directoryPaths, setDirectoryPaths] = useState<Record<string, string> | null>(null);
-    const [userRole, setUserRole] = useState<'user' | 'admin'>('user');
-    const [userIdentifier, setUserIdentifier] = useState<string>('');
-    const [presetAdmins, setPresetAdmins] = useState<string[]>([]);
-    const [userAccountInfo, setUserAccountInfo] = useState<{
-        username: string;
-        uid: number;
-        gid: number;
-        homedir: string;
-        shell: string;
-        hostname: string;
-        platform: string;
-        arch: string;
-    } | null>(null);
+    const [activeTab, setActiveTab] = useState<'api' | 'folders' | 'memory' | 'mcp' | 'skills' | 'advanced' | 'about'>('api');
     const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
-    const [appInfo, setAppInfo] = useState<{ 
-        name: string; 
-        version: string; 
-        appVersion?: string;
-        hotUpdateVersion?: string | null;
-        author: string; 
-        homepage: string 
-    } | null>(null);
+    const [appInfo, setAppInfo] = useState<{ name: string; version: string; author: string; homepage: string } | null>(null);
     const [checkingUpdate, setCheckingUpdate] = useState(false);
 
     const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean, latestVersion: string, releaseUrl: string } | null>(null);
-    
-    // Resource update states
-    const [checkingResourceUpdate, setCheckingResourceUpdate] = useState(false);
-    const [resourceUpdateInfo, setResourceUpdateInfo] = useState<{
-        hasUpdate: boolean;
-        currentVersion: string;
-        latestVersion: string;
-        updateSize?: number;
-        changelog?: string;
-    } | null>(null);
-    const [updatingResources, setUpdatingResources] = useState(false);
-    const [updateProgress, setUpdateProgress] = useState<{ 
-        stage?: 'checking' | 'downloading' | 'extracting' | 'applying' | 'completed';
-        total: number; 
-        downloaded: number; 
-        current: string;
-        percentage?: number;
-    } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
@@ -203,30 +166,6 @@ export function SettingsView({ onClose }: SettingsViewProps) {
 
         // Removed silent update check on mount to improve performance
         // Updates should be checked in the About tab or manually
-    }, []);
-
-    // 监听自动检测到的资源更新
-    useEffect(() => {
-        const handleAutoUpdateFound = (_event: any, updateInfo: any) => {
-            console.log('[SettingsView] Auto update detected:', updateInfo);
-            setResourceUpdateInfo({
-                hasUpdate: true,
-                currentVersion: updateInfo.currentVersion,
-                latestVersion: updateInfo.latestVersion,
-                updateSize: updateInfo.updateSize,
-                changelog: updateInfo.changelog
-            });
-            // 自动切换到"关于"标签页
-            setActiveTab('about');
-        };
-
-        const removeListener = window.ipcRenderer?.on('resource:update-available', handleAutoUpdateFound);
-
-        return () => {
-            if (removeListener) {
-                removeListener();
-            }
-        };
     }, []);
 
     const handleCheckUpdate = async () => {
@@ -242,83 +181,10 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                 });
             }
         } catch (error) {
-            console.error('Check update failed', error);
+            logger.error('Check update failed', error);
         } finally {
             setCheckingUpdate(false);
         }
-    };
-
-    // 检查资源更新
-    const handleCheckResourceUpdate = async () => {
-        setCheckingResourceUpdate(true);
-        setResourceUpdateInfo(null);
-        try {
-            const result = await window.ipcRenderer?.invoke('resource:check-update') as any;
-            if (result && result.success) {
-                setResourceUpdateInfo({
-                    hasUpdate: result.hasUpdate,
-                    currentVersion: result.currentVersion,
-                    latestVersion: result.latestVersion,
-                    updateSize: result.updateSize,
-                    changelog: result.changelog
-                });
-            }
-        } catch (error) {
-            console.error('Check resource update failed', error);
-        } finally {
-            setCheckingResourceUpdate(false);
-        }
-    };
-
-    // 执行资源更新
-    const handlePerformResourceUpdate = async () => {
-        setUpdatingResources(true);
-        setUpdateProgress(null);
-        try {
-            // 监听更新进度
-            const removeListener = window.ipcRenderer?.on('resource:update-progress', (_event: any, progress: any) => {
-                setUpdateProgress(progress);
-            });
-
-            const result = await window.ipcRenderer?.invoke('resource:perform-update') as any;
-            
-            if (removeListener) {
-                removeListener();
-            }
-
-            if (result && result.success) {
-                // 刷新应用信息以显示新版本
-                const info = await window.ipcRenderer?.invoke('app:info') as any;
-                setAppInfo(info);
-                
-                // 显示成功消息并提示重启
-                if (confirm('资源更新完成！是否立即重启应用以应用更改？')) {
-                    await window.ipcRenderer?.invoke('resource:restart-app');
-                } else {
-                    // 刷新资源更新信息
-                    await handleCheckResourceUpdate();
-                }
-            } else {
-                const errorMsg = result?.error || '未知错误';
-                alert(`资源更新失败: ${errorMsg}\n\n请检查网络连接或稍后重试。`);
-            }
-        } catch (error: any) {
-            console.error('Resource update failed', error);
-            const errorMsg = error?.message || '未知错误';
-            alert(`资源更新失败: ${errorMsg}\n\n请检查开发者控制台获取详细信息。`);
-        } finally {
-            setUpdatingResources(false);
-            setUpdateProgress(null);
-        }
-    };
-
-    // 格式化字节大小
-    const formatBytes = (bytes: number): string => {
-        if (bytes === 0) return '0 Bytes';
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
     };
 
     // Reset test result when provider changes
@@ -378,7 +244,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     // Listen for tab switch events
     useEffect(() => {
         const handleSwitch = (e: CustomEvent) => {
-            const validTabs = ['api', 'folders', 'mcp', 'skills', 'directories', 'admin', 'advanced', 'about'];
+            const validTabs = ['api', 'folders', 'mcp', 'skills', 'advanced', 'about'];
             if (e.detail && validTabs.includes(e.detail)) {
                 setActiveTab(e.detail as any);
             }
@@ -387,76 +253,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         return () => document.removeEventListener('switch-settings-tab', handleSwitch as EventListener);
     }, []);
 
-    // Listen for trigger resource update event (from CoworkView banner)
-    useEffect(() => {
-        const handleTriggerUpdate = async () => {
-            console.log('[SettingsView] Trigger resource update event received');
-            // 切换到关于页
-            setActiveTab('about');
-            
-            // 如果没有更新信息，先检查更新
-            if (!resourceUpdateInfo?.hasUpdate) {
-                console.log('[SettingsView] No update info, checking for updates first...');
-                setCheckingResourceUpdate(true);
-                setResourceUpdateInfo(null);
-                try {
-                    const result = await window.ipcRenderer?.invoke('resource:check-update') as any;
-                    if (result && result.success && result.hasUpdate) {
-                        setResourceUpdateInfo({
-                            hasUpdate: result.hasUpdate,
-                            currentVersion: result.currentVersion,
-                            latestVersion: result.latestVersion,
-                            updateSize: result.updateSize,
-                            changelog: result.changelog
-                        });
-                        // 自动触发更新
-                        setTimeout(() => {
-                            handlePerformResourceUpdate();
-                        }, 500);
-                    } else {
-                        setResourceUpdateInfo({
-                            hasUpdate: false,
-                            currentVersion: result?.currentVersion || '',
-                            latestVersion: result?.latestVersion || ''
-                        });
-                    }
-                } catch (error) {
-                    console.error('Check resource update failed', error);
-                } finally {
-                    setCheckingResourceUpdate(false);
-                }
-            } else {
-                // 已有更新信息，直接执行更新
-                console.log('[SettingsView] Update info exists, performing update...');
-                handlePerformResourceUpdate();
-            }
-        };
-        
-        document.addEventListener('trigger-resource-update', handleTriggerUpdate);
-        return () => document.removeEventListener('trigger-resource-update', handleTriggerUpdate);
-    }, [resourceUpdateInfo]);
-
     useEffect(() => {
         setIsLoading(true);
-        // 获取用户角色和标识符
-        window.ipcRenderer.invoke('permission:get-role').then((role) => {
-            setUserRole(role as 'user' | 'admin');
-        });
-        window.ipcRenderer.invoke('permission:get-user-identifier').then((identifier) => {
-            setUserIdentifier(identifier as string);
-        });
-        // 获取完整的用户账户信息
-        window.ipcRenderer.invoke('permission:get-user-account-info').then((info) => {
-            setUserAccountInfo(info as any);
-        });
-        // 如果是管理员，加载预设管理员列表
-        window.ipcRenderer.invoke('permission:is-admin').then((isAdmin) => {
-            if (isAdmin) {
-                window.ipcRenderer.invoke('permission:get-preset-admins').then((admins) => {
-                    setPresetAdmins(admins as string[]);
-                });
-            }
-        });
         window.ipcRenderer.invoke('config:get-all').then((cfg) => {
             if (cfg) {
                 const config = cfg as Config;
@@ -484,10 +282,6 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     useEffect(() => {
         if (activeTab === 'skills') {
             refreshSkills();
-        } else if (activeTab === 'directories') {
-            window.ipcRenderer.invoke('directory:get-all-paths').then((paths) => {
-                setDirectoryPaths(paths as Record<string, string>);
-            });
         } else if (activeTab === 'advanced') {
             loadPermissions();
         }
@@ -547,7 +341,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
         } catch (err) {
-            console.error('Save failed:', err);
+            logger.error('Save failed:', err);
             setIsSaving(false);
         }
     };
@@ -650,13 +444,12 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                     {[
                         { id: 'api' as const, label: t('tabGeneral'), icon: <Settings size={14} /> },
                         { id: 'folders' as const, label: t('tabPermissions'), icon: <FolderOpen size={14} /> },
+                        { id: 'memory' as const, label: t('memory'), icon: <Activity size={14} /> },
                         { id: 'mcp' as const, label: t('tabMCP'), icon: <Server size={14} /> },
                         { id: 'skills' as const, label: t('tabSkills'), icon: <Zap size={14} /> },
-                        { id: 'directories' as const, label: (t('tabDirectories' as any) as string) || '目录管理', icon: <FolderTree size={14} /> },
-                        { id: 'admin' as const, label: (t('tabAdmin' as any) as string) || '管理员', icon: <UserCog size={14} />, adminOnly: true },
                         { id: 'advanced' as const, label: t('tabAdvanced'), icon: <Settings size={14} /> },
                         { id: 'about' as const, label: t('tabAbout'), icon: <Info size={14} /> },
-                    ].filter(tab => !(tab as any).adminOnly || userRole === 'admin').map(tab => (
+                    ].map(tab => (
                         <button
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
@@ -1141,6 +934,12 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                             </div>
                         )}
 
+                        {activeTab === 'memory' && (
+                            <div className="h-full flex flex-col overflow-hidden">
+                                <MemorySettings onClose={onClose} />
+                            </div>
+                        )}
+
                         {activeTab === 'skills' && (
                             <div className="h-full flex flex-col">
                                 <TrustedHubPlaceholder
@@ -1187,25 +986,6 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                             </div>
                                                         </div>
                                                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                            {userRole === 'admin' && (
-                                                                <button
-                                                                    onClick={async () => {
-                                                                        if (window.confirm(`确定要将技能 "${skill.name}" 标记为内置吗？\n\n标记后，该技能将随应用分发给所有用户。`)) {
-                                                                            const result = await window.ipcRenderer.invoke('skill:mark-builtin', skill.id) as { success: boolean; error?: string };
-                                                                            if (result.success) {
-                                                                                // 刷新技能列表
-                                                                                refreshSkills();
-                                                                            } else {
-                                                                                alert(result.error || '标记失败');
-                                                                            }
-                                                                        }
-                                                                    }}
-                                                                    className="p-1.5 text-stone-400 dark:text-muted-foreground hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/20 rounded"
-                                                                    title={(t('markAsBuiltin' as any) as string) || '标记为内置'}
-                                                                >
-                                                                    <Star size={14} />
-                                                                </button>
-                                                            )}
                                                             <button
                                                                 onClick={() => {
                                                                     setEditingSkill(skill.id);
@@ -1217,15 +997,13 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                             >
                                                                 <Edit2 size={14} />
                                                             </button>
-                                                            {userRole === 'admin' && (
-                                                                <button
-                                                                    onClick={() => deleteSkill(skill.id)}
-                                                                    className="p-1.5 text-stone-400 dark:text-muted-foreground hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
-                                                                    title={t('delete')}
-                                                                >
-                                                                    <Trash2 size={14} />
-                                                                </button>
-                                                            )}
+                                                            <button
+                                                                onClick={() => deleteSkill(skill.id)}
+                                                                className="p-1.5 text-stone-400 dark:text-muted-foreground hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                                                                title={t('delete')}
+                                                            >
+                                                                <Trash2 size={14} />
+                                                            </button>
                                                         </div>
                                                     </div>
                                                 ))}
@@ -1300,246 +1078,6 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                         <FolderOpen size={10} />
                                         {t('openSkillsFolder')}
                                     </button>
-                                </div>
-                            </div>
-                        )}
-
-                        {activeTab === 'directories' && (
-                            <div className="space-y-4 animate-in fade-in duration-300">
-                                <div className="mb-4">
-                                    <h3 className="text-sm font-semibold text-stone-700 dark:text-zinc-200 mb-2">
-                                                        {(t('directoryManagement' as any) as string) || '目录管理'}
-                                    </h3>
-                                    <p className="text-xs text-stone-500 dark:text-zinc-400 mb-4">
-                                        {(t('directoryManagementDesc' as any) as string) || '查看和管理应用使用的所有目录路径'}
-                                    </p>
-                                </div>
-
-                                {directoryPaths && (
-                                    <div className="space-y-3">
-                                        {Object.entries(directoryPaths).map(([key, path]) => (
-                                            <div
-                                                key={key}
-                                                className="p-3 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-lg hover:border-orange-200 dark:hover:border-zinc-700 transition-colors group"
-                                            >
-                                                <div className="flex items-start justify-between gap-3">
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <FolderTree size={14} className="text-stone-400 dark:text-zinc-500 shrink-0" />
-                                                            <span className="text-xs font-medium text-stone-600 dark:text-zinc-300 capitalize">
-                                                                {key.replace(/([A-Z])/g, ' $1').trim()}
-                                                            </span>
-                                                        </div>
-                                                        <p className="text-[10px] font-mono text-stone-500 dark:text-zinc-400 break-all mt-1">
-                                                            {path}
-                                                        </p>
-                                                    </div>
-                                                    <button
-                                                        onClick={() => window.ipcRenderer.invoke('directory:open-path', path)}
-                                                        className="p-1.5 text-stone-400 hover:text-orange-500 dark:text-zinc-500 dark:hover:text-orange-400 transition-colors opacity-0 group-hover:opacity-100"
-                                                        title={(t('openFolder' as any) as string) || '打开文件夹'}
-                                                    >
-                                                        <ExternalLink size={12} />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {!directoryPaths && (
-                                    <div className="text-center py-8 text-stone-400 dark:text-zinc-500">
-                                        <Loader2 size={16} className="animate-spin mx-auto mb-2" />
-                                        <p className="text-xs">{(t('loading' as any) as string) || '加载中...'}</p>
-                                    </div>
-                                )}
-
-                                <div className="pt-4 border-t border-stone-200 dark:border-zinc-800">
-                                    <div className="flex items-center gap-2 text-xs text-stone-500 dark:text-zinc-400">
-                                        <Info size={12} />
-                                        <span>
-                                            {(t('directoryInfo' as any) as string) || '这些目录由应用自动管理，通常不需要手动修改。'}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {activeTab === 'admin' && (
-                            <div className="space-y-4 animate-in fade-in duration-300">
-                                <div className="mb-4">
-                                    <h3 className="text-sm font-semibold text-stone-700 dark:text-zinc-200 mb-2">
-                                        {(t('adminSettings' as any) as string) || '管理员设置'}
-                                    </h3>
-                                    <p className="text-xs text-stone-500 dark:text-zinc-400 mb-4">
-                                        {(t('adminSettingsDesc' as any) as string) || '管理用户角色和权限设置'}
-                                    </p>
-                                </div>
-
-                                <div className="p-4 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-lg">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div>
-                                            <p className="text-sm font-medium text-stone-700 dark:text-zinc-200">
-                                                {(t('currentRole' as any) as string) || '当前角色'}
-                                            </p>
-                                            <p className="text-xs text-stone-500 dark:text-zinc-400 mt-1">
-                                                {userRole === 'admin' 
-                                                    ? ((t('roleAdmin' as any) as string) || '超级管理员')
-                                                    : ((t('roleUser' as any) as string) || '普通用户')}
-                                            </p>
-                                            {userAccountInfo && (
-                                                <div className="mt-2 space-y-1">
-                                                    <p className="text-[10px] text-stone-400 dark:text-zinc-500 font-mono">
-                                                        {(t('currentUser' as any) as string) || '当前用户'}: {userAccountInfo.username}
-                                                    </p>
-                                                    <details className="text-[10px] text-stone-400 dark:text-zinc-500">
-                                                        <summary className="cursor-pointer hover:text-stone-600 dark:hover:text-zinc-300">
-                                                            {(t('viewAccountDetails' as any) as string) || '查看账户详情'}
-                                                        </summary>
-                                                        <div className="mt-1 pl-2 space-y-0.5 font-mono text-[9px]">
-                                                            <div>UID: {userAccountInfo.uid !== -1 ? userAccountInfo.uid : 'N/A'}</div>
-                                                            <div>GID: {userAccountInfo.gid !== -1 ? userAccountInfo.gid : 'N/A'}</div>
-                                                            <div>Home: {userAccountInfo.homedir}</div>
-                                                            {userAccountInfo.shell && <div>Shell: {userAccountInfo.shell}</div>}
-                                                            <div>Hostname: {userAccountInfo.hostname}</div>
-                                                            <div>Platform: {userAccountInfo.platform}</div>
-                                                            <div>Arch: {userAccountInfo.arch}</div>
-                                                        </div>
-                                                    </details>
-                                                </div>
-                                            )}
-                                        </div>
-                                        {userRole === 'admin' && (
-                                            <span className="px-2 py-1 text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 rounded-full">
-                                                {(t('admin' as any) as string) || '管理员'}
-                                            </span>
-                                        )}
-                                    </div>
-
-                                    <div className="flex items-center gap-2">
-                                        <button
-                                            onClick={async () => {
-                                                const newRole = userRole === 'admin' ? 'user' : 'admin';
-                                                if (window.confirm(`确定要切换为${newRole === 'admin' ? '超级管理员' : '普通用户'}吗？`)) {
-                                                    const result = await window.ipcRenderer.invoke('permission:set-role', newRole) as { success: boolean };
-                                                    if (result.success) {
-                                                        setUserRole(newRole);
-                                                        // 刷新页面以更新UI
-                                                        window.location.reload();
-                                                    }
-                                                }
-                                            }}
-                                            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                                                userRole === 'admin'
-                                                    ? 'bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-zinc-400 hover:bg-stone-200 dark:hover:bg-zinc-700'
-                                                    : 'bg-orange-500 text-white hover:bg-orange-600'
-                                            }`}
-                                        >
-                                            {userRole === 'admin' 
-                                                ? ((t('switchToUser' as any) as string) || '切换为普通用户')
-                                                : ((t('switchToAdmin' as any) as string) || '切换为超级管理员')}
-                                        </button>
-                                    </div>
-
-                                    <div className="mt-4 pt-4 border-t border-stone-200 dark:border-zinc-800">
-                                        <p className="text-xs text-stone-500 dark:text-zinc-400 mb-2">
-                                            {(t('adminPermissions' as any) as string) || '超级管理员权限：'}
-                                        </p>
-                                        <ul className="mb-4 space-y-1 text-xs text-stone-600 dark:text-zinc-300 list-disc list-inside">
-                                            <li>{(t('adminPerm1' as any) as string) || '可以重命名和删除脚本'}</li>
-                                            <li>{(t('adminPerm2' as any) as string) || '可以标记脚本为官方'}</li>
-                                            <li>{(t('adminPerm3' as any) as string) || '可以标记技能为内置'}</li>
-                                            <li>{(t('adminPerm4' as any) as string) || '可以标记MCP为内置'}</li>
-                                            <li>{(t('adminPerm5' as any) as string) || '可以删除用户技能和MCP'}</li>
-                                        </ul>
-
-                                        {userRole === 'admin' && (
-                                            <div className="mt-4 pt-4 border-t border-stone-200 dark:border-zinc-800">
-                                                <p className="text-xs font-medium text-stone-700 dark:text-zinc-200 mb-2">
-                                                    {(t('presetAdmins' as any) as string) || '预设管理员列表'}
-                                                </p>
-                                                {presetAdmins.length > 0 ? (
-                                                    <div className="space-y-2">
-                                                        {presetAdmins.map((admin, index) => (
-                                                            <div key={index} className="flex items-center justify-between p-2 bg-stone-50 dark:bg-zinc-800 rounded text-xs">
-                                                                <span className="text-stone-700 dark:text-zinc-200 font-mono">{admin}</span>
-                                                                {admin.toLowerCase() === userIdentifier.toLowerCase() && (
-                                                                    <span className="px-1.5 py-0.5 text-[10px] bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 rounded">
-                                                        {(t('currentUser' as any) as string) || '当前用户'}
-                                                                    </span>
-                                                                )}
-                                                                <button
-                                                                    onClick={async () => {
-                                                                        if (window.confirm(`确定要从预设管理员列表中移除 "${admin}" 吗？`)) {
-                                                                            const result = await window.ipcRenderer.invoke('permission:remove-preset-admin', admin) as { success: boolean; error?: string };
-                                                                            if (result.success) {
-                                                                                setPresetAdmins(await window.ipcRenderer.invoke('permission:get-preset-admins') as string[]);
-                                                                            } else {
-                                                                                alert(result.error || '移除失败');
-                                                                            }
-                                                                        }
-                                                                    }}
-                                                                    className="p-1 text-stone-400 hover:text-red-500 transition-colors"
-                                                                    title="移除预设管理员"
-                                                                >
-                                                                    <Trash2 size={10} />
-                                                                </button>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                ) : (
-                                                    <p className="text-xs text-stone-400 dark:text-zinc-500">
-                                                        {(t('noPresetAdmins' as any) as string) || '暂无预设管理员'}
-                                                    </p>
-                                                )}
-                                                <div className="mt-3 flex items-center gap-2">
-                                                    <input
-                                                        type="text"
-                                                        placeholder={(t('addPresetAdminPlaceholder' as any) as string) || '输入系统用户名'}
-                                                        onKeyDown={async (e) => {
-                                                            if (e.key === 'Enter') {
-                                                                const input = e.currentTarget as HTMLInputElement;
-                                                                const username = input.value.trim();
-                                                                if (username) {
-                                                                    const result = await window.ipcRenderer.invoke('permission:add-preset-admin', username) as { success: boolean; error?: string };
-                                                                    if (result.success) {
-                                                                        input.value = '';
-                                                                        setPresetAdmins(await window.ipcRenderer.invoke('permission:get-preset-admins') as string[]);
-                                                                    } else {
-                                                                        alert(result.error || '添加失败');
-                                                                    }
-                                                                }
-                                                            }
-                                                        }}
-                                                        className="flex-1 text-xs px-2 py-1 border border-stone-200 dark:border-zinc-700 rounded bg-white dark:bg-zinc-800 text-stone-700 dark:text-zinc-200"
-                                                    />
-                                                    <button
-                                                        onClick={async () => {
-                                                            const input = document.querySelector('input[placeholder*="系统用户名"]') as HTMLInputElement;
-                                                            if (input) {
-                                                                const username = input.value.trim();
-                                                                if (username) {
-                                                                    const result = await window.ipcRenderer.invoke('permission:add-preset-admin', username) as { success: boolean; error?: string };
-                                                                    if (result.success) {
-                                                                        input.value = '';
-                                                                        setPresetAdmins(await window.ipcRenderer.invoke('permission:get-preset-admins') as string[]);
-                                                                    } else {
-                                                                        alert(result.error || '添加失败');
-                                                                    }
-                                                                }
-                                                            }
-                                                        }}
-                                                        className="px-2 py-1 text-xs bg-orange-500 text-white rounded hover:bg-orange-600 transition-colors"
-                                                    >
-                                                        {(t('add' as any) as string) || '添加'}
-                                                    </button>
-                                                </div>
-                                                <p className="mt-2 text-[10px] text-stone-400 dark:text-zinc-500">
-                                                    {(t('presetAdminHint' as any) as string) || '预设管理员会在首次启动时自动获得管理员权限'}
-                                                </p>
-                                            </div>
-                                        )}
-                                    </div>
                                 </div>
                             </div>
                         )}
@@ -1634,45 +1172,35 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                 </div>
                                 <div className="space-y-2">
                                     <h3 className="text-xl font-bold text-stone-800 dark:text-zinc-100">
-                                        QACowork
+                                        {appInfo?.name || 'OpenCowork'}
                                     </h3>
                                     <p className="text-sm font-mono text-stone-500 dark:text-zinc-500">
                                         v{appInfo?.version || '1.0.0'}
                                     </p>
-                                    {appInfo?.hotUpdateVersion && appInfo.hotUpdateVersion !== appInfo.appVersion && (
-                                        <p className="text-xs text-green-600 dark:text-green-400">
-                                            资源版本: v{appInfo.hotUpdateVersion} (热更新)
-                                        </p>
-                                    )}
-                                    {!appInfo?.hotUpdateVersion && (
-                                        <p className="text-xs text-stone-400 dark:text-zinc-500">
-                                            应用版本: v{appInfo?.appVersion || '1.0.0'}
-                                        </p>
-                                    )}
                                 </div>
 
                                 <div className="w-full max-w-sm bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-xl overflow-hidden divide-y divide-stone-100 dark:divide-zinc-800">
                                     <a
-                                        href="https://github.com/shileima"
+                                        href="https://github.com/Safphere"
                                         target="_blank"
                                         rel="noreferrer"
                                         className="flex items-center justify-between p-3.5 hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors group"
                                     >
                                         <span className="text-sm text-stone-500 dark:text-zinc-400">{t('author') || 'Author'}</span>
                                         <div className="flex items-center gap-1.5">
-                                            <span className="text-sm font-medium text-stone-700 dark:text-zinc-200 group-hover:text-orange-500 transition-colors">shileima</span>
+                                            <span className="text-sm font-medium text-stone-700 dark:text-zinc-200 group-hover:text-orange-500 transition-colors">{appInfo?.author || 'Safphere'}</span>
                                             <ExternalLink size={14} className="text-stone-400 dark:text-zinc-500 group-hover:text-orange-500 transition-colors" />
                                         </div>
                                     </a>
                                     <a
-                                        href="https://github.com/shileima/opencowork"
+                                        href={appInfo?.homepage || '#'}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="flex items-center justify-between p-3.5 hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors group"
                                     >
                                         <span className="text-sm text-stone-500 dark:text-zinc-400">{t('homepage') || 'Homepage'}</span>
                                         <div className="flex items-center gap-1.5">
-                                            <span className="text-sm font-medium text-stone-700 dark:text-zinc-200 group-hover:text-orange-500 transition-colors">shileima/opencowork</span>
+                                            <span className="text-sm font-medium text-stone-700 dark:text-zinc-200 group-hover:text-orange-500 transition-colors">Safphere/opencowork</span>
                                             <ExternalLink size={14} className="text-stone-400 dark:text-zinc-500 group-hover:text-orange-500 transition-colors" />
                                         </div>
                                     </a>
@@ -1706,89 +1234,6 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                             )}
                                         </div>
                                     )}
-
-                                    {/* 资源更新区域 */}
-                                    <div className="border-t border-stone-200 dark:border-zinc-700 pt-4 mt-4">
-                                        <p className="text-xs text-stone-500 dark:text-zinc-400 mb-2 text-center">
-                                            支持资源热更新
-                                        </p>
-                                        <button
-                                            onClick={handleCheckResourceUpdate}
-                                            disabled={checkingResourceUpdate || updatingResources}
-                                            className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 flex items-center gap-2 mx-auto"
-                                        >
-                                            {checkingResourceUpdate && <Loader2 size={14} className="animate-spin" />}
-                                            {checkingResourceUpdate ? '检查中...' : '检查资源更新'}
-                                        </button>
-
-                                        {resourceUpdateInfo && (
-                                            <div className="mt-3 text-sm animate-in fade-in slide-in-from-top-2">
-                                                {resourceUpdateInfo.hasUpdate ? (
-                                                    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg p-3 space-y-2">
-                                                        <p className="text-amber-800 dark:text-amber-200 font-medium">
-                                                            发现新资源版本!
-                                                        </p>
-                                                        <div className="text-xs text-amber-700 dark:text-amber-300 space-y-1">
-                                                            <p>当前: v{resourceUpdateInfo.currentVersion}</p>
-                                                            <p>最新: v{resourceUpdateInfo.latestVersion}</p>
-                                                            {resourceUpdateInfo.updateSize && (
-                                                                <p>变更文件: {formatBytes(resourceUpdateInfo.updateSize)}</p>
-                                                            )}
-                                                            <p className="text-amber-600/70 dark:text-amber-400/70 text-[10px]">
-                                                                注: 首次更新需下载完整资源包
-                                                            </p>
-                                                        </div>
-                                                        <button
-                                                            onClick={handlePerformResourceUpdate}
-                                                            disabled={updatingResources}
-                                                            className="w-full px-3 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                                                        >
-                                                            {updatingResources && <Loader2 size={14} className="animate-spin" />}
-                                                            {updatingResources ? '更新中...' : '立即更新'}
-                                                        </button>
-                                                        {updateProgress && (
-                                                            <div className="mt-2 space-y-1">
-                                                                <div className="flex justify-between text-xs text-amber-700 dark:text-amber-300">
-                                                                    <span>
-                                                                        {updateProgress.stage === 'checking' && '检查更新中...'}
-                                                                        {updateProgress.stage === 'downloading' && '下载资源包中...'}
-                                                                        {updateProgress.stage === 'extracting' && '解压文件中...'}
-                                                                        {updateProgress.stage === 'applying' && '应用更新中...'}
-                                                                        {updateProgress.stage === 'completed' && '更新完成！'}
-                                                                        {!updateProgress.stage && `进度: ${updateProgress.downloaded}/${updateProgress.total}`}
-                                                                    </span>
-                                                                    <span>
-                                                                        {updateProgress.percentage !== undefined 
-                                                                            ? `${Math.round(updateProgress.percentage)}%`
-                                                                            : `${Math.round((updateProgress.downloaded / updateProgress.total) * 100)}%`}
-                                                                    </span>
-                                                                </div>
-                                                                <div className="w-full h-1.5 bg-amber-200 dark:bg-amber-800 rounded-full overflow-hidden">
-                                                                    <div
-                                                                        className="h-full bg-amber-500 transition-all duration-300"
-                                                                        style={{ 
-                                                                            width: `${updateProgress.percentage !== undefined 
-                                                                                ? updateProgress.percentage 
-                                                                                : (updateProgress.downloaded / updateProgress.total) * 100}%` 
-                                                                        }}
-                                                                    />
-                                                                </div>
-                                                                <p className="text-xs text-amber-600 dark:text-amber-400 truncate" title={updateProgress.current}>
-                                                                    {updateProgress.current}
-                                                                </p>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                ) : (
-                                                    <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg p-3">
-                                                        <p className="text-green-700 dark:text-green-300 text-center">
-                                                            ✓ 资源已是最新版本
-                                                        </p>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
                                 </div>
 
                                 <p className="text-xs text-stone-400 dark:text-zinc-600 max-w-xs leading-relaxed">

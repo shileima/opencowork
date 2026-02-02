@@ -28,11 +28,15 @@ export default defineConfig({
           build: {
             rollupOptions: {
               external: [
+                'electron',
                 'sqlite3',
                 'sequelize',
                 'better-sqlite3',
                 '@modelcontextprotocol/sdk'
               ],
+              output: {
+                format: 'cjs'
+              }
             },
           }
         }

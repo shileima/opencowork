@@ -1,14 +1,19 @@
 // @see - https://www.electron.build/configuration/configuration
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.qacowork.app",
+  "appId": "com.opencowork.app",
   "asar": true,
-  "productName": "QACowork",
+  "productName": "OpenCowork",
 
   "directories": {
     "output": "release/${version}"
   },
-  "publish": null,
+  "publish": {
+    "provider": "github",
+    "owner": "Safphere",
+    "repo": "opencowork",
+    "releaseType": "release"
+  },
   "files": [
     "dist",
     "dist-electron"
@@ -27,28 +32,13 @@
       "from": "resources/mcp",
       "to": "mcp",
       "filter": "**/*"
-    },
-    {
-      "from": "resources/admin-users.json",
-      "to": "admin-users.json"
-    },
-    {
-      "from": "resources/node",
-      "to": "node",
-      "filter": ["**/*"]
-    },
-    // 仅打包 playwright package（JS），不打包 browsers（未签名的 Chromium 会导致 macOS Hardened Runtime 拒绝启动）
-    {
-      "from": "resources/playwright/package",
-      "to": "playwright/package",
-      "filter": ["**/*"]
     }
   ],
   "mac": {
     "target": [
       "dmg"
     ],
-    "artifactName": "${productName}-Mac-${version}-Installer.${ext}",
+    "artifactName": "${productName}-Mac-${version}-${arch}.${ext}",
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
     "entitlements": "build/entitlements.mac.plist",
@@ -103,7 +93,7 @@
       "AppImage",
       "deb"
     ],
-    "maintainer": "shileima <mashilei@meituan.com>",
+    "maintainer": "Safphere <a976466014@gmail.com>",
     "category": "Utility",
     "icon": "public/icon.png",
     "artifactName": "${productName}-Linux-${version}.${ext}"

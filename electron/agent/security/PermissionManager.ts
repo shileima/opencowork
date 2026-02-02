@@ -1,4 +1,5 @@
 import path from 'path';
+import logger from '../../services/Logger';
 import { configStore } from '../../config/ConfigStore';
 
 export class PermissionManager {
@@ -13,11 +14,11 @@ export class PermissionManager {
         const normalized = path.resolve(folderPath);
         // Security check: never allow root directories
         if (normalized === '/' || normalized === 'C:\\' || normalized.match(/^[A-Z]:\\$/)) {
-            console.warn('Attempted to authorize root directory, denied.');
+            logger.warn('Attempted to authorize root directory, denied.');
             return false;
         }
         configStore.addAuthorizedFolder(normalized);
-        console.log(`Authorized folder: ${normalized}`);
+        logger.debug(`Authorized folder: ${normalized}`);
         return true;
     }
 

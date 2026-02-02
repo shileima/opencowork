@@ -49,8 +49,14 @@ jobs:
         include:
           - os: windows-latest
             platform: windows
+          - os: macos-15-intel
+            platform: macos
+            arch: x64
+            arch_name: Intel
           - os: macos-latest
             platform: macos
+            arch: arm64
+            arch_name: Apple-Silicon
           - os: ubuntu-latest
             platform: linux
 
@@ -60,33 +66,28 @@ jobs:
         uses: actions/checkout@v4
 
       -
-        name: Install Node.js
+        name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      -
+        name: Install Node.js (for building)
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # Disable cache to ensure fresh install with updated package-lock.json
 
       -
         name: Install dependencies
-        run: npm ci
-
-      -
-        name: Download and prepare Node.js runtimes
-        run: node scripts/download-node.mjs
-
-      -
-        name: Prepare npm for Node.js runtimes
-        run: node scripts/prepare-node-npm.mjs
-
-      -
-        name: Prepare Playwright package
-        run: |
-          mkdir -p resources/playwright/package
-          cp -r node_modules/playwright resources/playwright/package/
+        run: bun install --frozen-lockfile
 
       -
         name: Run TypeScript compiler check
-        run: npm run lint || true
+        run: bun run lint || echo "Lint check completed with warnings"
+
+      -
+        name: Verify resources
+        run: bun run verify:resources
 
       -
         name: Build and Release
@@ -94,70 +95,23 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          node scripts/verify-builtin-resources.cjs
+          bun run verify:resources
           npx tsc
           npx vite build
-          npx electron-builder --${{ matrix.platform }} --publish never
+          npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
 
       -
-        name: Generate Resource Manifest
-        if: success()
-        run: npm run build:manifest
-
-      -
-        name: Package Resources
-        if: success() && matrix.platform == 'linux'  # 只在 Linux 平台执行一次
+        name: Rename artifacts for Mac
+        if: matrix.platform == 'macos'
         run: |
-          # 提取版本号
-          VERSION=$(node -p "require('./package.json').version")
-          echo "Packaging resources for version ${VERSION}"
-          
-          # 创建临时目录
-          mkdir -p temp-resources
-          
-          # 复制前端资源
-          if [ -d "dist" ]; then
-            echo "Copying dist/"
-            cp -r dist temp-resources/
-          fi
-          
-          # 创建 resources 目录
-          mkdir -p temp-resources/resources
-          
-          # 复制各个资源子目录(使用 || true 避免目录不存在时失败)
-          if [ -d "resources/skills" ]; then
-            echo "Copying resources/skills/"
-            cp -r resources/skills temp-resources/resources/
-          fi
-          
-          if [ -d "resources/mcp" ]; then
-            echo "Copying resources/mcp/"
-            cp -r resources/mcp temp-resources/resources/
-          fi
-          
-          if [ -d "resources/node" ]; then
-            echo "Copying resources/node/"
-            cp -r resources/node temp-resources/resources/
-          fi
-          
-          if [ -d "resources/playwright" ]; then
-            echo "Copying resources/playwright/"
-            cp -r resources/playwright temp-resources/resources/
-          fi
-          
-          # 打包为 zip
-          cd temp-resources
-          zip -r ../resources-v${VERSION}.zip . -x "*.DS_Store" -x "__MACOSX/*"
-          cd ..
-          
-          # 验证 zip 文件
-          ls -lh resources-v${VERSION}.zip
-          unzip -l resources-v${VERSION}.zip | head -20
-          
-          # 清理临时目录
-          rm -rf temp-resources
-          
-          echo "Resource package created: resources-v${VERSION}.zip"
+          cd release/*/ || true
+          for file in *.dmg; do
+            if [ -f "$file" ]; then
+              new_name="${file/x64/${{ matrix.arch_name }}}"
+              new_name="${new_name/arm64/${{ matrix.arch_name }}}"
+              mv "$file" "$new_name"
+            fi
+          done
 
       -
         name: Upload executables to Release
@@ -165,22 +119,9 @@ jobs:
         if: success()
         with:
           files: |
-            release/*/*.dmg
-            release/*/*.exe
-            release/*/*.AppImage
-            release/*/*.deb
-          fail_on_unmatched_files: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      -
-        name: Upload resource files to Release (Linux only)
-        uses: softprops/action-gh-release@v2
-        if: success() && matrix.platform == 'linux'
-        with:
-          files: |
-            resource-manifest.json
-            resources-*.zip
-          fail_on_unmatched_files: false
+            release/*/OpenCowork*.dmg
+            release/*/OpenCowork*.exe
+            release/*/OpenCowork*.AppImage
+            release/*/OpenCowork*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

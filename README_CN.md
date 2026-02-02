@@ -125,7 +125,7 @@ sudo xattr -rd com.apple.quarantine /Applications/OpenCowork.app
 
 > **安全说明：** 应用完全安全，代码已开源。您可以：
 > - 查看源代码：[github.com/Safphere/opencowork](https://github.com/Safphere/opencowork)
-> - 自行构建：`npm install && npm run build`
+> - 自行构建：`bun install && npm run build`
 > - 加入交流群咨询其他用户
 
 ### Windows 和 Linux

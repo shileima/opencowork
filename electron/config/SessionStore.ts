@@ -1,4 +1,5 @@
 import Store from 'electron-store';
+import logger from '../services/Logger';
 import { v4 as uuidv4 } from 'uuid';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -24,6 +25,7 @@ const defaults: SessionStoreSchema = {
 
 class SessionStore {
     private store: Store<SessionStoreSchema>;
+    private runningSessions: Set<string> = new Set(); // Track running sessions (in-memory only)
 
     constructor() {
         this.store = new Store<SessionStoreSchema>({
@@ -72,23 +74,31 @@ class SessionStore {
         if (index >= 0) {
             sessions[index].messages = messages;
             sessions[index].updatedAt = Date.now();
+
+            // ⚠️ 关键修复：优先使用传入的 title
             if (title) {
                 sessions[index].title = title;
-            } else if (sessions[index].title === '新会话' && messages.length > 0) {
+                logger.debug(`Updated session ${id} with custom title: ${title}`);
+            } else if (sessions[index].title === '新会话' || !sessions[index].title) {
                 // Auto-generate title from first user message
                 const firstUserMsg = messages.find(m => m.role === 'user');
                 if (firstUserMsg) {
                     const text = typeof firstUserMsg.content === 'string'
                         ? firstUserMsg.content
                         : (Array.isArray(firstUserMsg.content)
-                            ? (firstUserMsg.content as Array<{ type: string; text?: string }>).find(b => b.type === 'text')?.text
+                            ? (firstUserMsg.content as Array<{ type: string; text?: string }>).find(b => b.type === 'text')?.text || ''
                             : '');
                     if (text) {
-                        sessions[index].title = text.slice(0, 50) + (text.length > 50 ? '...' : '');
+                        const generatedTitle = text.slice(0, 20) + (text.length > 20 ? '...' : '');
+                        sessions[index].title = generatedTitle;
+                        logger.debug(`Auto-generated title for session ${id}: ${generatedTitle}`);
                     }
                 }
             }
+
             this.store.set('sessions', sessions);
+        } else {
+            logger.warn(`Session ${id} not found, cannot update`);
         }
     }
 
@@ -109,7 +119,7 @@ class SessionStore {
 
         // If no meaningful messages, don't save
         if (!hasRealContent) {
-            console.log('[SessionStore] Skipping empty session');
+            logger.debug('[SessionStore] Skipping empty session');
             return this.getCurrentSessionId() || '';
         }
 
@@ -118,21 +128,21 @@ class SessionStore {
             // Create new session only when we have actual content
             const session = this.createSession();
             sessionId = session.id;
-            console.log(`[SessionStore] Created new session: ${sessionId}`);
+            logger.debug(`Created new session: ${sessionId}`);
         }
 
         try {
             this.updateSession(sessionId, messages);
-            console.log(`[SessionStore] Successfully saved session ${sessionId} with ${messages.length} messages`);
+            logger.debug(`Successfully saved session ${sessionId} with ${messages.length} messages`);
         } catch (error) {
-            console.error(`[SessionStore] Error updating session ${sessionId}:`, error);
+            logger.error(`Error updating session ${sessionId}:`, error);
             // Try to recover by creating a new session
             if (id) {
-                console.log('[SessionStore] Attempting recovery by creating new session...');
+                logger.debug('[SessionStore] Attempting recovery by creating new session...');
                 const newSession = this.createSession();
                 sessionId = newSession.id;
                 this.updateSession(sessionId, messages);
-                console.log(`[SessionStore] Recovery successful, new session: ${sessionId}`);
+                logger.debug(`Recovery successful, new session: ${sessionId}`);
             } else {
                 throw error; // Re-throw if we can't recover
             }
@@ -160,7 +170,7 @@ class SessionStore {
         });
 
         if (validSessions.length !== sessions.length) {
-            console.log(`[SessionStore] Cleaned up ${sessions.length - validSessions.length} empty sessions`);
+            logger.debug(`Cleaned up ${sessions.length - validSessions.length} empty sessions`);
             this.store.set('sessions', validSessions);
         }
     }
@@ -180,7 +190,7 @@ class SessionStore {
     }
 
     // Set current session
-    setCurrentSession(id: string): void {
+    setCurrentSession(id: string | null): void {
         this.store.set('currentSessionId', id);
     }
 
@@ -190,7 +200,7 @@ class SessionStore {
     }
 
     // Set floating ball's current session
-    setFloatingBallSession(id: string): void {
+    setFloatingBallSession(id: string | null): void {
         this.store.set('currentFloatingBallSessionId', id);
     }
 
@@ -216,6 +226,43 @@ class SessionStore {
                 this.setCurrentSession(id);
             }
         }
+    }
+
+    // ========== Session Running Status ==========
+
+    // Set session running status
+    setSessionRunning(id: string, isRunning: boolean): void {
+        if (isRunning) {
+            this.runningSessions.add(id);
+            logger.debug(`Session ${id} started running`);
+        } else {
+            this.runningSessions.delete(id);
+            logger.debug(`Session ${id} stopped running`);
+        }
+        // Broadcast running status change to all windows
+        if (typeof window !== 'undefined') {
+            // This will be called from main process, so we'll use IPC instead
+        }
+    }
+
+    // Check if a session is running
+    isSessionRunning(id: string): boolean {
+        return this.runningSessions.has(id);
+    }
+
+    // Get all running session IDs
+    getRunningSessionIds(): string[] {
+        return Array.from(this.runningSessions);
+    }
+
+    // Get count of running sessions
+    getRunningSessionsCount(): number {
+        return this.runningSessions.size;
+    }
+
+    // Clear all running sessions (on app quit, etc.)
+    clearRunningSessions(): void {
+        this.runningSessions.clear();
     }
 }
 
