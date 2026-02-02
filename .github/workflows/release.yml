@@ -7,6 +7,10 @@ on:
     tags:
       - 'v*'
 
+# 创建/上传 GitHub Release 必须显式声明 contents: write，否则 GITHUB_TOKEN 仅读会 403
+permissions:
+  contents: write
+
 jobs:
   create-release:
     name: Create Release
@@ -98,6 +102,7 @@ jobs:
           bun run verify:resources
           npx tsc
           npx vite build
+          # 必须加 --publish never，由下方 action-gh-release 统一上传，避免 token 权限不足 403
           npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
 
       -
