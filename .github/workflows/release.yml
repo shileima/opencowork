@@ -53,6 +53,7 @@ jobs:
         include:
           - os: windows-latest
             platform: windows
+            arch: x64
           - os: macos-15-intel
             platform: macos
             arch: x64
@@ -63,6 +64,7 @@ jobs:
             arch_name: Apple-Silicon
           - os: ubuntu-latest
             platform: linux
+            arch: x64
 
     steps:
       -
@@ -102,7 +104,7 @@ jobs:
           bun run verify:resources
           npx tsc
           npx vite build
-          # 必须加 --publish never，由下方 action-gh-release 统一上传，避免 token 权限不足 403
+          # 必须加 --publish never，由下方 action-gh-release 统一上传；否则 electron-builder 会尝试发布到 electron-builder.json5 配置的 repo 导致 403
           npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
 
       -
