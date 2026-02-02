@@ -26,7 +26,7 @@ export function ProjectView({
     onSendMessage,
     onAbort,
     isProcessing,
-    onOpenSettings,
+    onOpenSettings: _onOpenSettings,
     isTaskPanelHidden,
     onToggleTaskPanel
 }: ProjectViewProps) {
@@ -173,13 +173,6 @@ export function ProjectView({
             setCurrentProject(result.project);
             setShowCreateDialog(false);
             // 创建项目后，加载项目（这会检查任务）
-            await loadCurrentProject();
-        }
-    };
-
-    const handleSelectProject = async (projectId: string) => {
-        const result = await window.ipcRenderer.invoke('project:open', projectId) as { success: boolean };
-        if (result.success) {
             await loadCurrentProject();
         }
     };

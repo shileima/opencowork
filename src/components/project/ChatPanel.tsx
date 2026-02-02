@@ -66,7 +66,7 @@ export function ChatPanel({
                                 const content = typeof msg.content === 'string' 
                                     ? msg.content 
                                     : Array.isArray(msg.content)
-                                    ? msg.content.find((b: any) => b.type === 'text')?.text || ''
+                                    ? (msg.content.find((b: any) => b.type === 'text') as any)?.text || ''
                                     : '';
 
                                 return (

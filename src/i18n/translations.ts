@@ -189,6 +189,40 @@ export const translations = {
         memory: 'Memory',
         memoryModeDescription: 'Manage memories, analyze sessions, and generate skills through conversation',
 
+        // Multi Tab Editor
+        noTabsOpen: 'No tabs open',
+        openFileHint: 'Click a file in the file explorer to open editor',
+        terminal: 'Terminal',
+        agent: 'Agent',
+        browser: 'Browser',
+        browserPreview: 'Preview',
+        browserUrlPlaceholder: 'Enter URL...',
+        browserHint: 'Enter a URL to preview',
+        browserOpenLocalhost: 'Open localhost:3000',
+
+        // File Explorer
+        fileExplorer: 'File Explorer',
+        newFile: 'New File',
+        newFolder: 'New Folder',
+        collapse: 'Collapse',
+        collapseAll: 'Collapse All',
+        rename: 'Rename',
+        noProjectSelected: 'No project selected',
+
+        // Project
+        newProject: 'New Project',
+        projectName: 'Project Name',
+        projectPath: 'Project Path',
+        selectProjectPath: 'Select Path',
+        createProject: 'Create Project',
+
+        // Task
+        newTask: 'New Task',
+        taskActive: 'Active',
+        taskCompleted: 'Completed',
+        taskFailed: 'Failed',
+        moreActions: 'More Actions',
+
         // Floating Ball
         home: 'Home',
         describeTaskPlaceholderFloating: 'Describe task... (Enter to send, Shift+Enter for new line)',
@@ -529,6 +563,40 @@ export const translations = {
         memoryAssistant: '记忆助手',
         memory: '记忆',
         memoryModeDescription: '通过对话管理记忆、分析会话、生成技能',
+
+        // Multi Tab Editor
+        noTabsOpen: '没有打开的标签页',
+        openFileHint: '点击文件资源管理器中的文件打开编辑器',
+        terminal: '终端',
+        agent: '智能体',
+        browser: '浏览器',
+        browserPreview: '页面预览',
+        browserUrlPlaceholder: '输入 URL...',
+        browserHint: '输入 URL 进行预览',
+        browserOpenLocalhost: '打开 localhost:3000',
+
+        // File Explorer
+        fileExplorer: '文件资源管理器',
+        newFile: '新建文件',
+        newFolder: '新建文件夹',
+        collapse: '折叠',
+        collapseAll: '折叠全部',
+        rename: '重命名',
+        noProjectSelected: '未选择项目',
+
+        // Project
+        newProject: '新建项目',
+        projectName: '项目名称',
+        projectPath: '项目路径',
+        selectProjectPath: '选择路径',
+        createProject: '创建项目',
+
+        // Task
+        newTask: '新建任务',
+        taskActive: '进行中',
+        taskCompleted: '已完成',
+        taskFailed: '失败',
+        moreActions: '更多操作',
 
         // Floating Ball
         home: '首页',

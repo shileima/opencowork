@@ -42,13 +42,16 @@ export function Terminal({ terminalId, cwd, onReady }: TerminalProps) {
         });
 
         // 监听终端输出
-        const removeOutputListener = window.ipcRenderer.on('terminal:output', (_event, id: string, data: string) => {
+        const removeOutputListener = window.ipcRenderer.on('terminal:output', (_event, ...args) => {
+            const id = args[0] as string;
+            const data = args[1] as string;
             if (id === terminalId) {
                 xterm.write(data);
             }
         });
 
-        const removeExitListener = window.ipcRenderer.on('terminal:exit', (_event, id: string) => {
+        const removeExitListener = window.ipcRenderer.on('terminal:exit', (_event, ...args) => {
+            const id = args[0] as string;
             if (id === terminalId) {
                 xterm.write('\r\n[进程已退出]\r\n');
             }

@@ -11,6 +11,7 @@ interface ChatInputProps {
     mode: 'memory' | 'work';
     config: any;
     setConfig: (config: any) => void;
+    lockedProjectName?: string | null;
 }
 
 export function ChatInput({
@@ -21,7 +22,8 @@ export function ChatInput({
     onSelectFolder,
     mode,
     config,
-    setConfig
+    setConfig,
+    lockedProjectName: _lockedProjectName
 }: ChatInputProps) {
     const { t } = useI18n();
     const [input, setInput] = useState('');

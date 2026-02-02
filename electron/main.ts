@@ -536,7 +536,7 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
       try {
         // 使用 agent 的 processUserMessage 方法，传递 taskId 以支持并发执行
         // 使用当前会话 ID 作为 taskId，保持在当前会话中
-        await targetAgent.processUserMessage(executeMessage, currentSessionId)
+        await targetAgent.processUserMessage(executeMessage)
       } catch (error) {
         console.error('[Script] Error executing script:', error)
         const errorMsg = (error as Error).message
@@ -1730,7 +1730,7 @@ ipcMain.handle('fs:delete', async (_, filePath: string) => {
     }
     const stat = await fs.promises.stat(filePath);
     if (stat.isDirectory()) {
-      await fs.promises.rmdir(filePath, { recursive: true });
+      await fs.promises.rm(filePath, { recursive: true });
     } else {
       await fs.promises.unlink(filePath);
     }
@@ -1795,7 +1795,7 @@ ipcMain.handle('terminal:write', (_, id: string, data: string) => {
   return { success: true };
 });
 
-ipcMain.handle('terminal:resize', (_, id: string, cols: number, rows: number) => {
+ipcMain.handle('terminal:resize', (_, id: string, _cols: number, _rows: number) => {
   const session = terminalSessions.get(id);
   if (!session) {
     return { success: false, error: 'Terminal session not found' };
