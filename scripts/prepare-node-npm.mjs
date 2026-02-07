@@ -87,11 +87,32 @@ if (!fs.existsSync(targetDir)) {
   console.log(`✅ 创建目标目录: ${targetDir}`);
 }
 
-// 检查 node 是否存在
-const nodePath = path.join(targetDir, 'node');
-if (!fs.existsSync(nodePath)) {
-  console.warn(`⚠️  警告: Node.js 二进制文件不存在: ${nodePath}`);
-  console.warn('   请先确保 Node.js 已复制到 resources/node/');
+// 复制 Node.js 可执行文件
+console.log('\n正在复制 Node.js 可执行文件...');
+const nodeExecutable = platform === 'win32' ? 'node.exe' : 'node';
+const sourceNodePath = path.join(systemNodeDir, nodeExecutable);
+const targetNodePath = path.join(targetDir, nodeExecutable);
+
+if (fs.existsSync(sourceNodePath)) {
+  try {
+    fs.copyFileSync(sourceNodePath, targetNodePath);
+    fs.chmodSync(targetNodePath, 0o755);
+    console.log(`✅ 复制 Node.js 到: ${targetNodePath}`);
+    
+    // 验证 Node.js 版本
+    try {
+      const nodeVersion = execSync(`"${targetNodePath}" --version`, { encoding: 'utf-8' }).trim();
+      console.log(`   Node.js 版本: ${nodeVersion}`);
+    } catch (error) {
+      console.warn(`⚠️  无法获取 Node.js 版本: ${error.message}`);
+    }
+  } catch (error) {
+    console.error(`❌ 复制 Node.js 失败: ${error.message}`);
+    process.exit(1);
+  }
+} else {
+  console.error(`❌ Node.js 可执行文件不存在: ${sourceNodePath}`);
+  process.exit(1);
 }
 
 // 复制 npm 相关文件

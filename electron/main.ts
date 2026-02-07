@@ -1795,7 +1795,7 @@ ipcMain.handle('terminal:write', (_, id: string, data: string) => {
   return { success: true };
 });
 
-ipcMain.handle('terminal:resize', (_, id: string, cols: number, rows: number) => {
+ipcMain.handle('terminal:resize', (_, id: string, _cols: number, _rows: number) => {
   const session = terminalSessions.get(id);
   if (!session) {
     return { success: false, error: 'Terminal session not found' };

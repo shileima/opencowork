@@ -6,19 +6,20 @@ import * as fs from 'fs';
  * 获取内置 Node.js 目录路径
  */
 function getBuiltinNodeDir(): string | null {
-  if (!app.isPackaged) {
-    return null;
-  }
-
   const platform = process.platform;
   const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
   
   let nodeDir: string;
 
   if (platform === 'darwin') {
-    nodeDir = path.join(process.resourcesPath, 'node', `darwin-${arch}`);
+    // 开发环境和生产环境都使用内置 Node.js
+    nodeDir = app.isPackaged
+      ? path.join(process.resourcesPath, 'node', `darwin-${arch}`)
+      : path.join(app.getAppPath(), 'resources', 'node', `darwin-${arch}`);
   } else if (platform === 'win32') {
-    nodeDir = path.join(process.resourcesPath, 'node', 'win32-x64');
+    nodeDir = app.isPackaged
+      ? path.join(process.resourcesPath, 'node', 'win32-x64')
+      : path.join(app.getAppPath(), 'resources', 'node', 'win32-x64');
   } else {
     return null;
   }
@@ -29,19 +30,14 @@ function getBuiltinNodeDir(): string | null {
 /**
  * 获取内置 Node.js 可执行文件路径
  * 
- * 开发环境：返回 'node'（使用系统安装的 Node.js）
- * 生产环境：返回内置 Node.js 的完整路径，如果不存在则回退到 'node'
+ * 开发环境和生产环境都使用内置 Node.js
  * 
- * @returns Node.js 可执行文件路径，如果不存在则返回 'node'
+ * @returns Node.js 可执行文件路径，如果不存在则回退到 'node'
  */
 export function getBuiltinNodePath(): string {
-  if (!app.isPackaged) {
-    // 开发环境：使用系统的 node
-    return 'node';
-  }
-
   const nodeDir = getBuiltinNodeDir();
   if (!nodeDir) {
+    console.warn(`[NodePath] Built-in Node.js directory not found, falling back to system node`);
     return 'node';
   }
 
@@ -58,6 +54,7 @@ export function getBuiltinNodePath(): string {
         console.warn(`[NodePath] Failed to set executable permission: ${error}`);
       }
     }
+    console.log(`[NodePath] Using built-in Node.js: ${nodePath}`);
     return nodePath;
   }
 
@@ -72,19 +69,14 @@ export function getBuiltinNodePath(): string {
  * 注意：npm 脚本会在 process.execPath 的目录下查找 node_modules/npm/bin/npm-cli.js
  * 但我们的 npm 模块在 lib/node_modules/npm，所以需要特殊处理
  * 
- * 开发环境：返回 'npm'（使用系统安装的 npm）
- * 生产环境：返回内置 npm 的完整路径，如果不存在则回退到 'npm'
+ * 开发环境和生产环境都使用内置 npm
  * 
- * @returns npm 可执行文件路径，如果不存在则返回 'npm'
+ * @returns npm 可执行文件路径，如果不存在则回退到 'npm'
  */
 export function getBuiltinNpmPath(): string {
-  if (!app.isPackaged) {
-    // 开发环境：使用系统的 npm
-    return 'npm';
-  }
-
   const nodeDir = getBuiltinNodeDir();
   if (!nodeDir) {
+    console.warn(`[NodePath] Built-in Node.js directory not found, falling back to system npm`);
     return 'npm';
   }
 
@@ -129,10 +121,6 @@ export function getBuiltinNpmPath(): string {
  * @returns npm-cli.js 路径，如果不存在则返回 null
  */
 export function getBuiltinNpmCliJsPath(): string | null {
-  if (!app.isPackaged) {
-    return null;
-  }
-
   const nodeDir = getBuiltinNodeDir();
   if (!nodeDir) {
     return null;
@@ -160,11 +148,6 @@ export function getBuiltinNpmCliJsPath(): string | null {
 export function getNpmEnvVars(): Record<string, string> {
   const env: Record<string, string> = {};
   
-  if (!app.isPackaged) {
-    // 开发环境：不需要特殊设置
-    return env;
-  }
-
   const nodeDir = getBuiltinNodeDir();
   if (!nodeDir) {
     return env;

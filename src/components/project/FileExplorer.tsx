@@ -379,7 +379,6 @@ export function FileExplorer({ projectPath, onOpenFile }: FileExplorerProps) {
 
                 if (item.isDirectory) {
                     const isExpanded = expandedDirs.has(item.path);
-                    const children = items.filter(child => child.path.startsWith(item.path + '/') && child.path !== item.path);
 
                     return (
                         <div key={item.path}>
