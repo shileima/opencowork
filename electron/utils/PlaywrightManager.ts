@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
-import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from './NodePath'
+import { getBuiltinNodePath, getBuiltinNpmPath, getNpmEnvVars } from './NodePath'
 
 const execAsync = promisify(exec)
 
@@ -100,21 +100,26 @@ export class PlaywrightManager {
         fs.mkdirSync(this.playwrightPath, { recursive: true })
       }
 
-      // 使用内置的 node 和 npm（复用 NodePath.ts 的逻辑）
-      const nodePath = getBuiltinNodePath()
-      const npmCliJsPath = getBuiltinNpmCliJsPath()
+      // 使用内置的 npm（复用 NodePath.ts 的逻辑）
       const npmPath = getBuiltinNpmPath()
       const npmEnv = getNpmEnvVars()
 
       onProgress?.('正在安装 Playwright 包...')
       
-      // 优先使用 npm-cli.js（更可靠），否则使用 npm 脚本
-      let npmCommand: string
-      if (npmCliJsPath) {
-        npmCommand = `"${nodePath}" "${npmCliJsPath}" install playwright`
-      } else {
-        npmCommand = `"${nodePath}" "${npmPath}" install playwright`
+      // 创建 package.json（如果不存在）
+      const packageJsonPath = path.join(this.playwrightPath, 'package.json')
+      if (!fs.existsSync(packageJsonPath)) {
+        fs.writeFileSync(packageJsonPath, JSON.stringify({
+          name: 'playwright-runtime',
+          version: '1.0.0',
+          description: 'Playwright runtime for automation',
+          private: true
+        }, null, 2))
       }
+      
+      // 使用 npm 脚本（更可靠）
+      // npm 脚本会自动处理环境变量和路径
+      const npmCommand = `"${npmPath}" install playwright --no-save --no-package-lock`
       
       // 安装 playwright
       await execAsync(

@@ -347,11 +347,16 @@ export const translations = {
         browserOpenLocalhost: 'Open localhost:3000',
         browserBack: 'Back',
         browserForward: 'Forward',
+        
+        // Project View - Editor
+        noTabsOpen: 'No tabs open',
+        openFileHint: 'Click a file in the file explorer to open it in the editor',
     },
     zh: {
         // Navigation
         cowork: '协作',
         chat: '对话',
+        project: '项目',
         taskWorkspace: '任务工作区',
         chatAssistant: '对话助手',
 
@@ -689,6 +694,10 @@ export const translations = {
         browserOpenLocalhost: '打开 localhost:3000',
         browserBack: '后退',
         browserForward: '前进',
+        
+        // Project View - Editor
+        noTabsOpen: '没有打开的标签页',
+        openFileHint: '点击文件资源管理器中的文件打开编辑器',
     }
 };
 

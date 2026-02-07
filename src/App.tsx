@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Minus, Square, X, MessageCircle, Zap, FolderKanban, ChevronLeft, ChevronRight, ChevronDown, FolderOpen, FolderPlus, Trash2 } from 'lucide-react';
+import { Minus, Square, X, Zap, FolderKanban, ChevronLeft, ChevronRight, ChevronDown, FolderOpen, FolderPlus, Trash2 } from 'lucide-react';
 import { CoworkView } from './components/CoworkView';
 import { SettingsView } from './components/SettingsView';
 import { ConfirmDialog, useConfirmations } from './components/ConfirmDialog';
@@ -225,7 +225,8 @@ function App() {
 
       // 项目视图：将当前任务标记为失败
       if (taskId) {
-        window.ipcRenderer.invoke('project:get-current').then((project: { id: string } | null) => {
+        window.ipcRenderer.invoke('project:get-current').then((result) => {
+          const project = result as { id: string } | null;
           if (project?.id) {
             window.ipcRenderer.invoke('project:task:update', project.id, taskId, { status: 'failed' });
           }
@@ -253,7 +254,8 @@ ${err}
     const removeDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
       const payload = args[0] as { taskId?: string } | undefined;
       if (payload?.taskId) {
-        window.ipcRenderer.invoke('project:get-current').then((project: { id: string } | null) => {
+        window.ipcRenderer.invoke('project:get-current').then((result) => {
+          const project = result as { id: string } | null;
           if (project?.id) {
             window.ipcRenderer.invoke('project:task:update', project.id, payload.taskId, { status: 'completed' });
           }

@@ -6,8 +6,6 @@ import { BrowserTab } from './BrowserTab';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { useI18n } from '../../i18n/I18nContext';
 
-type TabType = 'editor' | 'terminal' | 'agent' | 'browser';
-
 interface EditorTab {
     id: string;
     type: 'editor';
