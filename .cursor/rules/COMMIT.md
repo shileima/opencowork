@@ -1,7 +1,7 @@
 # Commit Message 规范
 
 ## 语言要求
-- **所有 commit message 必须使用中文简体**
+- **所有 commit message 必须使用中文**
 - commit message 格式：`<类型>: <描述>`
 
 ## Commit 类型
