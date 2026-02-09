@@ -106,27 +106,29 @@ OpenCowork 允许 AI 操作本地文件系统和终端，使用前请注意：
 
 **原因：** macOS 会阻止来自互联网的未签名应用运行。本应用未进行 Apple 官方签名（需付费开发者账号）。
 
-**解决方法（任选其一）：**
+**📖 详细解决方案：[macOS 安装指南](./docs/MACOS_INSTALL.md)**
 
-**方法一：右键打开（推荐）**
-```
-右键点击 OpenCowork.app → 选择"打开" → 点击"打开"
-```
+**快速解决（任选其一）：**
 
-**方法二：系统设置允许**
-```
-系统设置 → 隐私与安全性 → 点击"仍要打开"
-```
-
-**方法三：命令行移除隔离**
+**方法一：一键脚本（最简单）**
 ```bash
-sudo xattr -rd com.apple.quarantine /Applications/OpenCowork.app
+curl -fsSL https://raw.githubusercontent.com/shileima/opencowork/main/scripts/remove-quarantine.sh | bash
+```
+
+**方法二：手动命令**
+```bash
+xattr -cr /Applications/QACowork.app
+```
+
+**方法三：右键打开**
+```
+右键点击 QACowork.app → 选择"打开" → 点击"打开"
 ```
 
 > **安全说明：** 应用完全安全，代码已开源。您可以：
-> - 查看源代码：[github.com/Safphere/opencowork](https://github.com/Safphere/opencowork)
-> - 自行构建：`npm install && npm run build`
-> - 加入交流群咨询其他用户
+> - ✅ 查看源代码：[github.com/shileima/opencowork](https://github.com/shileima/opencowork)
+> - ✅ 构建过程公开透明（GitHub Actions）
+> - ✅ 自行构建：`pnpm install && pnpm run build`
 
 ### Windows 和 Linux
 
