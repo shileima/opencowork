@@ -311,7 +311,17 @@ export const translations = {
         newTask: 'New Task',
         editor: 'Editor',
         terminal: 'Terminal',
+        terminalNew: 'New Terminal',
+        terminalSplit: 'Split Terminal',
+        terminalKill: 'Kill Terminal',
+        terminalMore: 'More',
+        cmdKGenerateCommand: '⌘K to generate command',
+        terminalProcessExited: 'Terminal process exited.',
+        terminalExitedHint: 'Click "New Terminal" in the toolbar or switch to another tab.',
+        terminalRestarting: 'Restarting terminal…',
+        terminalOpenInNewWindow: 'Open in New Window',
         agent: 'Agent',
+        agentComingSoon: 'Coming soon...',
         fileExplorer: 'File Explorer',
         newFile: 'New File',
         newFolder: 'New Folder',
@@ -351,6 +361,17 @@ export const translations = {
         // Project View - Editor
         noTabsOpen: 'No tabs open',
         openFileHint: 'Click a file in the file explorer to open it in the editor',
+
+        // Deploy
+        deploy: 'Deploy',
+        deploying: 'Deploying...',
+        deploySuccess: 'Deployed',
+        deployFailed: 'Deploy Failed',
+        deployButtonTitle: 'Build and deploy to CDN',
+        deployStarting: 'Starting deployment...',
+        deployLogTitle: 'Deployment Log',
+        deploySuccessMessage: 'Deployment successful! Click the link below to visit:',
+        deployFailedMessage: 'Deployment failed, please check the log for details.',
     },
     zh: {
         // Navigation
@@ -658,7 +679,17 @@ export const translations = {
         newTask: '新任务',
         editor: '编辑器',
         terminal: '终端',
+        terminalNew: '新建终端',
+        terminalSplit: '拆分终端',
+        terminalKill: '杀死终端',
+        terminalMore: '更多',
+        cmdKGenerateCommand: '⌘K 生成命令',
+        terminalProcessExited: '终端进程已退出。',
+        terminalExitedHint: '请点击工具栏「新建终端」或切换其他终端。',
+        terminalRestarting: '正在重新启动终端…',
+        terminalOpenInNewWindow: '在新窗口中打开',
         agent: '智能体',
+        agentComingSoon: '功能开发中...',
         fileExplorer: '资源管理器',
         newFile: '新建文件',
         newFolder: '新建文件夹',
@@ -698,6 +729,17 @@ export const translations = {
         // Project View - Editor
         noTabsOpen: '没有打开的标签页',
         openFileHint: '点击文件资源管理器中的文件打开编辑器',
+
+        // Deploy
+        deploy: '部署',
+        deploying: '部署中...',
+        deploySuccess: '已部署',
+        deployFailed: '部署失败',
+        deployButtonTitle: '构建并发布到 CDN',
+        deployStarting: '正在启动部署...',
+        deployLogTitle: '部署日志',
+        deploySuccessMessage: '部署成功！点击以下链接访问：',
+        deployFailedMessage: '部署失败，请查看日志了解详情。',
     }
 };
 

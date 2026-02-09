@@ -4,6 +4,7 @@ import { ChatPanel } from './project/ChatPanel';
 import { MultiTabEditor } from './project/MultiTabEditor';
 import { FileExplorer } from './project/FileExplorer';
 import { ProjectCreateDialog } from './project/ProjectCreateDialog';
+import { ResizableSplitPane } from './project/ResizableSplitPane';
 import Anthropic from '@anthropic-ai/sdk';
 import { useI18n } from '../i18n/I18nContext';
 import type { Project, ProjectTask } from '../../electron/config/ProjectStore';
@@ -21,6 +22,24 @@ interface ProjectViewProps {
 // 跟踪新任务的第一条消息，用于重命名
 let pendingTaskRename: { taskId: string; projectId: string } | null = null;
 
+/** 根据用户输入生成更有寓意的任务名称：取首句/首行、去噪、限制长度 */
+const deriveTaskTitleFromMessage = (messageText: string, maxLen = 28): string => {
+    if (!messageText || typeof messageText !== 'string') return '';
+    // 去掉 Markdown 符号，换行统一为空格，合并多余空白
+    let text = messageText
+        .replace(/[#*_`\[\]()]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!text) return '';
+    // 取首句（以。！？\n 为界）或整段
+    const firstSentence = text.split(/[。！？\n]/)[0]?.trim() || text;
+    // 去掉常见口语前缀，让标题更贴近“做什么”
+    const trimmed = firstSentence
+        .replace(/^(请帮我|帮我|我想|请|能否|可以)?\s*/i, '')
+        .trim() || firstSentence;
+    return trimmed.slice(0, maxLen).trim() || text.slice(0, maxLen).trim();
+};
+
 export function ProjectView({
     history,
     onSendMessage,
@@ -37,20 +56,58 @@ export function ProjectView({
     const [streamingText, setStreamingText] = useState('');
     const [config, setConfig] = useState<any>(null);
     const [fileContents, setFileContents] = useState<Record<string, string>>({});
+    const [splitRatio, setSplitRatio] = useState<number>(50);
     const [multiTabEditorRef, setMultiTabEditorRef] = useState<{
         openEditorTab: (filePath: string, content: string) => void;
         openBrowserTab?: (url?: string) => void;
         refreshBrowserTab?: () => void;
+        closeAllTabs?: () => void;
+        closeTabByFilePath?: (filePath: string) => void;
     } | null>(null);
     const multiTabEditorRefRef = useRef<typeof multiTabEditorRef>(null);
     const currentTaskIdRef = useRef<string | null>(null);
+    const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     currentTaskIdRef.current = currentTaskId;
     multiTabEditorRefRef.current = multiTabEditorRef;
+
+    // 处理左侧悬停展开侧栏
+    const handleLeftEdgeMouseEnter = useCallback(() => {
+        if (isTaskPanelHidden) {
+            // 清除之前的定时器
+            if (hoverTimeoutRef.current) {
+                clearTimeout(hoverTimeoutRef.current);
+            }
+            // 设置 1 秒后展开侧栏
+            hoverTimeoutRef.current = setTimeout(() => {
+                onToggleTaskPanel();
+            }, 1000);
+        }
+    }, [isTaskPanelHidden, onToggleTaskPanel]);
+
+    const handleLeftEdgeMouseLeave = useCallback(() => {
+        // 清除定时器
+        if (hoverTimeoutRef.current) {
+            clearTimeout(hoverTimeoutRef.current);
+            hoverTimeoutRef.current = null;
+        }
+    }, []);
+
+    // 清理定时器
+    useEffect(() => {
+        return () => {
+            if (hoverTimeoutRef.current) {
+                clearTimeout(hoverTimeoutRef.current);
+            }
+        };
+    }, []);
 
     useEffect(() => {
         // 加载配置
         window.ipcRenderer.invoke('config:get-all').then((cfg) => {
             setConfig(cfg as any);
+            // 加载分割比例配置
+            const ratio = (cfg as any)?.chatEditorSplitRatio ?? 50;
+            setSplitRatio(ratio);
         });
         // 监听配置更新
         const removeConfigListener = window.ipcRenderer.on('config:updated', (_event, newConfig) => {
@@ -89,12 +146,21 @@ export function ProjectView({
             }
         });
 
-        // 监听项目切换事件
+        // 监听项目切换事件：关闭所有 tab，再加载新项目
         const removeProjectSwitchListener = window.ipcRenderer.on('project:switched', () => {
+            multiTabEditorRefRef.current?.closeAllTabs?.();
             loadCurrentProject();
         });
 
-        // 监听 Agent 触发打开浏览器预览（启动 dev 服务器后自动打开）
+        // 监听项目创建事件，自动加载项目并选中新任务
+        const removeProjectCreatedListener = window.ipcRenderer.on('project:created', async () => {
+            // 延迟加载，确保后端任务创建完成
+            setTimeout(async () => {
+                await loadCurrentProject();
+            }, 300);
+        });
+
+        // 监听 Agent 触发打开浏览器预览（本地启动成功后）：已有浏览器 tab 则仅切换到该 tab 并打开 URL，不关闭其他 tab
         const removeBrowserPreviewListener = window.ipcRenderer.on('agent:open-browser-preview', (_event, ...args) => {
             const url = args[0] as string;
             multiTabEditorRefRef.current?.openBrowserTab?.(url);
@@ -117,10 +183,34 @@ export function ProjectView({
             removeStreamListener();
             removeHistoryListener();
             removeProjectSwitchListener();
+            removeProjectCreatedListener();
             removeBrowserPreviewListener();
             removeAgentDoneListener();
         };
     }, []);
+
+    // 监听任务创建事件，如果是当前项目的任务，自动选中
+    useEffect(() => {
+        if (!currentProject) return;
+
+        const removeTaskCreatedListener = window.ipcRenderer.on('project:task:created', async (_event, ...args) => {
+            const task = args[0] as ProjectTask;
+            if (currentProject && task && task.id) {
+                // 验证任务是否属于当前项目
+                const tasks = await window.ipcRenderer.invoke('project:task:list', currentProject.id) as ProjectTask[];
+                const taskExists = tasks.some(t => t.id === task.id);
+                if (taskExists && currentTaskId !== task.id) {
+                    // 自动选中新创建的任务
+                    setCurrentTaskId(task.id);
+                    await handleSelectTask(task.id);
+                }
+            }
+        });
+
+        return () => {
+            removeTaskCreatedListener();
+        };
+    }, [currentProject, currentTaskId]);
 
 
     const loadCurrentProject = async () => {
@@ -213,7 +303,7 @@ export function ProjectView({
             const toRename = pendingTaskRename;
             pendingTaskRename = null;
             const messageText = typeof message === 'string' ? message : message.content;
-            const cleanText = (messageText || '').replace(/[#*_`\[\]()]/g, '').trim().slice(0, 50) || t('newTask');
+            const cleanText = deriveTaskTitleFromMessage(messageText || '') || t('newTask');
             try {
                 await window.ipcRenderer.invoke('project:task:update', toRename.projectId, toRename.taskId, { title: cleanText });
             } catch (error) {
@@ -311,7 +401,17 @@ export function ProjectView({
 
             {currentProject && (
                 <>
-                    <div className="flex-1 flex overflow-hidden">
+                    <div className="flex-1 flex overflow-hidden relative">
+                        {/* 左侧悬停检测区域（仅在侧栏收起时显示） */}
+                        {isTaskPanelHidden && (
+                            <div
+                                className="absolute left-0 top-0 bottom-0 w-2 z-50 cursor-pointer"
+                                onMouseEnter={handleLeftEdgeMouseEnter}
+                                onMouseLeave={handleLeftEdgeMouseLeave}
+                                title="悬停 1 秒展开侧栏"
+                            />
+                        )}
+                        
                         {/* 区域一：任务列表 */}
                         <div className={`transition-all duration-300 ${isTaskPanelHidden ? 'w-0 overflow-hidden' : 'w-64'}`}>
                             <TaskListPanel
@@ -325,39 +425,58 @@ export function ProjectView({
                             />
                         </div>
 
-                        {/* 中间区域：聊天 + 编辑器（左右布局） */}
-                        <div className="flex-1 flex flex-row min-w-0">
-                            {/* 区域二：聊天交互（左侧） */}
-                            <div className="w-1/2 border-r border-stone-200 dark:border-zinc-800 flex flex-col min-w-0">
-                            <ChatPanel
-                                history={history}
-                                streamingText={streamingText}
-                                onSendMessage={handleSendMessageWithRename}
-                                onAbort={onAbort}
-                                isProcessing={isProcessing}
-                                workingDir={currentProject.path}
-                                config={config}
-                                setConfig={setConfig}
-                                lockedProjectName={currentProject.name}
+                        {/* 中间区域：聊天 + 编辑器（左右布局，可拖拽调整） */}
+                        <div className="flex-1 min-w-0">
+                            <ResizableSplitPane
+                                leftPanel={
+                                    <div className="flex flex-col h-full min-w-0">
+                                        {/* 与右侧 tab 栏同高，同款 border-b，使下边线与左侧无缝连接 */}
+                                        <div className="h-10 shrink-0 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900" />
+                                        <div className="flex-1 min-h-0 overflow-hidden">
+                                            <ChatPanel
+                                                history={history}
+                                                streamingText={streamingText}
+                                                onSendMessage={handleSendMessageWithRename}
+                                                onAbort={onAbort}
+                                                isProcessing={isProcessing}
+                                                workingDir={currentProject.path}
+                                                config={config}
+                                                setConfig={setConfig}
+                                                lockedProjectName={currentProject.name}
+                                            />
+                                        </div>
+                                    </div>
+                                }
+                                rightPanel={
+                                    <MultiTabEditor
+                                        projectPath={currentProject.path}
+                                        agentContent={streamingText}
+                                        onFileChange={handleFileChange}
+                                        onFileSave={handleFileSave}
+                                        onRef={setMultiTabEditorRef}
+                                    />
+                                }
+                                initialRatio={splitRatio}
+                                onRatioChange={async (ratio) => {
+                                    setSplitRatio(ratio);
+                                    // 保存到配置
+                                    try {
+                                        await window.ipcRenderer.invoke('config:set-all', {
+                                            chatEditorSplitRatio: ratio
+                                        });
+                                    } catch (error) {
+                                        console.error('[ProjectView] Failed to save split ratio:', error);
+                                    }
+                                }}
+                                minSize={20}
                             />
-                            </div>
-
-                            {/* 区域三：多Tab编辑器（右侧） */}
-                            <div className="flex-1 min-w-0">
-                                <MultiTabEditor
-                                    projectPath={currentProject.path}
-                                    agentContent={streamingText}
-                                    onFileChange={handleFileChange}
-                                    onFileSave={handleFileSave}
-                                    onRef={setMultiTabEditorRef}
-                                />
-                            </div>
                         </div>
 
                         {/* 区域四：资源管理器 */}
                         <FileExplorer
                             projectPath={currentProject.path}
                             onOpenFile={handleOpenFile}
+                            onFileDeleted={(path) => multiTabEditorRef?.closeTabByFilePath?.(path)}
                         />
                     </div>
                 </>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback } from 'react';
-import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, ChevronUp, MessageCircle, Download, Play, Edit2, Star, RefreshCw, FolderOpen } from 'lucide-react';
+import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, MessageCircle, Download, Play, Edit2, Star, RefreshCw, FolderOpen } from 'lucide-react';
 import { ChatInput } from './ChatInput';
 import { useI18n } from '../i18n/I18nContext';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -994,15 +994,17 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                 />
                             ))}
 
-                            {streamingText && (
+                            {streamingText && streamingText.trim().length > 0 && (
                                 <div className="animate-in fade-in duration-200">
                                     <div className="text-stone-700 dark:text-zinc-300 text-[15px] leading-7 max-w-none">
                                         <div className="relative group">
                                             <MarkdownRenderer content={streamingText} isDark={true} />
                                             <span className="inline-block w-2 h-5 bg-orange-500 ml-0.5 animate-pulse" />
-                                            <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <CopyButton content={streamingText} size="sm" />
-                                            </div>
+                                            {streamingText && streamingText.trim().length > 0 && (
+                                                <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <CopyButton content={streamingText} size="sm" />
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -1090,9 +1092,11 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
                         <div className="user-bubble">
                             {text}
                         </div>
-                        <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <CopyButton content={text} size="sm" />
-                        </div>
+                        {text && text.trim().length > 0 && (
+                            <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <CopyButton content={text} size="sm" />
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -1125,14 +1129,16 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
     return (
         <div className="space-y-4">
             {groupedBlocks.map((block, i: number) => {
-                if (block.type === 'text' && block.text) {
+                if (block.type === 'text' && block.text && block.text.trim().length > 0) {
                     return (
                         <div key={i} className="text-stone-700 dark:text-zinc-300 text-[15px] leading-7 max-w-none">
                             <div className="relative group">
                                 <MarkdownRenderer content={block.text} isDark={true} />
-                                <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <CopyButton content={block.text} size="sm" />
-                                </div>
+                                {block.text && block.text.trim().length > 0 && (
+                                    <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <CopyButton content={block.text} size="sm" />
+                                    </div>
+                                )}
                             </div>
                         </div>
                     );
@@ -1142,13 +1148,6 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
                     const toolGroup = block as ToolGroup;
                     return (
                         <div key={i} className="space-y-2">
-                            {toolGroup.count > 1 && (
-                                <div className="steps-indicator mb-2">
-                                    <ChevronUp size={12} />
-                                    <span>{toolGroup.count} steps</span>
-                                </div>
-                            )}
-
                             {toolGroup.items.map((tool, j: number) => {
                                 const blockId = tool.id || `tool-${i}-${j}`;
                                 const isExpanded = expandedBlocks.has(blockId);

@@ -178,7 +178,7 @@ export function ChatInput({
                             onPaste={handlePaste}
                             placeholder={mode === 'chat' ? t('inputMessage') : mode === 'automation' ? t('describeTaskPlaceholder') : workingDir ? t('describeTaskPlaceholder') : t('selectWorkingDirFirst')}
                             rows={1}
-                            className="w-full bg-transparent text-stone-800 dark:text-zinc-100 placeholder:text-stone-400 dark:placeholder:text-zinc-500 text-sm focus:outline-none resize-none overflow-y-auto min-h-[24px] max-h-[120px] leading-6 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0"
+                            className="w-full bg-transparent text-stone-800 dark:text-zinc-100 placeholder:text-stone-400 dark:placeholder:text-zinc-500 text-xs focus:outline-none resize-none overflow-y-auto min-h-[22px] max-h-[120px] leading-5 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0"
                             style={{
                                 scrollbarWidth: 'none',
                                 msOverflowStyle: 'none',

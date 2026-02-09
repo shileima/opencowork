@@ -2,6 +2,9 @@ import { app, BrowserWindow, shell, ipcMain, screen, dialog, globalShortcut, Tra
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
+import os from 'node:os'
+import { spawn as cpSpawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import dotenv from 'dotenv'
 import { AgentRuntime } from './agent/AgentRuntime'
 import { configStore, TrustLevel } from './config/ConfigStore'
@@ -95,6 +98,7 @@ app.commandLine.appendSwitch('disable-gpu-sandbox');
 
 let mainWin: BrowserWindow | null = null
 let floatingBallWin: BrowserWindow | null = null
+const terminalWindows: Map<string, BrowserWindow> = new Map()
 let tray: Tray | null = null
 let mainAgent: AgentRuntime | null = null  // Agent for main window
 let floatingBallAgent: AgentRuntime | null = null  // Independent agent for floating ball
@@ -564,6 +568,20 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
     return { success: true, sessionId: currentSessionId }
   } catch (error) {
     console.error('[Script] Error executing script:', error)
+    return { success: false, error: (error as Error).message }
+  }
+})
+
+// 打开外部链接（在系统默认浏览器中打开）
+ipcMain.handle('app:open-external-url', async (_event, url: string) => {
+  try {
+    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+      await shell.openExternal(url)
+      return { success: true }
+    }
+    return { success: false, error: 'Invalid URL' }
+  } catch (error) {
+    console.error('[Main] Error opening external URL:', error)
     return { success: false, error: (error as Error).message }
   }
 })
@@ -1459,12 +1477,15 @@ ipcMain.handle('project:open-folder', async (event, dirPath: string) => {
   }
 });
 
-// 新建项目：在 ~/.qa-cowork/projects 下创建目录，重名则加后缀 -1、-2…
+// 新建项目：在 ~/Library/Application Support/qacowork/projects 下创建目录，重名则加后缀 -1、-2…
 ipcMain.handle('project:create-new', async (event, name: string) => {
   if (!name || typeof name !== 'string') return { success: false, error: 'Invalid project name' };
   const sanitized = name.trim().replace(/[/\\:*?"<>|]/g, '-').replace(/-+/g, '-') || 'project';
-  const baseDir = directoryManager.getBaseDir();
-  const projectsDir = path.join(baseDir, 'projects');
+  
+  // 使用固定的项目目录：~/Library/Application Support/qacowork/projects
+  const homeDir = os.homedir();
+  const projectsDir = path.join(homeDir, 'Library', 'Application Support', 'qacowork', 'projects');
+  
   try {
     if (!fs.existsSync(projectsDir)) {
       fs.mkdirSync(projectsDir, { recursive: true });
@@ -1481,12 +1502,45 @@ ipcMain.handle('project:create-new', async (event, name: string) => {
     const project = projectStore.createProject(dirName, dirPath);
     notifyProjectSwitched(event, project);
     const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
+    const isFloatingBall = event.sender === floatingBallWin?.webContents;
+    
     if (targetWindow && !targetWindow.isDestroyed()) {
       targetWindow.webContents.send('project:created', project);
       targetWindow.webContents.send('project:switched', project);
     }
+    
+    // 自动创建一个新任务
+    try {
+      const taskTitle = '新任务';
+      const task = projectStore.createTask(project.id, taskTitle, '');
+      if (task) {
+        // 设置当前任务ID，用于后续 session 绑定
+        currentTaskIdForSession = task.id;
+        
+        // 清空历史并设置 session 为 null（新任务）
+        if (targetAgent) {
+          targetAgent.clearHistory();
+          sessionStore.setSessionId(null, isFloatingBall);
+        }
+        
+        // 通知前端任务已创建和历史已清空
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', []);
+          targetWindow.webContents.send('project:task:created', task);
+        }
+        
+        console.log(`[Project] Auto-created initial task "${taskTitle}" for project "${dirName}"`);
+      }
+    } catch (taskError) {
+      console.error(`[Project] Failed to auto-create initial task:`, taskError);
+      // 即使创建任务失败，项目创建仍然成功
+    }
+    
+    console.log(`[Project] Created new project "${dirName}" at ${dirPath}`);
     return { success: true, project };
   } catch (err) {
+    console.error(`[Project] Failed to create project:`, err);
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 });
@@ -1501,8 +1555,46 @@ ipcMain.handle('project:ensure-working-dir', () => {
   if (project) applyProjectWorkingDirs(project);
 });
 
-ipcMain.handle('project:delete', (_, id: string) => {
-  return { success: projectStore.deleteProject(id) };
+ipcMain.handle('project:delete', async (_, id: string, projectPath?: string) => {
+  try {
+    // 获取项目信息
+    const project = projectStore.getProject(id);
+    if (!project) {
+      return { success: false, error: 'Project not found' };
+    }
+
+    // 使用传入的路径或项目中的路径
+    const pathToDelete = projectPath || project.path;
+
+    // 删除项目记录
+    const deleted = projectStore.deleteProject(id);
+    if (!deleted) {
+      return { success: false, error: 'Failed to delete project record' };
+    }
+
+    // 删除本地文件目录
+    if (pathToDelete && fs.existsSync(pathToDelete)) {
+      try {
+        console.log(`[Project] Deleting project directory: ${pathToDelete}`);
+        fs.rmSync(pathToDelete, { recursive: true, force: true });
+        console.log(`[Project] Successfully deleted project directory: ${pathToDelete}`);
+      } catch (error) {
+        console.error(`[Project] Failed to delete project directory: ${pathToDelete}`, error);
+        // 即使删除文件失败，项目记录已经删除，返回成功但记录警告
+        return { 
+          success: true, 
+          warning: `项目记录已删除，但删除本地文件时出错：${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    } else if (pathToDelete) {
+      console.warn(`[Project] Project directory does not exist: ${pathToDelete}`);
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('[Project] Error deleting project:', error);
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 // Project Task Handlers
@@ -1609,6 +1701,273 @@ ipcMain.handle('project:task:update', (event, projectId: string, taskId: string,
 
 ipcMain.handle('project:task:delete', (_, projectId: string, taskId: string) => {
   return { success: projectStore.deleteTask(projectId, taskId) };
+});
+
+// ═══════════════════════════════════════
+// Deploy Handler: generate deploy.sh, execute, stream logs
+// ═══════════════════════════════════════
+ipcMain.handle('deploy:start', async (event, projectPath: string) => {
+  try {
+    const sender = event.sender;
+
+    // Step 1: Read package.json to get name and version
+    const pkgPath = path.join(projectPath, 'package.json');
+    if (!fs.existsSync(pkgPath)) {
+      sender.send('deploy:error', 'package.json not found in project root');
+      return { success: false, error: 'package.json not found' };
+    }
+    const pkgJson = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    const projectName = pkgJson.name || 'unknown-project';
+
+    // Step 1.5: Bump patch version (0.0.1 -> 0.0.2)
+    const currentVersion = pkgJson.version || '0.0.0';
+    const versionParts = currentVersion.split('.').map(Number);
+    if (versionParts.length === 3) {
+      versionParts[2] += 1; // bump patch
+    } else {
+      versionParts.push(1);
+    }
+    const version = versionParts.join('.');
+    pkgJson.version = version;
+    fs.writeFileSync(pkgPath, JSON.stringify(pkgJson, null, 2) + '\n', 'utf-8');
+    sender.send('deploy:log', `Version bumped: ${currentVersion} -> ${version}\n`);
+
+    // Step 2: Generate script/deploy.sh
+    const scriptDir = path.join(projectPath, 'script');
+    if (!fs.existsSync(scriptDir)) {
+      fs.mkdirSync(scriptDir, { recursive: true });
+    }
+
+    const deployScript = `#!/bin/bash
+set -e
+
+PROJECT_NAME="${projectName}"
+VERSION="${version}"
+BUILD_DIR="dist"
+
+# ── Step 1: Check webstatic ──
+if ! command -v webstatic &> /dev/null; then
+  echo "✗ webstatic not installed"
+  echo "  Run: pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/"
+  exit 1
+fi
+echo "✓ webstatic ready"
+
+# ── Step 2: Build & Publish ──
+echo ""
+echo "── CDN Deploy: \${PROJECT_NAME} v\${VERSION} ──"
+echo ""
+
+webstatic publish \\
+  --appkey=com.sankuai.waimaiqafc.aie \\
+  --env=prod \\
+  --artifact=dist \\
+  --build-command='pnpm run build' \\
+  --token=269883ad-b7b0-4431-b5e7-5886cd1d590f
+
+# ── Step 3: Verify build output ──
+EXPECTED_BUILD_PATH="\${BUILD_DIR}/code/\${PROJECT_NAME}/vite/\${VERSION}"
+
+if [ ! -d "\$EXPECTED_BUILD_PATH" ]; then
+  echo "✗ Build output missing: \${EXPECTED_BUILD_PATH}"
+  exit 1
+fi
+
+if [ ! -f "\${EXPECTED_BUILD_PATH}/index.html" ]; then
+  echo "✗ index.html missing"
+  exit 1
+fi
+
+FILE_COUNT=\$(find "\${EXPECTED_BUILD_PATH}" -type f | wc -l | tr -d ' ')
+TOTAL_SIZE=\$(du -sh "\${EXPECTED_BUILD_PATH}" | cut -f1)
+echo "✓ Build verified: \${FILE_COUNT} files, \${TOTAL_SIZE}"
+
+# ── Step 4: Register proxy ──
+DEPLOY_BASE_URL="https://aie.sankuai.com/rdc_host/code/\${PROJECT_NAME}/vite/\${VERSION}"
+EXPECTED_DEPLOY_URL="https://\${PROJECT_NAME}.autocode.test.sankuai.com/"
+
+HTTP_RESPONSE=\$(curl -s -o /dev/null -w "%{http_code}" \\
+  --location --request POST \\
+  "https://digitalgateway.waimai.test.sankuai.com/testgenius/open/agent/claudeProject/updateProjectProxyTarget?projectId=\${PROJECT_NAME}&proxyType=publish&targetUrl=\${DEPLOY_BASE_URL}" \\
+  --header 'Content-Type: application/json' \\
+  --data-raw '{}')
+
+if [ "\$HTTP_RESPONSE" -eq 200 ]; then
+  echo "✓ Proxy registered"
+else
+  echo "✗ Proxy registration failed (HTTP \${HTTP_RESPONSE})"
+  exit 1
+fi
+
+# ── Done ──
+echo ""
+echo "✓ Deploy successful!"
+echo "  URL: \${EXPECTED_DEPLOY_URL}"
+`;
+
+    const deployScriptPath = path.join(scriptDir, 'deploy.sh');
+    fs.writeFileSync(deployScriptPath, deployScript, { mode: 0o755 });
+
+    sender.send('deploy:log', `Generated deploy.sh for ${projectName} v${version}\n`);
+
+    // Step 2.5: Patch vite.config to set correct base & outDir for CDN deployment
+    const cdnBase = `https://aie.sankuai.com/rdc_host/code/${projectName}/vite/${version}/`;
+    const cdnOutDir = `dist/code/${projectName}/vite/${version}/`;
+
+    // Find vite config file (support .ts, .mts, .js, .mjs)
+    const viteConfigCandidates = ['vite.config.ts', 'vite.config.mts', 'vite.config.js', 'vite.config.mjs'];
+    let viteConfigPath: string | null = null;
+    for (const candidate of viteConfigCandidates) {
+      const candidatePath = path.join(projectPath, candidate);
+      if (fs.existsSync(candidatePath)) {
+        viteConfigPath = candidatePath;
+        break;
+      }
+    }
+
+    if (viteConfigPath) {
+      let viteConfigContent = fs.readFileSync(viteConfigPath, 'utf-8');
+      const originalContent = viteConfigContent;
+
+      // Check if base and build.outDir are already correctly set
+      const hasCorrectBase = viteConfigContent.includes(cdnBase);
+      const hasCorrectOutDir = viteConfigContent.includes(cdnOutDir);
+
+      if (!hasCorrectBase || !hasCorrectOutDir) {
+        // Strategy: inject base and build config into defineConfig({...})
+        // Find the defineConfig call and inject/replace build config
+
+        // Remove existing base if present
+        viteConfigContent = viteConfigContent.replace(/^\s*base\s*:\s*[`'"](.*?)[`'"],?\s*$/m, '');
+
+        // Check if build section exists
+        const hasBuildSection = /build\s*:\s*\{/.test(viteConfigContent);
+
+        if (hasBuildSection) {
+          // Replace existing outDir in build section, or add it
+          if (/outDir\s*:/.test(viteConfigContent)) {
+            viteConfigContent = viteConfigContent.replace(
+              /outDir\s*:\s*[`'"](.*?)[`'"],?/,
+              `outDir: '${cdnOutDir}',`
+            );
+          } else {
+            // Add outDir to existing build section
+            viteConfigContent = viteConfigContent.replace(
+              /(build\s*:\s*\{)/,
+              `$1\n    outDir: '${cdnOutDir}',`
+            );
+          }
+          // Add/replace assetsDir
+          if (/assetsDir\s*:/.test(viteConfigContent)) {
+            viteConfigContent = viteConfigContent.replace(
+              /assetsDir\s*:\s*[`'"](.*?)[`'"],?/,
+              `assetsDir: '',`
+            );
+          } else {
+            viteConfigContent = viteConfigContent.replace(
+              /(build\s*:\s*\{)/,
+              `$1\n    assetsDir: '',`
+            );
+          }
+          // Add/replace emptyOutDir
+          if (!/emptyOutDir\s*:/.test(viteConfigContent)) {
+            viteConfigContent = viteConfigContent.replace(
+              /(build\s*:\s*\{)/,
+              `$1\n    emptyOutDir: true,`
+            );
+          }
+        } else {
+          // No build section, inject one before the closing of defineConfig
+          // Find the last }) or the closing of defineConfig
+          viteConfigContent = viteConfigContent.replace(
+            /(export\s+default\s+defineConfig\s*\(\s*\{)/,
+            `$1\n  build: {\n    outDir: '${cdnOutDir}',\n    target: 'esnext',\n    minify: false,\n    sourcemap: false,\n    emptyOutDir: true,\n    assetsDir: '',\n    rollupOptions: {\n      output: {\n        format: 'esm',\n        chunkFileNames: '[name].[hash].js',\n        assetFileNames: '[name].[hash].[ext]',\n        cssCodeSplit: true,\n      },\n      external: [],\n    },\n  },`
+          );
+        }
+
+        // Inject base right after defineConfig({
+        viteConfigContent = viteConfigContent.replace(
+          /(export\s+default\s+defineConfig\s*\(\s*\{)/,
+          `$1\n  base: '${cdnBase}',`
+        );
+
+        // Save backup of original config
+        const backupPath = viteConfigPath + '.deploy-backup';
+        fs.writeFileSync(backupPath, originalContent, 'utf-8');
+
+        // Write patched config
+        fs.writeFileSync(viteConfigPath, viteConfigContent, 'utf-8');
+
+        sender.send('deploy:log', `Patched ${path.basename(viteConfigPath)} with CDN base & outDir\n`);
+        sender.send('deploy:log', `  base: ${cdnBase}\n`);
+        sender.send('deploy:log', `  outDir: ${cdnOutDir}\n`);
+        sender.send('deploy:log', `  Backup saved to ${path.basename(viteConfigPath)}.deploy-backup\n\n`);
+      } else {
+        sender.send('deploy:log', `vite.config already has correct base & outDir, skipping patch\n\n`);
+      }
+    } else {
+      sender.send('deploy:log', `Warning: No vite.config found, deploy may fail if build config is incorrect\n\n`);
+    }
+
+    // Step 3: Execute the script
+    const expectedDeployUrl = `https://${projectName}.autocode.test.sankuai.com/`;
+    let allOutput = '';
+
+    // Helper: restore vite config backup after deploy
+    const restoreViteConfig = () => {
+      if (viteConfigPath) {
+        const backupPath = viteConfigPath + '.deploy-backup';
+        if (fs.existsSync(backupPath)) {
+          fs.copyFileSync(backupPath, viteConfigPath);
+          fs.unlinkSync(backupPath);
+          sender.send('deploy:log', `\nRestored original ${path.basename(viteConfigPath)}\n`);
+        }
+      }
+    };
+
+    const child = cpSpawn('bash', ['script/deploy.sh'], {
+      cwd: projectPath,
+      env: { ...process.env, FORCE_COLOR: '0' },
+    });
+
+    child.stdout?.on('data', (data: Buffer) => {
+      const text = data.toString();
+      allOutput += text;
+      sender.send('deploy:log', text);
+    });
+
+    child.stderr?.on('data', (data: Buffer) => {
+      const text = data.toString();
+      allOutput += text;
+      sender.send('deploy:log', text);
+    });
+
+    child.on('close', (code: number | null) => {
+      // Always restore vite config after deploy
+      restoreViteConfig();
+
+      if (code === 0) {
+        // Send deploy:done with the expected URL
+        sender.send('deploy:done', expectedDeployUrl);
+        // Also open in built-in browser
+        if (mainWin && !mainWin.isDestroyed()) {
+          mainWin.webContents.send('agent:open-browser-preview', expectedDeployUrl);
+        }
+      } else {
+        sender.send('deploy:error', `Deploy script exited with code ${code}\n\n${allOutput.slice(-500)}`);
+      }
+    });
+
+    child.on('error', (err: Error) => {
+      restoreViteConfig();
+      sender.send('deploy:error', `Failed to execute deploy script: ${err.message}`);
+    });
+
+    return { success: true };
+  } catch (error) {
+    event.sender.send('deploy:error', error instanceof Error ? error.message : String(error));
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 // File System Handlers
@@ -1747,41 +2106,537 @@ ipcMain.handle('fs:delete', async (_, filePath: string) => {
   }
 });
 
-// Terminal Handlers
-const terminalSessions = new Map<string, { process: any, cwd: string, webContents: Electron.WebContents }>();
+// Terminal Handlers: 支持 node-pty（PTY）或 child_process（pipe）两种后端
+type TerminalSession = {
+  cwd: string;
+  webContents: Electron.WebContents;
+  process?: import('child_process').ChildProcess;
+  pty?: { write: (data: string) => void; resize: (cols: number, rows: number) => void; kill: (signal?: string) => void };
+  windowId?: string;
+  processGroupId?: number; // 进程组 ID（用于发送信号到整个进程组）
+};
+const terminalSessions = new Map<string, TerminalSession>();
 
-function setupTerminalListeners(id: string, process: any, webContents: Electron.WebContents) {
-  process.stdout.on('data', (data: Buffer) => {
-    webContents.send('terminal:output', id, data.toString());
+// 解析 shell 路径，确保是绝对路径且存在
+function resolveShellPath(): string {
+  const shellRaw = process.env.SHELL || '/bin/zsh';
+  let s = path.isAbsolute(shellRaw) ? shellRaw : path.join(process.env.HOME || '/', shellRaw.replace(/^~/, ''));
+  if (!fs.existsSync(s)) {
+    s = '/bin/zsh';
+    if (!fs.existsSync(s)) s = '/bin/bash';
+    if (!fs.existsSync(s)) s = '/bin/sh';
+  }
+  return s;
+}
+
+// 构建 PTY 环境变量
+function buildPtyEnv(minimal: boolean): Record<string, string> {
+  // 对于 PTY 模式，使用最简化的环境变量来避免 posix_spawnp 失败
+  // 只包含绝对必需的环境变量
+  const base: Record<string, string> = {
+    TERM: 'xterm-256color',
+    PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+    HOME: process.env.HOME || os.homedir(),
+    USER: process.env.USER || process.env.LOGNAME || 'user',
+    LANG: process.env.LANG || 'en_US.UTF-8',
+    SHELL: resolveShellPath(),
+  };
+  
+  // 只在最小模式下使用基础环境变量
+  if (minimal) {
+    if (process.env.TMPDIR) base.TMPDIR = process.env.TMPDIR;
+    if (process.env.LOGNAME) base.LOGNAME = process.env.LOGNAME;
+    return base;
+  }
+  
+  // 完整模式：添加一些安全的环境变量
+  // 但仍然过滤掉可能有问题的变量
+  const skipPrefixes = [
+    'npm_config_',
+    'npm_package_',
+    'npm_lifecycle_',
+    'npm_node_execpath',
+    'npm_execpath',
+    'npm_command',
+    'VSCODE_',
+    'CURSOR_',
+    '__CF',
+    'XPC_',
+  ];
+  
+  if (process.env) {
+    for (const [k, v] of Object.entries(process.env)) {
+      // 跳过可能有问题的键
+      if (skipPrefixes.some(prefix => k.startsWith(prefix))) {
+        continue;
+      }
+      // 只包含字符串值，且值不为空
+      if (v !== undefined && typeof v === 'string' && v.length > 0) {
+        // 对于 PATH 等关键变量，允许包含非 ASCII 字符
+        // 对于其他变量，检查是否包含控制字符
+        if (k === 'PATH' || !/[\x00-\x1F\x7F]/.test(v)) {
+          base[k] = v;
+        }
+      }
+    }
+  }
+  
+  // 确保关键环境变量存在
+  base.TERM = base.TERM || 'xterm-256color';
+  if (!base.SHELL) base.SHELL = resolveShellPath();
+  if (!base.HOME) base.HOME = os.homedir();
+  if (!base.USER) base.USER = process.env.USER || process.env.LOGNAME || 'user';
+  
+  return base;
+}
+
+// 验证 shell 文件是否存在且可执行
+function validateShellPath(shellPath: string): { valid: boolean; error?: string } {
+  if (!fs.existsSync(shellPath)) {
+    return { valid: false, error: `Shell file does not exist: ${shellPath}` };
+  }
+  try {
+    const stats = fs.statSync(shellPath);
+    if (!stats.isFile()) {
+      return { valid: false, error: `Shell path is not a file: ${shellPath}` };
+    }
+    // 检查是否可执行（Unix 权限）
+    if (process.platform !== 'win32') {
+      const mode = stats.mode;
+      const isExecutable = (mode & parseInt('111', 8)) !== 0;
+      if (!isExecutable) {
+        return { valid: false, error: `Shell file is not executable: ${shellPath}` };
+      }
+    }
+  } catch (e) {
+    return { valid: false, error: `Cannot access shell file: ${shellPath}, ${e instanceof Error ? e.message : String(e)}` };
+  }
+  return { valid: true };
+}
+
+// 尝试多种 shell 路径
+function getShellCandidates(): string[] {
+  const candidates: string[] = [];
+  const shellRaw = process.env.SHELL;
+  if (shellRaw && path.isAbsolute(shellRaw) && fs.existsSync(shellRaw)) {
+    candidates.push(shellRaw);
+  }
+  candidates.push('/bin/zsh', '/bin/bash', '/bin/sh');
+  // 去重并过滤不存在的路径
+  return [...new Set(candidates)].filter(p => fs.existsSync(p));
+}
+
+// 创建 PTY 终端
+function createPtyTerminal(
+  id: string,
+  normalizedCwd: string,
+  event: Electron.IpcMainInvokeEvent,
+  windowId?: string
+): { success: boolean; error?: string; mode?: 'pty' | 'pipe' } {
+  if (process.platform === 'win32') {
+    return { success: false, error: 'PTY mode is not supported on Windows' };
+  }
+
+  const require = createRequire(import.meta.url);
+  let ptyModule: any;
+  try {
+    ptyModule = require('node-pty');
+    // 验证 node-pty 模块是否可用
+    if (!ptyModule || typeof ptyModule.spawn !== 'function') {
+      return { success: false, error: 'node-pty module is not properly loaded (spawn function not found)' };
+    }
+  } catch (e) {
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    console.error('[Terminal] Failed to load node-pty:', errorMsg);
+    return { success: false, error: `node-pty module not available: ${errorMsg}` };
+  }
+
+  const ptyShellArgs: string[] = []; // 不使用 -l，避免 .zprofile 中的 exit 导致 shell 立即退出
+  
+  // 尝试多种 shell 和环境变量组合
+  // 优先使用最小环境变量，因为完整环境变量可能导致 posix_spawnp 失败
+  const shellCandidates = getShellCandidates();
+  const envCandidates = [true, false]; // 先尝试最小环境变量（更稳定），再尝试完整环境变量
+  
+  let lastError: Error | null = null;
+  const lastErrorDetails: string[] = [];
+
+  for (const shellPath of shellCandidates) {
+    const validation = validateShellPath(shellPath);
+    if (!validation.valid) {
+      lastErrorDetails.push(`Shell validation failed for ${shellPath}: ${validation.error}`);
+      continue;
+    }
+
+    for (const useFullEnv of envCandidates) {
+      try {
+        const ptyEnv = buildPtyEnv(!useFullEnv);
+        
+        // 验证工作目录是否存在且可访问
+        if (!fs.existsSync(normalizedCwd)) {
+          throw new Error(`Working directory does not exist: ${normalizedCwd}`);
+        }
+        
+        const stats = fs.statSync(normalizedCwd);
+        if (!stats.isDirectory()) {
+          throw new Error(`Path is not a directory: ${normalizedCwd}`);
+        }
+        
+        // 尝试创建 PTY
+        // 使用最简化的选项来避免 posix_spawnp 失败
+        const ptyOptions: any = {
+          cwd: normalizedCwd,
+          env: ptyEnv,
+          cols: 80,
+          rows: 24,
+          name: 'xterm-256color',
+          // 不设置 encoding，让 node-pty 使用默认值
+        };
+        
+        // 尝试使用 spawn，如果失败则尝试 fork
+        let ptyProcess: any;
+        try {
+          ptyProcess = ptyModule.spawn(shellPath, ptyShellArgs, ptyOptions);
+        } catch (spawnError) {
+          // 如果 spawn 失败，尝试使用 fork（某些情况下更稳定）
+          if (typeof ptyModule.fork === 'function') {
+            console.log(`[Terminal] spawn failed, trying fork for ${shellPath}`);
+            try {
+              ptyProcess = ptyModule.fork(shellPath, ptyShellArgs, ptyOptions);
+            } catch (forkError) {
+              throw spawnError; // 抛出原始 spawn 错误
+            }
+          } else {
+            throw spawnError;
+          }
+        }
+
+        // 验证 PTY 进程是否成功创建
+        if (!ptyProcess) {
+          throw new Error('PTY process is null');
+        }
+
+        ptyProcess.on('data', (data?: string) => {
+          event.sender.send('terminal:output', id, data ?? '');
+        });
+
+        ptyProcess.on('exit', () => {
+          if (terminalSessions.has(id)) {
+            event.sender.send('terminal:exit', id);
+            terminalSessions.delete(id);
+          }
+        });
+
+        terminalSessions.set(id, {
+          cwd: normalizedCwd,
+          webContents: event.sender,
+          pty: ptyProcess,
+          windowId
+        });
+
+        console.log(`[Terminal] PTY mode succeeded with shell: ${shellPath}, env: ${useFullEnv ? 'full' : 'minimal'}`);
+        return { success: true, mode: 'pty' };
+      } catch (e) {
+        const error = e instanceof Error ? e : new Error(String(e));
+        lastError = error;
+        const errorMsg = error.message || String(e);
+        lastErrorDetails.push(`Shell: ${shellPath}, Env: ${useFullEnv ? 'full' : 'minimal'}, Error: ${errorMsg}`);
+        
+        // 如果是 posix_spawnp 错误，提供更详细的诊断
+        if (errorMsg.includes('posix_spawnp')) {
+          lastErrorDetails.push(`  - Shell path: ${shellPath}`);
+          lastErrorDetails.push(`  - Shell exists: ${fs.existsSync(shellPath)}`);
+          lastErrorDetails.push(`  - CWD: ${normalizedCwd}`);
+          lastErrorDetails.push(`  - CWD exists: ${fs.existsSync(normalizedCwd)}`);
+          lastErrorDetails.push(`  - CWD is directory: ${fs.existsSync(normalizedCwd) && fs.statSync(normalizedCwd).isDirectory()}`);
+          const envKeys = Object.keys(buildPtyEnv(!useFullEnv));
+          lastErrorDetails.push(`  - Env keys count: ${envKeys.length}`);
+          lastErrorDetails.push(`  - Env keys: ${envKeys.slice(0, 20).join(', ')}${envKeys.length > 20 ? '...' : ''}`);
+        }
+      }
+    }
+  }
+
+  // 所有尝试都失败了
+  const errorMessage = lastError?.message || 'Unknown error';
+  const diagnosticInfo = lastErrorDetails.join('\n');
+  console.error(`[Terminal] PTY mode failed after trying all combinations:\n${diagnosticInfo}`);
+  
+  return {
+    success: false,
+    error: `PTY mode failed: ${errorMessage}. Tried shells: ${shellCandidates.join(', ')}. See console for details.`,
+    mode: undefined
+  };
+}
+
+// 创建 Pipe 终端（使用 script 命令创建伪终端）
+async function createPipeTerminal(
+  id: string,
+  normalizedCwd: string,
+  event: Electron.IpcMainInvokeEvent,
+  windowId?: string
+): Promise<{ success: boolean; error?: string; mode?: 'pty' | 'pipe' }> {
+  const { spawn } = await import('child_process');
+  
+  // 确定 shell 命令
+  let shellCommand: string;
+  if (process.platform === 'win32') {
+    shellCommand = process.env.COMSPEC || 'cmd.exe';
+  } else {
+    // 优先使用 bash
+    if (fs.existsSync('/bin/bash')) {
+      shellCommand = '/bin/bash';
+    } else {
+      shellCommand = resolveShellPath();
+    }
+  }
+  
+  // 设置环境变量
+  const terminalEnv = {
+    ...process.env,
+    TERM: 'xterm-256color',
+    ...(process.platform !== 'win32' ? { 
+      FORCE_COLOR: '1',
+      PS1: '$ ',
+      PS2: '> ',
+    } : {})
+  };
+  
+  let processGroupId: number | undefined;
+  let terminalProcess: import('child_process').ChildProcess;
+  
+  if (process.platform !== 'win32') {
+    // 直接使用 bash -i，但确保 stdin 保持打开
+    // 通过设置环境变量和确保 stdin 不关闭来让 shell 保持运行
+    console.log(`[Terminal] Using direct spawn with interactive shell: ${shellCommand}`);
+    
+    terminalProcess = spawn(shellCommand, ['-i'], {
+      cwd: normalizedCwd,
+      env: {
+        ...terminalEnv,
+        // 确保 shell 认为是交互式的
+        PS1: '$ ',
+        PS2: '> ',
+        // 防止 shell 因为非 TTY 而退出
+        INTERACTIVE: '1',
+        // 清空可能干扰的环境变量
+        BASH_ENV: '',
+        ENV: '',
+        // 确保有正确的 TERM
+        TERM: 'xterm-256color',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: false,
+    });
+    
+    if (terminalProcess.pid) {
+      processGroupId = terminalProcess.pid;
+    }
+    
+    // 确保 stdin 不会因为父进程关闭而关闭
+    if (terminalProcess.stdin) {
+      // 保持 stdin 打开
+      terminalProcess.stdin.setDefaultEncoding('utf8');
+      // 监听 stdin 错误但不关闭
+      terminalProcess.stdin.on('error', (err) => {
+        console.warn(`[Terminal] stdin error (non-fatal): ${err.message}`);
+      });
+    }
+  } else {
+    // Windows: 直接 spawn
+    terminalProcess = spawn(shellCommand, [], {
+      cwd: normalizedCwd,
+      env: terminalEnv,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: false,
+    });
+  }
+  
+  console.log(`[Terminal] Spawning shell (pipe mode with script): ${shellCommand} in ${normalizedCwd}`);
+  
+  const safeDeleteSession = (onlyIfOurs: boolean) => {
+    const cur = terminalSessions.get(id);
+    if (!onlyIfOurs || cur?.process === terminalProcess) {
+      terminalSessions.delete(id);
+    }
+  };
+
+  terminalProcess.on('error', (error: Error) => {
+    console.error(`[Terminal] Process error for ${id}:`, error);
+    if (terminalSessions.get(id)?.process === terminalProcess) {
+      event.sender.send('terminal:exit', id);
+      terminalSessions.delete(id);
+    }
   });
-  process.stderr.on('data', (data: Buffer) => {
-    webContents.send('terminal:output', id, data.toString());
-  });
-  process.on('exit', () => {
-    webContents.send('terminal:exit', id);
-    terminalSessions.delete(id);
+
+  const exitHandler = (_code: number | null, _signal: string | null) => {
+    if (terminalSessions.get(id)?.process === terminalProcess) {
+      event.sender.send('terminal:exit', id);
+      terminalSessions.delete(id);
+    }
+  };
+  terminalProcess.on('exit', exitHandler);
+  
+  const webContents = event.sender;
+  terminalSessions.set(id, { 
+    process: terminalProcess, 
+    cwd: normalizedCwd, 
+    webContents, 
+    windowId,
+    processGroupId
+  } as TerminalSession);
+  setupTerminalListeners(id, terminalProcess, webContents);
+  
+  if (!terminalProcess.stdin || terminalProcess.stdin.destroyed) {
+    console.error(`[Terminal] stdin is not available for ${id}`);
+    safeDeleteSession(true);
+    return {
+      success: false,
+      error: 'Terminal stdin is not available. This may indicate a shell spawn issue.'
+    };
+  }
+  terminalProcess.stdin.setDefaultEncoding('utf8');
+
+  // 等待进程稳定
+  return new Promise<{ success: boolean; error?: string; mode?: 'pty' | 'pipe' }>((resolve) => {
+    // 增加等待时间，让 script 和 shell 有时间初始化
+    setTimeout(() => {
+      if (terminalProcess.killed || terminalProcess.exitCode !== null) {
+        const exitCode = terminalProcess.exitCode;
+        console.error(`[Terminal] Process ${id} exited immediately with code=${exitCode}`);
+        safeDeleteSession(true);
+        resolve({
+          success: false,
+          error: `Terminal process exited immediately (code: ${exitCode}). This may indicate a shell configuration issue.`
+        });
+      } else {
+        console.log(`[Terminal] Terminal ${id} started successfully (PID: ${terminalProcess.pid})`);
+        resolve({ success: true, mode: 'pipe' });
+      }
+    }, 800); // 增加等待时间到 800ms
   });
 }
 
-ipcMain.handle('terminal:create', async (event, { id, cwd }: { id: string, cwd: string }) => {
+function setupTerminalListeners(id: string, process: import('child_process').ChildProcess, webContents: Electron.WebContents) {
+  // 监听 stdout
+  if (process.stdout) {
+    process.stdout.on('data', (data: Buffer) => {
+      webContents.send('terminal:output', id, data.toString());
+    });
+    
+    // 监听 stdout 关闭
+    process.stdout.on('close', () => {
+      console.log(`[Terminal] stdout closed for ${id}`);
+    });
+    
+    // 监听 stdout 错误
+    process.stdout.on('error', (error: Error) => {
+      console.error(`[Terminal] stdout error for ${id}:`, error);
+    });
+  }
+  
+  // 监听 stderr
+  if (process.stderr) {
+    process.stderr.on('data', (data: Buffer) => {
+      webContents.send('terminal:output', id, data.toString());
+    });
+    
+    // 监听 stderr 关闭
+    process.stderr.on('close', () => {
+      console.log(`[Terminal] stderr closed for ${id}`);
+    });
+    
+    // 监听 stderr 错误
+    process.stderr.on('error', (error: Error) => {
+      console.error(`[Terminal] stderr error for ${id}:`, error);
+    });
+  }
+  
+  // 监听 stdin 错误
+  if (process.stdin) {
+    process.stdin.on('error', (error: Error) => {
+      console.error(`[Terminal] stdin error for ${id}:`, error);
+    });
+    
+    // 监听 stdin 关闭
+    process.stdin.on('close', () => {
+      console.log(`[Terminal] stdin closed for ${id}`);
+    });
+  }
+  
+  // 注意：exit 事件已经在 terminal:create 中处理，这里不再重复处理
+  // 避免重复删除会话和发送事件
+}
+
+ipcMain.handle('terminal:create', async (event, { id, cwd, windowId }: { id: string, cwd: string, windowId?: string }) => {
   try {
+    // 验证 cwd 是否存在且为目录
+    if (!cwd || cwd.trim() === '') {
+      return { success: false, error: 'Working directory is required' };
+    }
+    
+    const normalizedCwd = path.resolve(cwd.trim());
+    
+    // 检查目录是否存在
+    if (!fs.existsSync(normalizedCwd)) {
+      return { success: false, error: `Directory does not exist: ${normalizedCwd}` };
+    }
+    
+    const stats = fs.statSync(normalizedCwd);
+    if (!stats.isDirectory()) {
+      return { success: false, error: `Path is not a directory: ${normalizedCwd}` };
+    }
+    
     // 权限检查
     const folders = configStore.getAll().authorizedFolders || [];
-    const isAuthorized = folders.some(f => cwd.startsWith(f.path));
+    const isAuthorized = folders.some(f => normalizedCwd.startsWith(path.resolve(f.path)));
     if (!isAuthorized) {
-      return { success: false, error: 'Path not authorized' };
+      // 如果路径未授权，尝试自动授权项目目录
+      const projectPath = normalizedCwd;
+      if (!folders.some(f => f.path === projectPath)) {
+        folders.push({ path: projectPath, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() });
+        configStore.set('authorizedFolders', folders);
+        console.log(`[Terminal] Auto-authorized project directory: ${projectPath}`);
+      }
     }
-    const shell = process.platform === 'win32' ? 'cmd.exe' : process.env.SHELL || '/bin/bash';
-    const { spawn } = await import('child_process');
-    const terminalProcess = spawn(shell, [], {
-      cwd,
-      env: { ...process.env, TERM: 'xterm-256color' }
-    });
-    const webContents = event.sender;
-    terminalSessions.set(id, { process: terminalProcess, cwd, webContents });
-    setupTerminalListeners(id, terminalProcess, webContents);
-    return { success: true };
+    
+    // 若已存在同 id 的会话，直接返回成功，避免重复创建导致历史丢失
+    const existing = terminalSessions.get(id);
+    if (existing) {
+      console.log(`[Terminal] Session ${id} already exists, skipping creation`);
+      // 更新 webContents（可能切换了窗口）
+      existing.webContents = event.sender;
+      return { success: true, mode: existing.pty ? 'pty' : 'pipe' };
+    }
+    
+    // 获取配置的终端模式
+    const terminalMode = configStore.get('terminalMode') || 'auto';
+    
+    // 根据配置选择模式
+    if (terminalMode === 'pipe' || process.platform === 'win32') {
+      // 强制使用 Pipe 模式（Windows 必须使用 Pipe）
+      console.log(`[Terminal] Using pipe mode (configured: ${terminalMode === 'pipe' ? 'pipe' : 'Windows'})`);
+      return await createPipeTerminal(id, normalizedCwd, event, windowId);
+    } else if (terminalMode === 'pty') {
+      // 强制使用 PTY 模式
+      console.log('[Terminal] Using PTY mode (configured: pty)');
+      const result = createPtyTerminal(id, normalizedCwd, event, windowId);
+      if (!result.success) {
+        return { success: false, error: `PTY mode failed: ${result.error}` };
+      }
+      return result;
+    } else {
+      // auto 模式：优先 PTY，失败则回退 Pipe
+      console.log('[Terminal] Using auto mode, trying PTY first...');
+      const ptyResult = createPtyTerminal(id, normalizedCwd, event, windowId);
+      if (ptyResult.success) {
+        return ptyResult;
+      }
+      console.warn(`[Terminal] PTY mode failed: ${ptyResult.error}, falling back to pipe mode`);
+      return await createPipeTerminal(id, normalizedCwd, event, windowId);
+    }
   } catch (error) {
+    console.error('[Terminal] Error creating terminal:', error);
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 });
@@ -1791,18 +2646,135 @@ ipcMain.handle('terminal:write', (_, id: string, data: string) => {
   if (!session) {
     return { success: false, error: 'Terminal session not found' };
   }
-  session.process.stdin.write(data);
-  return { success: true };
+  if (session.pty) {
+    try {
+      session.pty.write(data);
+      return { success: true };
+    } catch (error) {
+      console.error(`[Terminal] Error writing to PTY for ${id}:`, error);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  const proc = session.process;
+  if (!proc || proc.killed || proc.exitCode !== null) {
+    return { success: false, error: 'Terminal process has exited' };
+  }
+  if (!proc.stdin || proc.stdin.destroyed) {
+    return { success: false, error: 'Terminal stdin is not available' };
+  }
+  try {
+    proc.stdin.write(data);
+    return { success: true };
+  } catch (error) {
+    console.error(`[Terminal] Error writing to stdin for ${id}:`, error);
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
-ipcMain.handle('terminal:resize', (_, id: string, _cols: number, _rows: number) => {
+ipcMain.handle('terminal:signal', async (_, id: string, signal: string) => {
   const session = terminalSessions.get(id);
   if (!session) {
     return { success: false, error: 'Terminal session not found' };
   }
-  // PTY resize (if using pty on Unix)
-  if (process.platform !== 'win32' && session.process.stdout.setDefaultEncoding) {
-    session.process.stdout.setDefaultEncoding('utf8');
+  if (session.pty) {
+    try {
+      // node-pty 不支持直接发送信号，需要 kill
+      if (signal === 'SIGINT') {
+        session.pty.kill('SIGINT');
+      } else {
+        session.pty.kill(signal as NodeJS.Signals);
+      }
+      return { success: true };
+    } catch (error) {
+      console.error(`[Terminal] Error sending signal to PTY for ${id}:`, error);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  const proc = session.process;
+  if (!proc || proc.killed || proc.exitCode !== null) {
+    return { success: false, error: 'Terminal process has exited' };
+  }
+  try {
+    if (signal === 'SIGINT') {
+      // 在 pipe 模式下，最好的方法是发送 Ctrl+C 字符到 stdin
+      // 这样 shell 会正确处理并转发信号给前台进程组
+      // 这是最可靠的方法，因为 shell 知道如何将信号传递给子进程
+      if (proc.stdin && !proc.stdin.destroyed) {
+        try {
+          // 先发送 Ctrl+C 字符到 stdin，让 shell 处理
+          proc.stdin.write('\x03');
+        } catch (e) {
+          console.warn(`[Terminal] Failed to write Ctrl+C to stdin for ${id}:`, e);
+        }
+      }
+      
+      // 在非 Windows 系统上，尝试发送信号到进程组
+      if (process.platform !== 'win32' && proc.pid) {
+        // 优先使用保存的进程组 ID（如果使用了 setsid）
+        if (session.processGroupId) {
+          try {
+            // 发送信号到进程组（负数 PID 表示进程组）
+            process.kill(-session.processGroupId, 'SIGINT');
+            console.log(`[Terminal] Sent SIGINT to process group ${session.processGroupId} for ${id}`);
+          } catch (e) {
+            console.warn(`[Terminal] Failed to send SIGINT to process group ${session.processGroupId}:`, e);
+          }
+        }
+        
+        // 也尝试发送到进程本身的进程组
+        try {
+          process.kill(-proc.pid, 'SIGINT');
+          console.log(`[Terminal] Sent SIGINT to process group ${-proc.pid} for ${id}`);
+        } catch (e) {
+          // 如果进程组发送失败，发送到进程本身
+          try {
+            proc.kill('SIGINT');
+            console.log(`[Terminal] Sent SIGINT to process ${proc.pid} for ${id}`);
+          } catch (e2) {
+            console.warn(`[Terminal] Failed to send SIGINT to process ${proc.pid}:`, e2);
+          }
+        }
+      } else {
+        // Windows 系统：直接发送信号到进程
+        proc.kill('SIGINT');
+      }
+    } else {
+      proc.kill(signal as NodeJS.Signals);
+    }
+    return { success: true };
+  } catch (error) {
+    console.error(`[Terminal] Error sending signal to process for ${id}:`, error);
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('terminal:resize', (_, id: string, cols: number, rows: number) => {
+  const session = terminalSessions.get(id);
+  if (!session) {
+    return { success: false, error: 'Terminal session not found' };
+  }
+  if (session.pty) {
+    try {
+      session.pty.resize(cols, rows);
+    } catch (e) {
+      // ignore
+    }
+    return { success: true };
+  }
+  return { success: true };
+});
+
+ipcMain.handle('terminal:open-window', async (_, { cwd, instanceId }: { cwd?: string; instanceId?: string }) => {
+  const windowId = `terminal-window-${Date.now()}`;
+  const win = createTerminalWindow(cwd || process.cwd(), windowId, instanceId);
+  terminalWindows.set(windowId, win);
+  return { success: true, windowId };
+});
+
+ipcMain.handle('terminal:close-window', (_, windowId: string) => {
+  const win = terminalWindows.get(windowId);
+  if (win && !win.isDestroyed()) {
+    win.close();
   }
   return { success: true };
 });
@@ -1810,7 +2782,15 @@ ipcMain.handle('terminal:resize', (_, id: string, _cols: number, _rows: number) 
 ipcMain.handle('terminal:destroy', (_, id: string) => {
   const session = terminalSessions.get(id);
   if (session) {
-    session.process.kill();
+    if (session.pty) {
+      try {
+        session.pty.kill();
+      } catch (e) {
+        // ignore
+      }
+    } else if (session.process) {
+      session.process.kill();
+    }
     terminalSessions.delete(id);
   }
   return { success: true };
@@ -1943,7 +2923,8 @@ function createMainWindow() {
       preload: path.join(__dirname, 'preload.mjs'),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: true
+      webSecurity: true,
+      webviewTag: true, // 用于浏览器预览中注入 CSS（如缩小 Vite 报错 overlay 字号）
     },
     show: false,
   })
@@ -1999,6 +2980,19 @@ function createMainWindow() {
         ]
       },
       {
+        label: 'Terminal',
+        submenu: [
+          {
+            label: 'New Terminal Window',
+            accelerator: 'CmdOrCtrl+Shift+T',
+            click: () => {
+              const cwd = mainWin ? (mainWin.webContents as any).cwd || process.cwd() : process.cwd();
+              createTerminalWindow(cwd, `terminal-window-${Date.now()}`);
+            }
+          }
+        ]
+      },
+      {
         label: 'Window',
         submenu: [
           { role: 'minimize' },
@@ -2036,13 +3030,20 @@ function createMainWindow() {
     mainWin?.focus()
   })
 
-  // Handle external links：localhost 用内置浏览器打开，不启动系统默认浏览器
+  // Handle external links：localhost 和部署域名用内置浏览器打开，其他用系统浏览器
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
+    // localhost / 127.0.0.1 - 使用内置浏览器
     if (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1') ||
         url.startsWith('https://localhost') || url.startsWith('https://127.0.0.1')) {
       mainWin?.webContents.send('agent:open-browser-preview', url)
       return { action: 'deny' }
     }
+    // 部署相关域名 - 使用内置浏览器
+    if (url.includes('.autocode.test.sankuai.com') || url.includes('aie.sankuai.com/rdc_host')) {
+      mainWin?.webContents.send('agent:open-browser-preview', url)
+      return { action: 'deny' }
+    }
+    // 其他外部链接 - 使用系统默认浏览器
     if (url.startsWith('https:') || url.startsWith('http:')) {
       shell.openExternal(url)
       return { action: 'deny' }
@@ -2228,3 +3229,68 @@ setInterval(() => {
     floatingBallWin.setAlwaysOnTop(true, 'screen-saver')
   }
 }, 2000)
+
+function createTerminalWindow(cwd: string, windowId: string, instanceId?: string): BrowserWindow {
+  const iconPath = getIconPath()
+  let iconImage = undefined
+  try {
+    iconImage = nativeImage.createFromPath(iconPath)
+    if (iconImage.isEmpty()) {
+      iconImage = undefined
+    }
+  } catch (e) {
+    console.error('Failed to load icon:', e)
+  }
+
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize
+  const win = new BrowserWindow({
+    width: 800,
+    height: 600,
+    minWidth: 400,
+    minHeight: 300,
+    icon: iconImage || iconPath,
+    frame: true,
+    title: `Terminal - ${path.basename(cwd)}`,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.mjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  })
+
+  // Center window on screen
+  const x = Math.floor((screenWidth - 800) / 2)
+  const y = Math.floor((screenHeight - 600) / 2)
+  win.setPosition(x, y)
+
+  const instanceIdParam = instanceId ? `&instanceId=${encodeURIComponent(instanceId)}` : '';
+  if (VITE_DEV_SERVER_URL) {
+    win.loadURL(`${VITE_DEV_SERVER_URL}#/terminal-window?cwd=${encodeURIComponent(cwd)}&windowId=${encodeURIComponent(windowId)}${instanceIdParam}`)
+  } else {
+    const distPath = getRendererDistPath()
+    win.loadFile(path.join(distPath, 'index.html'), {
+      hash: `terminal-window?cwd=${encodeURIComponent(cwd)}&windowId=${encodeURIComponent(windowId)}${instanceIdParam}`,
+    })
+  }
+
+  win.on('closed', () => {
+    // Clean up all terminal sessions created in this window
+    terminalSessions.forEach((session, id) => {
+      if (session.windowId === windowId) {
+        if (session.pty) {
+          try {
+            session.pty.kill()
+          } catch (_) {
+            /* ignore */
+          }
+        } else if (session.process) {
+          session.process.kill()
+        }
+        terminalSessions.delete(id)
+      }
+    })
+    terminalWindows.delete(windowId)
+  })
+
+  return win
+}

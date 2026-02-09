@@ -31,7 +31,8 @@ export default defineConfig({
                 'sqlite3',
                 'sequelize',
                 'better-sqlite3',
-                '@modelcontextprotocol/sdk'
+                '@modelcontextprotocol/sdk',
+                'node-pty'
               ],
             },
           }

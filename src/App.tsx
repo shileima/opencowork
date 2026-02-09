@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Minus, Square, X, Zap, FolderKanban, ChevronLeft, ChevronRight, ChevronDown, FolderOpen, FolderPlus, Trash2 } from 'lucide-react';
+import { Minus, Square, X, Zap, FolderKanban, ChevronLeft, ChevronRight, ChevronDown, FolderOpen, FolderPlus, Trash2, Loader2, Rocket, CheckCircle } from 'lucide-react';
 import { CoworkView } from './components/CoworkView';
 import { SettingsView } from './components/SettingsView';
 import { ConfirmDialog, useConfirmations } from './components/ConfirmDialog';
 import { FloatingBallPage } from './components/FloatingBallPage';
 import { ProjectView } from './components/ProjectView';
+import { TerminalWindow } from './pages/TerminalWindow';
 import { useI18n } from './i18n/I18nContext';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -23,6 +24,8 @@ function App() {
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
+  const [deployStatus, setDeployStatus] = useState<'idle' | 'deploying' | 'success' | 'error'>('idle');
+  const deployLogRef = useRef<string>('');
   const projectDropdownRef = useRef<HTMLDivElement>(null);
   const projectButtonRef = useRef<HTMLButtonElement>(null);
   const { pendingRequest, handleConfirm, handleDeny } = useConfirmations();
@@ -180,24 +183,46 @@ function App() {
     }
   };
 
-  const handleDeleteProject = async (e: React.MouseEvent, project: { id: string; name: string }) => {
+  const handleDeleteProject = async (e: React.MouseEvent, project: { id: string; name: string; path?: string }) => {
     e.stopPropagation();
-    if (!window.confirm(`${t('confirmDeleteProject')} "${project.name}"?`)) return;
+    
+    // 显示详细的确认对话框
+    const confirmMessage = `确定要删除项目 "${project.name}" 吗？\n\n⚠️ 警告：此操作将：\n1. 从项目列表中删除该项目\n2. 永久删除项目目录及其所有文件\n\n此操作无法撤销，请谨慎操作！`;
+    
+    if (!window.confirm(confirmMessage)) return;
+    
+    // 二次确认
+    const doubleConfirm = window.confirm(`最后确认：确定要删除项目 "${project.name}" 及其所有本地文件吗？\n\n项目路径：${project.path || '未知'}\n\n点击"确定"将永久删除，无法恢复！`);
+    if (!doubleConfirm) return;
+    
     try {
-      const result = await window.ipcRenderer.invoke('project:delete', project.id) as { success: boolean };
+      const result = await window.ipcRenderer.invoke('project:delete', project.id, project.path) as { success: boolean; error?: string; warning?: string };
       if (result.success) {
+        // 如果有警告，显示警告信息
+        if (result.warning) {
+          window.alert(`⚠️ ${result.warning}`);
+        }
         await loadProjects();
         await loadCurrentProject();
         setShowProjectDropdown(false);
         window.ipcRenderer.send('project:switched');
+      } else {
+        console.error('Delete project failed:', result.error);
+        if (result.error) {
+          window.alert(`删除项目失败：${result.error}`);
+        }
       }
     } catch (error) {
       console.error('Failed to delete project:', error);
+      window.alert(`删除项目时发生错误：${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
   // Check if this is the floating ball window
   const isFloatingBall = window.location.hash === '#/floating-ball' || window.location.hash === '#floating-ball';
+  
+  // Check if this is a terminal window
+  const isTerminalWindow = window.location.hash.includes('terminal-window');
 
   // 获取应用版本号
   useEffect(() => {
@@ -291,9 +316,94 @@ ${err}
     setIsProcessing(false);
   };
 
+  // Strip ANSI escape codes from terminal output
+  const stripAnsi = (text: string): string =>
+    text
+      .replace(/\x1B\]8;;[^\x1B]*\x1B\\([^\x1B]*)\x1B\]8;;\x1B\\/g, '$1') // OSC 8 hyperlinks -> display text
+      .replace(/\x1B\[[0-9;]*[A-Za-z]/g, ''); // SGR sequences
+
+  // Build deploy log markdown: title + code block (DEPLOY_LOG marker for CSS targeting)
+  const buildDeployLog = (rawLog: string): string => {
+    const clean = stripAnsi(rawLog).trimEnd();
+    return `**🚀 ${t('deployLogTitle')}**\n\n\`\`\`deploy-log\n${clean}\n\`\`\``;
+  };
+
+  // Deploy handler
+  const handleDeploy = async () => {
+    if (!currentProject?.path || deployStatus === 'deploying') return;
+    setDeployStatus('deploying');
+    deployLogRef.current = '';
+
+    const deployStartMsg: Anthropic.MessageParam = {
+      role: 'assistant',
+      content: buildDeployLog(t('deployStarting'))
+    };
+    setHistory(prev => [...prev, deployStartMsg]);
+
+    try {
+      await window.ipcRenderer.invoke('deploy:start', currentProject.path);
+    } catch (err) {
+      console.error('Deploy invoke error:', err);
+      setDeployStatus('error');
+    }
+  };
+
+  // Deploy event listeners
+  useEffect(() => {
+    const removeDeployLog = window.ipcRenderer.on('deploy:log', (_event, ...args) => {
+      const chunk = args[0] as string;
+      deployLogRef.current += chunk;
+      const logContent = buildDeployLog(deployLogRef.current);
+      setHistory(prev => {
+        const updated = [...prev];
+        for (let i = updated.length - 1; i >= 0; i--) {
+          if (updated[i].role === 'assistant') {
+            updated[i] = { role: 'assistant', content: logContent };
+            break;
+          }
+        }
+        return updated;
+      });
+    });
+
+    const removeDeployDone = window.ipcRenderer.on('deploy:done', (_event, ...args) => {
+      const url = args[0] as string;
+      setDeployStatus('success');
+      const successMsg: Anthropic.MessageParam = {
+        role: 'assistant',
+        content: `**✅ ${t('deploySuccessMessage')}**\n\n[${url}](${url})`
+      };
+      setHistory(prev => [...prev, successMsg]);
+      setTimeout(() => setDeployStatus('idle'), 3000);
+    });
+
+    const removeDeployError = window.ipcRenderer.on('deploy:error', (_event, ...args) => {
+      const errMsg = args[0] as string;
+      setDeployStatus('error');
+      const cleanErr = stripAnsi(errMsg || 'Unknown error');
+      const errorContent: Anthropic.MessageParam = {
+        role: 'assistant',
+        content: `**❌ ${t('deployFailedMessage')}**\n\n\`\`\`deploy-log\n${cleanErr}\n\`\`\``
+      };
+      setHistory(prev => [...prev, errorContent]);
+      setTimeout(() => setDeployStatus('idle'), 3000);
+    });
+
+    return () => {
+      removeDeployLog();
+      removeDeployDone();
+      removeDeployError();
+    };
+  }, [t]);
+
   // If this is the floating ball window, render only the floating ball
   if (isFloatingBall) {
     return <FloatingBallPage />;
+  }
+
+  // If this is a terminal window, render only the terminal
+  if (isTerminalWindow) {
+    return <TerminalWindow />;
   }
 
   // Main App - Narrow vertical layout
@@ -425,7 +535,7 @@ ${err}
           <div className="flex items-center gap-0.5 bg-stone-100 dark:bg-zinc-800 rounded-lg p-0.5 ml-4">
             <button
               onClick={() => setActiveView('cowork')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${activeView === 'cowork'
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${activeView === 'cowork'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
                 }`}
@@ -435,7 +545,7 @@ ${err}
             </button>
             <button
               onClick={() => setActiveView('project')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${activeView === 'project'
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${activeView === 'project'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
                 }`}
@@ -444,12 +554,48 @@ ${err}
               {t('project')}
             </button>
           </div>
+
+          {/* Version - Moved next to navigation tabs */}
+          {appVersion && (
+            <span className="text-xs text-stone-400 dark:text-zinc-500 ml-2">{appVersion}</span>
+          )}
         </div>
 
         <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          {/* Version - Always show on the right */}
-          {appVersion && (
-            <span className="text-xs text-stone-500 dark:text-zinc-500">{appVersion}</span>
+          {/* Deploy Button - Only show in Project view */}
+          {activeView === 'project' && currentProject && (
+            <button
+              onClick={handleDeploy}
+              disabled={deployStatus === 'deploying'}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                deployStatus === 'deploying'
+                  ? 'bg-orange-400 text-white cursor-not-allowed'
+                  : deployStatus === 'success'
+                  ? 'bg-green-500 hover:bg-green-600 text-white'
+                  : deployStatus === 'error'
+                  ? 'bg-red-500 hover:bg-red-600 text-white'
+                  : 'bg-orange-500 hover:bg-orange-600 text-white'
+              }`}
+              title={t('deployButtonTitle')}
+              aria-label={t('deploy')}
+            >
+              {deployStatus === 'deploying' ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  {t('deploying')}
+                </>
+              ) : deployStatus === 'success' ? (
+                <>
+                  <CheckCircle size={14} />
+                  {t('deploySuccess')}
+                </>
+              ) : (
+                <>
+                  <Rocket size={14} />
+                  {t('deploy')}
+                </>
+              )}
+            </button>
           )}
 
           {!navigator.userAgent.includes('Mac') && (
@@ -522,7 +668,7 @@ ${err}
           }}
         >
           <div
-            className="bg-white dark:bg-zinc-800 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-700 p-5 w-[360px] max-w-[90vw]"
+            className="bg-white dark:bg-zinc-800 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-700 p-5 w-[420px] max-w-[90vw]"
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
@@ -535,16 +681,34 @@ ${err}
             <h2 id="new-project-dialog-title" className="text-base font-semibold text-stone-800 dark:text-zinc-100 mb-3">
               {t('createNewProject')}
             </h2>
-            <input
-              type="text"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder={t('newProjectNamePlaceholder')}
-              className="w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-stone-900 dark:text-zinc-100 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-400 mb-4"
-              autoFocus
-              aria-label={t('projectName')}
-            />
-            <div className="flex justify-end gap-2">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-zinc-300 mb-2">
+                  {t('projectName')}
+                </label>
+                <input
+                  type="text"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  placeholder={t('newProjectNamePlaceholder')}
+                  className="w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-stone-900 dark:text-zinc-100 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-400"
+                  autoFocus
+                  aria-label={t('projectName')}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-zinc-300 mb-2">
+                  创建位置
+                </label>
+                <div className="px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-stone-50 dark:bg-zinc-900/50 text-stone-600 dark:text-zinc-400 text-sm">
+                  ~/Library/Application Support/qacowork/projects
+                </div>
+                <p className="mt-1 text-xs text-stone-500 dark:text-zinc-500">
+                  项目将创建在上述目录下，不支持修改
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-5">
               <button
                 type="button"
                 onClick={() => {
