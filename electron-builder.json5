@@ -9,6 +9,8 @@
     "output": "release/${version}"
   },
   "publish": null,
+  "npmRebuild": false,
+  "buildDependenciesFromSource": false,
   "files": [
     "dist",
     "dist-electron",

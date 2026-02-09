@@ -103,7 +103,7 @@ jobs:
           node scripts/verify-builtin-resources.cjs
           pnpm exec tsc
           pnpm exec vite build
-          pnpm exec electron-builder --${{ matrix.platform }} --publish never --config.npmRebuild=false
+          pnpm exec electron-builder --${{ matrix.platform }} --publish never
 
       -
         name: Generate Resource Manifest
