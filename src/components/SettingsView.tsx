@@ -1746,10 +1746,11 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                             {updatingResources && <Loader2 size={14} className="animate-spin" />}
                                                             {updatingResources ? '更新中...' : '立即更新'}
                                                         </button>
+                                                        {/* 进度区域：使用固定高度避免内容变化时的布局抖动 */}
                                                         {updateProgress && (
                                                             <div className="mt-2 space-y-1">
-                                                                <div className="flex justify-between text-xs text-amber-700 dark:text-amber-300">
-                                                                    <span className="min-w-[100px]">
+                                                                <div className="flex justify-between text-xs text-amber-700 dark:text-amber-300 h-4">
+                                                                    <span>
                                                                         {updateProgress.stage === 'checking' && '检查更新中...'}
                                                                         {updateProgress.stage === 'downloading' && '下载资源包中...'}
                                                                         {updateProgress.stage === 'extracting' && '解压文件中...'}
@@ -1757,7 +1758,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                                         {updateProgress.stage === 'completed' && '更新完成！'}
                                                                         {!updateProgress.stage && `进度: ${updateProgress.downloaded}/${updateProgress.total}`}
                                                                     </span>
-                                                                    <span className="font-mono min-w-[40px] text-right">
+                                                                    <span className="font-mono tabular-nums">
                                                                         {updateProgress.percentage !== undefined 
                                                                             ? `${Math.round(updateProgress.percentage)}%`
                                                                             : `${Math.round((updateProgress.downloaded / updateProgress.total) * 100)}%`}
@@ -1773,7 +1774,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                                         }}
                                                                     />
                                                                 </div>
-                                                                <p className="text-xs text-amber-600 dark:text-amber-400 font-mono truncate" title={updateProgress.current}>
+                                                                <p className="text-xs text-amber-600 dark:text-amber-400 font-mono truncate h-4 leading-4" title={updateProgress.current}>
                                                                     {updateProgress.current}
                                                                 </p>
                                                             </div>
