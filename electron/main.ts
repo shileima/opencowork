@@ -2117,6 +2117,64 @@ type TerminalSession = {
 };
 const terminalSessions = new Map<string, TerminalSession>();
 
+// ========== 终端诊断日志 ==========
+console.log('[Terminal:Diag] ==================== 终端模块诊断开始 ====================');
+console.log('[Terminal:Diag] process.platform:', process.platform);
+console.log('[Terminal:Diag] process.arch:', process.arch);
+console.log('[Terminal:Diag] process.resourcesPath:', process.resourcesPath);
+console.log('[Terminal:Diag] app.isPackaged:', app.isPackaged);
+console.log('[Terminal:Diag] app.getAppPath():', app.getAppPath());
+console.log('[Terminal:Diag] __dirname:', __dirname);
+console.log('[Terminal:Diag] import.meta.url:', import.meta.url);
+
+// 检查 node-pty 是否可加载
+try {
+  const _require = createRequire(import.meta.url);
+  const nodePtyPath = _require.resolve('node-pty');
+  console.log('[Terminal:Diag] node-pty 模块路径:', nodePtyPath);
+  const ptyMod = _require('node-pty');
+  console.log('[Terminal:Diag] node-pty 加载成功, spawn 函数:', typeof ptyMod?.spawn);
+  console.log('[Terminal:Diag] node-pty 导出的键:', Object.keys(ptyMod || {}));
+} catch (e) {
+  const err = e instanceof Error ? e : new Error(String(e));
+  console.error('[Terminal:Diag] node-pty 加载失败!', err.message);
+  console.error('[Terminal:Diag] node-pty 错误堆栈:', err.stack);
+
+  // 尝试列出可能的 node-pty 位置
+  const possiblePaths = [
+    path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'node-pty'),
+    path.join(process.resourcesPath, 'app', 'node_modules', 'node-pty'),
+    path.join(__dirname, '..', 'node_modules', 'node-pty'),
+    path.join(app.getAppPath(), 'node_modules', 'node-pty'),
+  ];
+  for (const p of possiblePaths) {
+    console.log(`[Terminal:Diag] 检查路径 ${p}: 存在=${fs.existsSync(p)}`);
+    if (fs.existsSync(p)) {
+      try {
+        const files = fs.readdirSync(p);
+        console.log(`[Terminal:Diag]   内容: ${files.join(', ')}`);
+        // 检查 build/Release 目录
+        const buildRelease = path.join(p, 'build', 'Release');
+        if (fs.existsSync(buildRelease)) {
+          console.log(`[Terminal:Diag]   build/Release: ${fs.readdirSync(buildRelease).join(', ')}`);
+        }
+        const prebuilds = path.join(p, 'prebuilds');
+        if (fs.existsSync(prebuilds)) {
+          console.log(`[Terminal:Diag]   prebuilds: ${fs.readdirSync(prebuilds).join(', ')}`);
+        }
+      } catch (readErr) {
+        console.log(`[Terminal:Diag]   读取目录失败: ${readErr}`);
+      }
+    }
+  }
+}
+
+// 检查 shell 路径
+const diagShellPath = process.env.SHELL || '/bin/zsh';
+console.log(`[Terminal:Diag] SHELL 环境变量: ${process.env.SHELL}`);
+console.log(`[Terminal:Diag] shell 路径 (${diagShellPath}): 存在=${fs.existsSync(diagShellPath)}`);
+console.log('[Terminal:Diag] ==================== 终端模块诊断结束 ====================');
+
 // 解析 shell 路径，确保是绝对路径且存在
 function resolveShellPath(): string {
   const shellRaw = process.env.SHELL || '/bin/zsh';
@@ -2233,21 +2291,51 @@ function createPtyTerminal(
   event: Electron.IpcMainInvokeEvent,
   windowId?: string
 ): { success: boolean; error?: string; mode?: 'pty' | 'pipe' } {
+  console.log(`[Terminal:PTY] createPtyTerminal 开始, id=${id}, cwd=${normalizedCwd}, windowId=${windowId}`);
+  console.log(`[Terminal:PTY] 运行环境: platform=${process.platform}, arch=${process.arch}, isPackaged=${app.isPackaged}`);
+
   if (process.platform === 'win32') {
+    console.log('[Terminal:PTY] Windows 平台不支持 PTY 模式');
     return { success: false, error: 'PTY mode is not supported on Windows' };
   }
 
   const require = createRequire(import.meta.url);
   let ptyModule: any;
   try {
+    const resolvedPath = require.resolve('node-pty');
+    console.log(`[Terminal:PTY] node-pty 解析路径: ${resolvedPath}`);
     ptyModule = require('node-pty');
     // 验证 node-pty 模块是否可用
     if (!ptyModule || typeof ptyModule.spawn !== 'function') {
+      console.error('[Terminal:PTY] node-pty 模块已加载但 spawn 函数不存在', {
+        hasModule: !!ptyModule,
+        keys: Object.keys(ptyModule || {}),
+        spawnType: typeof ptyModule?.spawn,
+      });
       return { success: false, error: 'node-pty module is not properly loaded (spawn function not found)' };
     }
+    console.log('[Terminal:PTY] node-pty 模块加载成功');
   } catch (e) {
     const errorMsg = e instanceof Error ? e.message : String(e);
-    console.error('[Terminal] Failed to load node-pty:', errorMsg);
+    const errorStack = e instanceof Error ? e.stack : '';
+    console.error('[Terminal:PTY] node-pty 加载失败:', errorMsg);
+    console.error('[Terminal:PTY] node-pty 错误堆栈:', errorStack);
+    
+    // 诊断: 列出 require 路径
+    try {
+      console.log('[Terminal:PTY] require 搜索路径 (import.meta.url):', import.meta.url);
+      const possibleNodeModules = [
+        path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'node-pty'),
+        path.join(process.resourcesPath, 'app', 'node_modules', 'node-pty'),
+        path.join(__dirname, '..', 'node_modules', 'node-pty'),
+      ];
+      for (const p of possibleNodeModules) {
+        console.log(`[Terminal:PTY] 检查 ${p}: ${fs.existsSync(p) ? '存在' : '不存在'}`);
+      }
+    } catch (diagErr) {
+      console.error('[Terminal:PTY] 诊断检查失败:', diagErr);
+    }
+    
     return { success: false, error: `node-pty module not available: ${errorMsg}` };
   }
 
@@ -2569,21 +2657,28 @@ function setupTerminalListeners(id: string, process: import('child_process').Chi
 }
 
 ipcMain.handle('terminal:create', async (event, { id, cwd, windowId }: { id: string, cwd: string, windowId?: string }) => {
+  console.log(`[Terminal:Create] ===== terminal:create 开始 =====`);
+  console.log(`[Terminal:Create] id=${id}, cwd=${cwd}, windowId=${windowId}`);
+  console.log(`[Terminal:Create] isPackaged=${app.isPackaged}, resourcesPath=${process.resourcesPath}`);
   try {
     // 验证 cwd 是否存在且为目录
     if (!cwd || cwd.trim() === '') {
+      console.error('[Terminal:Create] cwd 为空');
       return { success: false, error: 'Working directory is required' };
     }
     
     const normalizedCwd = path.resolve(cwd.trim());
+    console.log(`[Terminal:Create] normalizedCwd=${normalizedCwd}`);
     
     // 检查目录是否存在
     if (!fs.existsSync(normalizedCwd)) {
+      console.error(`[Terminal:Create] 目录不存在: ${normalizedCwd}`);
       return { success: false, error: `Directory does not exist: ${normalizedCwd}` };
     }
     
     const stats = fs.statSync(normalizedCwd);
     if (!stats.isDirectory()) {
+      console.error(`[Terminal:Create] 路径不是目录: ${normalizedCwd}`);
       return { success: false, error: `Path is not a directory: ${normalizedCwd}` };
     }
     
@@ -2627,17 +2722,23 @@ ipcMain.handle('terminal:create', async (event, { id, cwd, windowId }: { id: str
       return result;
     } else {
       // auto 模式：优先 PTY，失败则回退 Pipe
-      console.log('[Terminal] Using auto mode, trying PTY first...');
+      console.log('[Terminal:Create] auto 模式：优先尝试 PTY...');
       const ptyResult = createPtyTerminal(id, normalizedCwd, event, windowId);
       if (ptyResult.success) {
+        console.log('[Terminal:Create] PTY 模式创建成功');
         return ptyResult;
       }
-      console.warn(`[Terminal] PTY mode failed: ${ptyResult.error}, falling back to pipe mode`);
-      return await createPipeTerminal(id, normalizedCwd, event, windowId);
+      console.warn(`[Terminal:Create] PTY 模式失败: ${ptyResult.error}, 回退到 Pipe 模式...`);
+      const pipeResult = await createPipeTerminal(id, normalizedCwd, event, windowId);
+      console.log(`[Terminal:Create] Pipe 模式结果: success=${pipeResult.success}, error=${pipeResult.error || 'none'}`);
+      return pipeResult;
     }
   } catch (error) {
-    console.error('[Terminal] Error creating terminal:', error);
-    return { success: false, error: error instanceof Error ? error.message : String(error) };
+    const errMsg = error instanceof Error ? error.message : String(error);
+    const errStack = error instanceof Error ? error.stack : '';
+    console.error('[Terminal:Create] terminal:create 异常:', errMsg);
+    console.error('[Terminal:Create] 错误堆栈:', errStack);
+    return { success: false, error: errMsg };
   }
 });
 
@@ -2910,6 +3011,32 @@ function createMainWindow() {
   const DEFAULT_WINDOW_WIDTH = 560;
   const DEFAULT_WINDOW_HEIGHT = 720;
 
+  // ========== 浏览器预览诊断日志 ==========
+  const preloadPath = path.join(__dirname, 'preload.mjs');
+  console.log('[Browser:Diag] ==================== 浏览器预览诊断 ====================');
+  console.log('[Browser:Diag] preload 路径:', preloadPath);
+  console.log('[Browser:Diag] preload 存在:', fs.existsSync(preloadPath));
+  console.log('[Browser:Diag] __dirname:', __dirname);
+  console.log('[Browser:Diag] VITE_DEV_SERVER_URL:', VITE_DEV_SERVER_URL);
+  console.log('[Browser:Diag] RENDERER_DIST:', RENDERER_DIST);
+  console.log('[Browser:Diag] RENDERER_DIST 存在:', fs.existsSync(RENDERER_DIST));
+  console.log('[Browser:Diag] app.isPackaged:', app.isPackaged);
+  console.log('[Browser:Diag] process.resourcesPath:', process.resourcesPath);
+  
+  // 检查 dist 目录内容
+  if (fs.existsSync(RENDERER_DIST)) {
+    try {
+      const distFiles = fs.readdirSync(RENDERER_DIST);
+      console.log('[Browser:Diag] RENDERER_DIST 内容:', distFiles.join(', '));
+      // 检查 index.html 是否存在
+      const indexPath = path.join(RENDERER_DIST, 'index.html');
+      console.log('[Browser:Diag] index.html 存在:', fs.existsSync(indexPath));
+    } catch (e) {
+      console.error('[Browser:Diag] 读取 RENDERER_DIST 失败:', e);
+    }
+  }
+  console.log('[Browser:Diag] ==================== 浏览器预览诊断结束 ====================');
+
   mainWin = new BrowserWindow({
     width: DEFAULT_WINDOW_WIDTH,
     height: DEFAULT_WINDOW_HEIGHT,
@@ -2920,7 +3047,7 @@ function createMainWindow() {
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden', // Mac: inset buttons, others: hidden
     backgroundColor: '#ffffff',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.mjs'),
+      preload: preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
@@ -3058,7 +3185,54 @@ function createMainWindow() {
     }
   })
 
+  // 监听主窗口加载状态，排查客户端打包后页面无法加载的问题
+  mainWin.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('[Browser:Diag] 主窗口加载失败!', { errorCode, errorDescription, validatedURL });
+  });
+  mainWin.webContents.on('did-start-loading', () => {
+    console.log('[Browser:Diag] 主窗口开始加载...');
+  });
+  mainWin.webContents.on('did-stop-loading', () => {
+    console.log('[Browser:Diag] 主窗口停止加载');
+  });
+  mainWin.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Browser:Diag] 渲染进程已退出!', details);
+  });
+  mainWin.webContents.on('unresponsive', () => {
+    console.error('[Browser:Diag] 渲染进程无响应!');
+  });
+
+  // 监听 webview 相关事件（webview 创建时）
+  mainWin.webContents.on('will-attach-webview', (_event, webPreferences, _params) => {
+    console.log('[Browser:Diag] will-attach-webview 触发, webPreferences:', JSON.stringify({
+      preload: webPreferences.preload,
+      nodeIntegration: webPreferences.nodeIntegration,
+      contextIsolation: webPreferences.contextIsolation,
+    }));
+  });
+  mainWin.webContents.on('did-attach-webview', (_event, webContents) => {
+    console.log('[Browser:Diag] did-attach-webview 触发, webContents ID:', webContents.id);
+    
+    // 监听 webview 内部的加载事件
+    webContents.on('did-start-loading', () => {
+      console.log('[Browser:Diag] webview did-start-loading, URL:', webContents.getURL());
+    });
+    webContents.on('did-finish-load', () => {
+      console.log('[Browser:Diag] webview did-finish-load (成功), URL:', webContents.getURL());
+    });
+    webContents.on('did-fail-load', (_ev: any, errorCode: number, errorDescription: string, validatedURL: string) => {
+      console.error('[Browser:Diag] webview did-fail-load (失败)!', { errorCode, errorDescription, validatedURL });
+    });
+    webContents.on('render-process-gone', (_ev: any, details: any) => {
+      console.error('[Browser:Diag] webview 渲染进程退出!', details);
+    });
+    webContents.on('crashed' as any, () => {
+      console.error('[Browser:Diag] webview crashed!');
+    });
+  });
+
   mainWin.webContents.on('did-finish-load', () => {
+    console.log('[Browser:Diag] 主窗口加载完成 (did-finish-load)');
     mainWin?.webContents.send('main-process-message', (new Date).toLocaleString())
     
     // 自动加载最近一次会话
@@ -3103,10 +3277,26 @@ function createMainWindow() {
   })
 
   if (VITE_DEV_SERVER_URL) {
+    console.log('[Browser:Diag] 开发模式: 加载 URL:', VITE_DEV_SERVER_URL);
     mainWin.loadURL(VITE_DEV_SERVER_URL)
   } else {
     const distPath = getRendererDistPath()
-    mainWin.loadFile(path.join(distPath, 'index.html'))
+    const indexPath = path.join(distPath, 'index.html');
+    console.log('[Browser:Diag] 生产模式: 加载文件:', indexPath);
+    console.log('[Browser:Diag] distPath:', distPath);
+    console.log('[Browser:Diag] index.html 存在:', fs.existsSync(indexPath));
+    if (!fs.existsSync(indexPath)) {
+      console.error('[Browser:Diag] ❌ index.html 不存在! 这是页面无法加载的原因!');
+      // 列出 distPath 下的文件
+      if (fs.existsSync(distPath)) {
+        console.log('[Browser:Diag] distPath 内容:', fs.readdirSync(distPath).join(', '));
+      } else {
+        console.error('[Browser:Diag] distPath 也不存在:', distPath);
+        // 列出 resourcesPath 下的文件
+        console.log('[Browser:Diag] resourcesPath 内容:', fs.readdirSync(process.resourcesPath).join(', '));
+      }
+    }
+    mainWin.loadFile(indexPath)
   }
 }
 

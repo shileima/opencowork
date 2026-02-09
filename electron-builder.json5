@@ -11,7 +11,16 @@
   "publish": null,
   "files": [
     "dist",
-    "dist-electron"
+    "dist-electron",
+    // node-pty 是 native module，在 vite 中被标记为 external，
+    // 运行时通过 createRequire 动态加载，必须随 app 一起打包
+    "node_modules/node-pty/**/*"
+  ],
+  // native .node 文件无法从 asar 归档中加载，必须解压到 app.asar.unpacked
+  "asarUnpack": [
+    "node_modules/node-pty/**/*.node",
+    "node_modules/node-pty/build/**/*",
+    "node_modules/node-pty/prebuilds/**/*"
   ],
   "extraResources": [
     {
