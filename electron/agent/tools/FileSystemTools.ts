@@ -88,6 +88,96 @@ export const ValidatePageSchema = {
 };
 
 export class FileSystemTools {
+    // 跟踪所有启动的子进程
+    private static childProcesses: Set<import('child_process').ChildProcess> = new Set();
+    private static activePorts: Set<number> = new Set();
+
+    /**
+     * 清理所有子进程和端口
+     */
+    public static async cleanupAll(): Promise<void> {
+        console.log('[FileSystemTools] Cleaning up all child processes and ports...');
+        
+        // 清理所有子进程
+        for (const child of FileSystemTools.childProcesses) {
+            try {
+                if (child.pid && !child.killed) {
+                    console.log(`[FileSystemTools] Killing child process ${child.pid}`);
+                    if (process.platform === 'win32') {
+                        // Windows: 使用 taskkill 强制终止进程树
+                        exec(`taskkill /PID ${child.pid} /T /F`, (error) => {
+                            if (error) {
+                                console.warn(`[FileSystemTools] Failed to kill process ${child.pid}:`, error.message);
+                            }
+                        });
+                    } else {
+                        // Unix: 发送 SIGKILL 信号
+                        child.kill('SIGKILL');
+                    }
+                }
+            } catch (error) {
+                console.warn(`[FileSystemTools] Error killing child process:`, error);
+            }
+        }
+        FileSystemTools.childProcesses.clear();
+        
+        // 清理所有活动端口
+        for (const port of FileSystemTools.activePorts) {
+            try {
+                console.log(`[FileSystemTools] Cleaning up port ${port}`);
+                await FileSystemTools.killPortProcesses(port);
+            } catch (error) {
+                console.warn(`[FileSystemTools] Failed to cleanup port ${port}:`, error);
+            }
+        }
+        FileSystemTools.activePorts.clear();
+        
+        console.log('[FileSystemTools] Cleanup completed');
+    }
+
+    /**
+     * 静态方法：清理指定端口上的所有进程
+     */
+    private static async killPortProcesses(port: number): Promise<void> {
+        try {
+            if (process.platform === 'darwin' || process.platform === 'linux') {
+                const { stdout } = await execAsync(`lsof -ti :${port}`, {
+                    timeout: 3000,
+                    maxBuffer: 4096,
+                    encoding: 'utf-8'
+                });
+                const pids = stdout.trim().split(/\s+/).filter(Boolean).map((s) => parseInt(s, 10));
+                for (const pid of pids) {
+                    if (!isNaN(pid) && pid > 0) {
+                        await execAsync(`kill -9 ${pid}`, { timeout: 3000 });
+                        console.log(`[FileSystemTools] Killed process ${pid} on port ${port}`);
+                    }
+                }
+            } else if (process.platform === 'win32') {
+                const { stdout } = await execAsync(`netstat -ano | findstr ":${port}"`, {
+                    timeout: 3000,
+                    maxBuffer: 65536,
+                    encoding: 'utf-8',
+                    shell: 'cmd.exe'
+                });
+                const lines = stdout.trim().split(/\r?\n/).filter((line) => line.includes(`:${port}`) && line.includes('LISTENING'));
+                for (const line of lines) {
+                    const parts = line.trim().split(/\s+/);
+                    const pid = parseInt(parts[parts.length - 1], 10);
+                    if (!isNaN(pid) && pid > 0) {
+                        await execAsync(`taskkill /PID ${pid} /F`, {
+                            timeout: 3000,
+                            shell: 'cmd.exe'
+                        });
+                        console.log(`[FileSystemTools] Killed process ${pid} on port ${port}`);
+                    }
+                }
+            }
+        } catch (error) {
+            // 端口可能已经被清理，忽略错误
+            console.log(`[FileSystemTools] Port ${port} cleanup completed or already clean`);
+        }
+    }
 
     async readFile(args: { path: string }) {
         try {
@@ -716,6 +806,16 @@ export class FileSystemTools {
                     shell,
                     detached: true,
                     stdio: ['ignore', 'pipe', 'pipe'] // 捕获输出以便调试
+                });
+                
+                // 跟踪子进程和端口
+                FileSystemTools.childProcesses.add(child);
+                FileSystemTools.activePorts.add(PROJECT_DEV_PORT);
+                
+                // 当进程退出时从跟踪列表中移除
+                child.on('exit', () => {
+                    FileSystemTools.childProcesses.delete(child);
+                    FileSystemTools.activePorts.delete(PROJECT_DEV_PORT);
                 });
                 
                 // 收集输出用于错误检测

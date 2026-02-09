@@ -139,7 +139,7 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
 
     /** 打开或切换到浏览器 tab。已有浏览器 tab 时仅切换并可选更新 URL，不关闭其他 tab。 */
     const openBrowserTab = (initialUrl?: string) => {
-        const url = initialUrl ?? 'http://localhost:3000';
+        const url = initialUrl ?? ''; // 默认为空，避免启动时立即尝试连接
         const existingBrowserTab = tabs.find(tab => tab.type === 'browser') as BrowserTabData | undefined;
         if (existingBrowserTab) {
             setActiveTabId(existingBrowserTab.id);

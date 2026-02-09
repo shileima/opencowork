@@ -57,6 +57,7 @@ export function ProjectView({
     const [config, setConfig] = useState<any>(null);
     const [fileContents, setFileContents] = useState<Record<string, string>>({});
     const [splitRatio, setSplitRatio] = useState<number>(50);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(false);
     const [multiTabEditorRef, setMultiTabEditorRef] = useState<{
         openEditorTab: (filePath: string, content: string) => void;
         openBrowserTab?: (url?: string) => void;
@@ -122,6 +123,7 @@ export function ProjectView({
         const removeHistoryListener = window.ipcRenderer.on('agent:history-update', async (_event, ...args) => {
             const newHistory = args[0] as Anthropic.MessageParam[];
             setStreamingText('');
+            setIsLoadingHistory(false); // 历史加载完成
             // 如果历史不为空，说明任务已经有消息了，清除待重命名标记
             if (newHistory.length > 0 && pendingTaskRename) {
                 pendingTaskRename = null;
@@ -272,6 +274,7 @@ export function ProjectView({
         
         // 先清空当前显示的历史和流式文本
         setStreamingText('');
+        setIsLoadingHistory(false); // 新任务不需要加载历史
         
         // 创建任务，使用默认名称"新任务"（会在第一条消息时重命名）
         const result = await window.ipcRenderer.invoke('project:task:create', currentProject.id, t('newTask')) as { success: boolean; task?: ProjectTask };
@@ -322,12 +325,23 @@ export function ProjectView({
             pendingTaskRename = null;
         }
         
+        // 标记开始加载历史（如果任务有历史记录）
+        setIsLoadingHistory(true);
+        
         // 切换任务（这会加载对应的 session 历史或清空历史）
         const result = await window.ipcRenderer.invoke('project:task:switch', currentProject.id, taskId) as { success: boolean };
         if (result.success) {
             setCurrentTaskId(taskId);
             setStreamingText(''); // 清空流式文本
             // project:task:switch 已经会处理 session 的加载或清空，这里不需要额外操作
+            // 如果历史为空（新任务），立即取消加载状态
+            setTimeout(() => {
+                if (history.length === 0) {
+                    setIsLoadingHistory(false);
+                }
+            }, 100);
+        } else {
+            setIsLoadingHistory(false);
         }
     };
 
@@ -443,6 +457,7 @@ export function ProjectView({
                                                 config={config}
                                                 setConfig={setConfig}
                                                 lockedProjectName={currentProject.name}
+                                                isLoadingHistory={isLoadingHistory}
                                             />
                                         </div>
                                     </div>

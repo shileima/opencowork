@@ -11,7 +11,7 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'release'
     permissions:
       contents: write
     outputs:
@@ -40,7 +40,7 @@ jobs:
   release:
     runs-on: ${{ matrix.os }}
     needs: create-release
-    if: always() && needs.create-release.result == 'success'
+    if: always() && (needs.create-release.result == 'success' || github.event_name == 'release')
     permissions:
       contents: write
 

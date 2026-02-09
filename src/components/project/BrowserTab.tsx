@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { ExternalLink, RotateCw, Globe } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
 
-const DEFAULT_URL = 'http://localhost:3000';
+const DEFAULT_URL = ''; // 默认为空，避免启动时立即尝试连接
 
 /** 注入到预览页的 CSS：将 Vite 错误 overlay 字号小 1 号 */
 const VITE_ERROR_OVERLAY_CSS = `
@@ -128,7 +128,18 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                 isMainFrame: event?.isMainFrame,
             });
             setIsLoading(false);
-            setLoadError(`加载失败 (${errorCode}): ${errorDescription} - ${validatedURL}`);
+            
+            // 优化错误提示：针对常见错误提供友好的提示
+            let friendlyError = '';
+            if (errorCode === -102 || errorDescription === 'ERR_CONNECTION_REFUSED') {
+                friendlyError = `无法连接到 ${validatedURL}。请确保开发服务器正在运行。`;
+            } else if (errorCode === -3 || errorDescription === 'ERR_ABORTED') {
+                // 页面加载被中断，通常是用户主动操作，不显示错误
+                return;
+            } else {
+                friendlyError = `加载失败 (${errorCode}): ${errorDescription}`;
+            }
+            setLoadError(friendlyError);
         };
         const onCrashed = () => {
             console.error('[BrowserTab] webview crashed! (webview 进程崩溃)');
@@ -246,8 +257,28 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                             </div>
                         )}
                         {loadError && (
-                            <div className="absolute bottom-0 left-0 right-0 bg-red-500/90 text-white text-xs px-3 py-2 z-20 font-mono break-all">
-                                {loadError}
+                            <div className="absolute bottom-0 left-0 right-0 bg-red-50 dark:bg-red-900/20 border-t border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm px-4 py-3 z-20 flex items-start gap-2">
+                                <svg className="w-5 h-5 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                </svg>
+                                <div className="flex-1">
+                                    <p className="font-medium">{loadError}</p>
+                                    {loadError.includes('无法连接') && (
+                                        <p className="text-xs mt-1 opacity-80">
+                                            提示：您可以让 AI 助手启动开发服务器，或手动在终端运行 <code className="px-1 py-0.5 bg-red-100 dark:bg-red-900/40 rounded">npm run dev</code> 或 <code className="px-1 py-0.5 bg-red-100 dark:bg-red-900/40 rounded">pnpm dev</code>
+                                        </p>
+                                    )}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setLoadError(null)}
+                                    className="p-1 hover:bg-red-100 dark:hover:bg-red-900/40 rounded transition-colors"
+                                    title="关闭"
+                                >
+                                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                    </svg>
+                                </button>
                             </div>
                         )}
                         {/* 使用 webview 以便注入 CSS 缩小 Vite 报错 overlay 字号 */}
@@ -263,22 +294,39 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                     </>
                 ) : (
                     <div className="h-full flex flex-col items-center justify-center text-stone-400 dark:text-zinc-500 p-6">
-                        <Globe size={48} className="mb-4 opacity-50" />
-                        <p className="text-lg font-medium mb-2">{t('browser') || '浏览器'}</p>
-                        <p className="text-sm text-center max-w-xs">
-                            {t('browserHint') || '在上方输入 URL，或让 AI 助手启动开发服务器并导航到此页面'}
+                        <Globe size={64} className="mb-6 opacity-30" />
+                        <p className="text-xl font-semibold mb-3 text-stone-600 dark:text-zinc-400">{t('browser') || '浏览器预览'}</p>
+                        <p className="text-sm text-center max-w-md mb-6 leading-relaxed">
+                            {t('browserHint') || '在上方输入 URL 开始浏览，或让 AI 助手启动开发服务器并自动打开预览'}
                         </p>
-                        <button
-                            type="button"
-                            onClick={() => {
-                                setUrl(DEFAULT_URL);
-                                setCurrentUrl(DEFAULT_URL);
-                                setIsLoading(true);
-                            }}
-                            className="mt-4 px-4 py-2 text-sm font-medium text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-500/10 rounded-lg transition-colors"
-                        >
-                            {t('browserOpenLocalhost') || '打开 localhost:3000'}
-                        </button>
+                        
+                        <div className="flex flex-col gap-3 w-full max-w-xs">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const localhostUrl = 'http://localhost:3000';
+                                    setUrl(localhostUrl);
+                                    setCurrentUrl(localhostUrl);
+                                    setIsLoading(true);
+                                }}
+                                className="w-full px-4 py-3 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors shadow-sm"
+                            >
+                                {t('browserOpenLocalhost') || '尝试打开 localhost:3000'}
+                            </button>
+                            
+                            <div className="text-xs text-center text-stone-400 dark:text-zinc-600">
+                                <p>常用端口：3000 (React/Next.js)、5173 (Vite)、8080 (Vue CLI)</p>
+                            </div>
+                        </div>
+                        
+                        <div className="mt-8 p-4 bg-stone-50 dark:bg-zinc-900/50 rounded-lg border border-stone-200 dark:border-zinc-800 max-w-md">
+                            <p className="text-xs font-medium text-stone-600 dark:text-zinc-400 mb-2">💡 使用提示</p>
+                            <ul className="text-xs text-stone-500 dark:text-zinc-500 space-y-1.5 list-disc list-inside">
+                                <li>直接在上方地址栏输入任何 URL</li>
+                                <li>告诉 AI 助手"启动开发服务器"自动打开预览</li>
+                                <li>支持实时刷新，代码修改后可手动刷新查看</li>
+                            </ul>
+                        </div>
                     </div>
                 )}
             </div>
