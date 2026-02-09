@@ -1,7 +1,7 @@
 {
   "name": "qacowork",
   "private": true,
-  "version": "0.0.37",
+  "version": "0.0.38",
   "description": "QACowork - 你的数字测试同事",
   "author": {
     "name": "shileima",
@@ -84,7 +84,8 @@
   "main": "dist-electron/main.js",
   "pnpm": {
     "onlyBuiltDependencies": [
-      "electron"
+      "electron",
+      "node-pty"
     ]
   }
 }

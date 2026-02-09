@@ -781,24 +781,41 @@ function TerminalView({ terminalId, cwd, isActive = true, onStatusChange }: Term
 
         // 只在首次创建时调用 terminal:create，复用时不再重复创建
         if (!isReusing) {
+            console.log(`[TerminalPanel:Diag] ===== 创建终端开始 =====`);
+            console.log(`[TerminalPanel:Diag] terminalId=${terminalId}, cwd=${cwd}`);
+            console.log(`[TerminalPanel:Diag] isElectron=${!!(window as any).ipcRenderer}`);
+            console.log(`[TerminalPanel:Diag] userAgent=${navigator.userAgent}`);
+            
             window.ipcRenderer.invoke('terminal:create', { id: terminalId, cwd }).then((result: unknown) => {
                 const response = result as { success?: boolean; error?: string; mode?: 'pty' | 'pipe' };
+                console.log(`[TerminalPanel:Diag] terminal:create 结果:`, JSON.stringify(response));
                 if (response.success) {
                     // 保存终端模式
                     terminalModeRef.current = response.mode || 'pipe'; // 默认为 pipe（向后兼容）
-                    console.log(`[TerminalPanel] Terminal created in ${terminalModeRef.current} mode`);
+                    console.log(`[TerminalPanel:Diag] 终端创建成功, 模式: ${terminalModeRef.current}`);
                     scheduleFit();
                     setTimeout(() => {
                         xterm.focus();
                     }, 150);
                 } else {
                     const errorMsg = response.error || 'Failed to create terminal';
+                    console.error(`[TerminalPanel:Diag] 终端创建失败: ${errorMsg}`);
                     xterm.write(`\r\n[错误: ${errorMsg}]\r\n`);
+                    // 在终端中显示更多诊断信息
+                    xterm.write(`\r\n[诊断信息]\r\n`);
+                    xterm.write(`  cwd: ${cwd}\r\n`);
+                    xterm.write(`  模式: ${response.mode || 'unknown'}\r\n`);
+                    xterm.write(`  请查看主进程日志获取更多信息\r\n`);
                     console.error('[TerminalPanel] Failed to create terminal:', errorMsg);
                 }
             }).catch((error: unknown) => {
                 const errorMsg = error instanceof Error ? error.message : String(error);
+                console.error(`[TerminalPanel:Diag] terminal:create 调用异常: ${errorMsg}`);
                 xterm.write(`\r\n[错误: ${errorMsg}]\r\n`);
+                xterm.write(`\r\n[可能的原因]\r\n`);
+                xterm.write(`  1. node-pty 模块未正确打包\r\n`);
+                xterm.write(`  2. shell 路径不存在\r\n`);
+                xterm.write(`  3. 工作目录无权限访问\r\n`);
                 console.error('[TerminalPanel] Error creating terminal:', error);
             });
         } else {

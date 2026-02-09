@@ -35,7 +35,19 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     const [currentUrl, setCurrentUrl] = useState(initialUrl || '');
     const [isLoading, setIsLoading] = useState(!!(initialUrl || '').trim());
     const [refreshKey, setRefreshKey] = useState(0); // 用于强制刷新 webview
+    const [loadError, setLoadError] = useState<string | null>(null); // 加载错误信息
     const webviewRef = useRef<HTMLElement | null>(null);
+
+    // 组件挂载时打印诊断信息
+    useEffect(() => {
+        console.log('[BrowserTab] 组件已挂载', {
+            initialUrl,
+            refreshTrigger,
+            userAgent: navigator.userAgent,
+            isElectron: !!(window as any).ipcRenderer,
+            webviewTagSupported: typeof document.createElement('webview') !== 'undefined',
+        });
+    }, []);
 
     const handleNavigate = useCallback(() => {
         const fullUrl = ensureProtocol(url);
@@ -79,22 +91,102 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     // webview 加载完成后隐藏 loading 并注入 CSS（缩小 Vite 报错 overlay 字号）
     useEffect(() => {
         const el = webviewRef.current;
-        if (!currentUrl || !el) return;
+        if (!currentUrl || !el) {
+            console.log('[BrowserTab] webview 未就绪', { currentUrl, hasEl: !!el });
+            return;
+        }
+
+        console.log('[BrowserTab] 开始监听 webview 事件', { currentUrl, refreshKey });
+
+        // 监听 webview 各生命周期事件以排查加载问题
+        const onDidStartLoading = () => {
+            console.log('[BrowserTab] webview did-start-loading', { url: currentUrl });
+            setLoadError(null);
+        };
+        const onDidStopLoading = () => {
+            console.log('[BrowserTab] webview did-stop-loading', { url: currentUrl });
+        };
         const onDidFinishLoad = () => {
+            console.log('[BrowserTab] webview did-finish-load (成功)', { url: currentUrl });
             setIsLoading(false);
+            setLoadError(null);
             try {
                 (el as unknown as { insertCSS: (css: string) => void }).insertCSS(VITE_ERROR_OVERLAY_CSS);
-            } catch {
-                // ignore
+            } catch (e) {
+                console.warn('[BrowserTab] 注入 CSS 失败:', e);
             }
         };
+        const onDidFailLoad = (event: any) => {
+            const errorCode = event?.errorCode ?? 'unknown';
+            const errorDescription = event?.errorDescription ?? 'unknown';
+            const validatedURL = event?.validatedURL ?? currentUrl;
+            console.error('[BrowserTab] webview did-fail-load (加载失败)', {
+                errorCode,
+                errorDescription,
+                validatedURL,
+                currentUrl,
+                isMainFrame: event?.isMainFrame,
+            });
+            setIsLoading(false);
+            setLoadError(`加载失败 (${errorCode}): ${errorDescription} - ${validatedURL}`);
+        };
+        const onCrashed = () => {
+            console.error('[BrowserTab] webview crashed! (webview 进程崩溃)');
+            setIsLoading(false);
+            setLoadError('webview 进程崩溃');
+        };
+        const onDestroyed = () => {
+            console.warn('[BrowserTab] webview destroyed');
+        };
+        const onConsoleMessage = (event: any) => {
+            // 打印 webview 内部的 console 信息，帮助排查页面内部错误
+            const level = event?.level ?? 0;
+            const message = event?.message ?? '';
+            const levelStr = ['LOG', 'WARN', 'ERROR', 'DEBUG'][level] || 'LOG';
+            console.log(`[BrowserTab] webview console [${levelStr}]:`, message);
+        };
+        const onDomReady = () => {
+            console.log('[BrowserTab] webview dom-ready', { url: currentUrl });
+            // 打印 webview 内部页面信息
+            try {
+                const wv = el as any;
+                if (typeof wv.getURL === 'function') {
+                    console.log('[BrowserTab] webview 当前 URL:', wv.getURL());
+                }
+                if (typeof wv.getTitle === 'function') {
+                    console.log('[BrowserTab] webview 页面标题:', wv.getTitle());
+                }
+            } catch (e) {
+                console.warn('[BrowserTab] 获取 webview 信息失败:', e);
+            }
+        };
+
+        el.addEventListener('did-start-loading', onDidStartLoading);
+        el.addEventListener('did-stop-loading', onDidStopLoading);
         el.addEventListener('did-finish-load', onDidFinishLoad);
-        return () => el.removeEventListener('did-finish-load', onDidFinishLoad);
+        el.addEventListener('did-fail-load', onDidFailLoad);
+        el.addEventListener('crashed', onCrashed);
+        el.addEventListener('destroyed', onDestroyed);
+        el.addEventListener('console-message', onConsoleMessage);
+        el.addEventListener('dom-ready', onDomReady);
+
+        return () => {
+            el.removeEventListener('did-start-loading', onDidStartLoading);
+            el.removeEventListener('did-stop-loading', onDidStopLoading);
+            el.removeEventListener('did-finish-load', onDidFinishLoad);
+            el.removeEventListener('did-fail-load', onDidFailLoad);
+            el.removeEventListener('crashed', onCrashed);
+            el.removeEventListener('destroyed', onDestroyed);
+            el.removeEventListener('console-message', onConsoleMessage);
+            el.removeEventListener('dom-ready', onDomReady);
+        };
     }, [currentUrl, refreshKey]);
 
     const handleWebviewError = () => {
         setIsLoading(false);
-        console.error('Failed to load URL:', currentUrl);
+        const errorMsg = `webview onError 触发, URL: ${currentUrl}`;
+        console.error('[BrowserTab]', errorMsg);
+        setLoadError(errorMsg);
     };
 
     const handleOpenExternal = useCallback(async () => {
@@ -151,6 +243,11 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                         {isLoading && (
                             <div className="absolute inset-0 flex items-center justify-center bg-stone-50 dark:bg-zinc-900 z-10">
                                 <RotateCw size={24} className="animate-spin text-orange-500" />
+                            </div>
+                        )}
+                        {loadError && (
+                            <div className="absolute bottom-0 left-0 right-0 bg-red-500/90 text-white text-xs px-3 py-2 z-20 font-mono break-all">
+                                {loadError}
                             </div>
                         )}
                         {/* 使用 webview 以便注入 CSS 缩小 Vite 报错 overlay 字号 */}
