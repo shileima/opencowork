@@ -113,11 +113,114 @@ const EXPANDED_HEIGHT = 320   // Compact height for less dramatic expansion
 
 app.on('before-quit', async () => {
   app.isQuitting = true
-  // Stop resource updater
-  if (resourceUpdater) {
-    resourceUpdater.stopAutoUpdateCheck()
+  console.log('[Main] Application is quitting, starting cleanup...');
+  
+  // 1. 关闭所有浏览器（通过 agent-browser）
+  try {
+    console.log('[Main] Closing browser sessions...');
+    // 使用 agent-browser close 命令关闭浏览器
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+    
+    try {
+      // 关闭默认浏览器会话
+      await execAsync('agent-browser close', {
+        timeout: 5000,
+        encoding: 'utf-8'
+      });
+      console.log('[Main] Browser session closed');
+    } catch (browserError) {
+      // 浏览器可能未运行，忽略错误
+      console.log('[Main] Browser cleanup skipped (browser may not be running)');
+    }
+  } catch (error) {
+    console.warn('[Main] Error closing browser:', error);
   }
-  // Clean up both agent resources
+  
+  // 2. 清理所有终端会话
+  console.log('[Main] Cleaning up terminal sessions...');
+  terminalSessions.forEach((session, id) => {
+    try {
+      if (session.pty) {
+        console.log(`[Main] Killing terminal PTY session ${id}`);
+        session.pty.kill('SIGKILL');
+      } else if (session.process && session.process.pid) {
+        console.log(`[Main] Killing terminal process ${id} (PID: ${session.process.pid})`);
+        if (process.platform === 'win32') {
+          // Windows: 使用 taskkill 强制终止进程树
+          cpSpawn('taskkill', ['/PID', session.process.pid.toString(), '/T', '/F'], {
+            stdio: 'ignore'
+          });
+        } else {
+          // Unix: 发送 SIGKILL 信号
+          session.process.kill('SIGKILL');
+        }
+      }
+    } catch (error) {
+      console.warn(`[Main] Error killing terminal session ${id}:`, error);
+    }
+  });
+  terminalSessions.clear();
+  console.log('[Main] Terminal sessions cleaned up');
+  
+  // 3. 清理所有子进程和端口（通过 FileSystemTools）
+  try {
+    console.log('[Main] Cleaning up child processes and ports...');
+    const { FileSystemTools } = await import('./agent/tools/FileSystemTools');
+    await FileSystemTools.cleanupAll();
+    
+    // 额外清理常用的开发端口（3000, 5173, 8080 等）
+    console.log('[Main] Cleaning up common development ports...');
+    const commonPorts = [3000, 5173, 8080, 4200, 8000];
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+    
+    for (const port of commonPorts) {
+      try {
+        if (process.platform === 'darwin' || process.platform === 'linux') {
+          const { stdout } = await execAsync(`lsof -ti :${port}`, {
+            timeout: 2000,
+            encoding: 'utf-8'
+          });
+          const pids = stdout.trim().split(/\s+/).filter(Boolean);
+          if (pids.length > 0) {
+            console.log(`[Main] Killing processes on port ${port}: ${pids.join(', ')}`);
+            for (const pid of pids) {
+              await execAsync(`kill -9 ${pid}`, { timeout: 2000 });
+            }
+          }
+        } else if (process.platform === 'win32') {
+          const { stdout } = await execAsync(`netstat -ano | findstr ":${port}"`, {
+            timeout: 2000,
+            encoding: 'utf-8',
+            shell: 'cmd.exe'
+          });
+          const lines = stdout.trim().split(/\r?\n/).filter((line: string) => line.includes(`:${port}`) && line.includes('LISTENING'));
+          for (const line of lines) {
+            const parts = line.trim().split(/\s+/);
+            const pid = parts[parts.length - 1];
+            if (pid) {
+              console.log(`[Main] Killing process ${pid} on port ${port}`);
+              await execAsync(`taskkill /PID ${pid} /F`, {
+                timeout: 2000,
+                shell: 'cmd.exe'
+              });
+            }
+          }
+        }
+      } catch (portError) {
+        // 端口可能未被占用，忽略错误
+      }
+    }
+    
+    console.log('[Main] Child processes and ports cleaned up');
+  } catch (error) {
+    console.warn('[Main] Error cleaning up child processes:', error);
+  }
+  
+  // 4. 清理 Agent 资源
   const agents = [mainAgent, floatingBallAgent].filter((agent): agent is AgentRuntime => agent !== null)
   if (agents.length > 0) {
     console.log('[Main] Cleaning up agent resources...');
@@ -131,6 +234,13 @@ app.on('before-quit', async () => {
     mainAgent = null;
     floatingBallAgent = null;
   }
+  
+  // 5. 停止资源更新器
+  if (resourceUpdater) {
+    resourceUpdater.stopAutoUpdateCheck()
+  }
+  
+  console.log('[Main] Cleanup completed, application will now quit');
 })
 
 app.on('window-all-closed', () => {
@@ -1566,10 +1676,15 @@ ipcMain.handle('project:delete', async (_, id: string, projectPath?: string) => 
     // 使用传入的路径或项目中的路径
     const pathToDelete = projectPath || project.path;
 
-    // 删除项目记录
-    const deleted = projectStore.deleteProject(id);
-    if (!deleted) {
+    // 删除项目记录(包含所有关联任务,并自动切换到最近的项目)
+    const deleteResult = projectStore.deleteProject(id);
+    if (!deleteResult.success) {
       return { success: false, error: 'Failed to delete project record' };
+    }
+
+    console.log(`[Project] Deleted project ${id}, tasks automatically deleted with project`);
+    if (deleteResult.switchedToProjectId) {
+      console.log(`[Project] Switched to most recent project: ${deleteResult.switchedToProjectId}`);
     }
 
     // 删除本地文件目录
@@ -1582,7 +1697,8 @@ ipcMain.handle('project:delete', async (_, id: string, projectPath?: string) => 
         console.error(`[Project] Failed to delete project directory: ${pathToDelete}`, error);
         // 即使删除文件失败，项目记录已经删除，返回成功但记录警告
         return { 
-          success: true, 
+          success: true,
+          switchedToProjectId: deleteResult.switchedToProjectId,
           warning: `项目记录已删除，但删除本地文件时出错：${error instanceof Error ? error.message : String(error)}` 
         };
       }
@@ -1590,7 +1706,10 @@ ipcMain.handle('project:delete', async (_, id: string, projectPath?: string) => 
       console.warn(`[Project] Project directory does not exist: ${pathToDelete}`);
     }
 
-    return { success: true };
+    return { 
+      success: true,
+      switchedToProjectId: deleteResult.switchedToProjectId
+    };
   } catch (error) {
     console.error('[Project] Error deleting project:', error);
     return { success: false, error: error instanceof Error ? error.message : String(error) };

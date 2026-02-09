@@ -107,19 +107,32 @@ class ProjectStore {
     }
 
     // Delete project
-    deleteProject(id: string): boolean {
+    deleteProject(id: string): { success: boolean; switchedToProjectId?: string } {
         const projects = this.store.get('projects') || [];
         const filtered = projects.filter(p => p.id !== id);
-        if (filtered.length === projects.length) return false;
+        if (filtered.length === projects.length) {
+            return { success: false };
+        }
 
         this.store.set('projects', filtered);
 
-        // If deleted project was current, clear current
+        let switchedToProjectId: string | undefined;
+
+        // If deleted project was current, switch to most recent project
         if (this.store.get('currentProjectId') === id) {
-            this.store.set('currentProjectId', null);
+            if (filtered.length > 0) {
+                // Sort by updatedAt descending and get the most recent project
+                const sortedProjects = [...filtered].sort((a, b) => b.updatedAt - a.updatedAt);
+                const mostRecentProject = sortedProjects[0];
+                this.store.set('currentProjectId', mostRecentProject.id);
+                switchedToProjectId = mostRecentProject.id;
+            } else {
+                // No projects left
+                this.store.set('currentProjectId', null);
+            }
         }
 
-        return true;
+        return { success: true, switchedToProjectId };
     }
 
     // Create task in project

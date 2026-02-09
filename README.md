@@ -51,6 +51,7 @@ Supports any Agent-capable model (MiniMax, Claude, GPT, etc.) with no vendor loc
 - **Terminal Control** — Execute command-line operations
 - **Multi-Session** — Manage multiple conversation contexts simultaneously
 - **Skill Extensions** — Extend via Skills and **MCP Protocol**
+- **Smart Cleanup** — Auto-cleanup all processes and ports on exit to prevent resource leaks
 - **Cross-Platform** — Windows, macOS, Linux
 
 ---

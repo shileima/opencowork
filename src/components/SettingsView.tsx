@@ -1724,7 +1724,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                         {resourceUpdateInfo && (
                                             <div className="mt-3 text-sm animate-in fade-in slide-in-from-top-2">
                                                 {resourceUpdateInfo.hasUpdate ? (
-                                                    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg p-3 space-y-2">
+                                                    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg p-3 space-y-2 w-full min-w-0">
                                                         <p className="text-amber-800 dark:text-amber-200 font-medium">
                                                             发现新资源版本!
                                                         </p>
@@ -1749,8 +1749,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                         {/* 进度区域：使用固定高度避免内容变化时的布局抖动 */}
                                                         {updateProgress && (
                                                             <div className="mt-2 space-y-1">
-                                                                <div className="flex justify-between text-xs text-amber-700 dark:text-amber-300 h-4">
-                                                                    <span>
+                                                                <div className="flex justify-between text-xs text-amber-700 dark:text-amber-300 h-4 min-w-0">
+                                                                    <span className="truncate flex-1 min-w-0 mr-2">
                                                                         {updateProgress.stage === 'checking' && '检查更新中...'}
                                                                         {updateProgress.stage === 'downloading' && '下载资源包中...'}
                                                                         {updateProgress.stage === 'extracting' && '解压文件中...'}
@@ -1758,7 +1758,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                                         {updateProgress.stage === 'completed' && '更新完成！'}
                                                                         {!updateProgress.stage && `进度: ${updateProgress.downloaded}/${updateProgress.total}`}
                                                                     </span>
-                                                                    <span className="font-mono tabular-nums">
+                                                                    <span className="font-mono tabular-nums shrink-0 ml-auto">
                                                                         {updateProgress.percentage !== undefined 
                                                                             ? `${Math.round(updateProgress.percentage)}%`
                                                                             : `${Math.round((updateProgress.downloaded / updateProgress.total) * 100)}%`}

@@ -199,10 +199,10 @@ export function TaskListPanel({
 
     return (
         <>
-        <div className="w-64 bg-white dark:bg-zinc-900 border-r border-stone-200 dark:border-zinc-800 flex flex-col transition-all duration-300 overflow-hidden">
+        <div className="w-64 bg-white dark:bg-zinc-900 border-r border-stone-200 dark:border-zinc-800 flex flex-col transition-all duration-300 overflow-hidden h-full">
             {/* New Task Button */}
             {currentProject && (
-                <div className="h-10 flex items-center px-3 border-b border-stone-200 dark:border-zinc-800">
+                <div className="h-10 flex items-center px-3 border-b border-stone-200 dark:border-zinc-800 shrink-0">
                     <button
                         onClick={onCreateTask}
                         className="w-full h-6 flex items-center justify-center gap-2 px-3 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors text-sm font-medium"
@@ -213,8 +213,8 @@ export function TaskListPanel({
                 </div>
             )}
 
-            {/* Task List */}
-            <div className="flex-1 overflow-y-auto p-2">
+            {/* Task List - 支持滚动 */}
+            <div className="flex-1 overflow-y-auto p-2 min-h-0 task-list-scroll">
                 {!currentProject ? (
                     <div className="text-center py-8 text-sm text-stone-400 dark:text-zinc-500">
                         {t('noProjectSelected')}
@@ -224,7 +224,7 @@ export function TaskListPanel({
                         {t('noTasks')}
                     </div>
                 ) : (
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                         {tasks.map(task => (
                             <div
                                 key={task.id}

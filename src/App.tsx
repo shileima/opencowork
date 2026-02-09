@@ -6,12 +6,14 @@ import { ConfirmDialog, useConfirmations } from './components/ConfirmDialog';
 import { FloatingBallPage } from './components/FloatingBallPage';
 import { ProjectView } from './components/ProjectView';
 import { TerminalWindow } from './pages/TerminalWindow';
+import { SplashScreen } from './components/SplashScreen';
 import { useI18n } from './i18n/I18nContext';
 import Anthropic from '@anthropic-ai/sdk';
 
 type ViewType = 'cowork' | 'project';
 
 function App() {
+  const [isAppReady, setIsAppReady] = useState(false);
   const [history, setHistory] = useState<Anthropic.MessageParam[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -187,7 +189,7 @@ function App() {
     e.stopPropagation();
     
     // 显示详细的确认对话框
-    const confirmMessage = `确定要删除项目 "${project.name}" 吗？\n\n⚠️ 警告：此操作将：\n1. 从项目列表中删除该项目\n2. 永久删除项目目录及其所有文件\n\n此操作无法撤销，请谨慎操作！`;
+    const confirmMessage = `确定要删除项目 "${project.name}" 吗？\n\n⚠️ 警告：此操作将：\n1. 从项目列表中删除该项目\n2. 删除该项目的所有关联任务\n3. 永久删除项目目录及其所有文件\n\n此操作无法撤销，请谨慎操作！`;
     
     if (!window.confirm(confirmMessage)) return;
     
@@ -196,14 +198,28 @@ function App() {
     if (!doubleConfirm) return;
     
     try {
-      const result = await window.ipcRenderer.invoke('project:delete', project.id, project.path) as { success: boolean; error?: string; warning?: string };
+      const result = await window.ipcRenderer.invoke('project:delete', project.id, project.path) as { 
+        success: boolean; 
+        error?: string; 
+        warning?: string;
+        switchedToProjectId?: string;
+      };
+      
       if (result.success) {
         // 如果有警告，显示警告信息
         if (result.warning) {
           window.alert(`⚠️ ${result.warning}`);
         }
+        
+        // 重新加载项目列表
         await loadProjects();
+        
+        // 如果切换到了新项目，加载该项目；否则清空当前项目
+        if (result.switchedToProjectId) {
+          console.log(`Switched to project: ${result.switchedToProjectId}`);
+        }
         await loadCurrentProject();
+        
         setShowProjectDropdown(false);
         window.ipcRenderer.send('project:switched');
       } else {
@@ -223,6 +239,11 @@ function App() {
   
   // Check if this is a terminal window
   const isTerminalWindow = window.location.hash.includes('terminal-window');
+
+  // 处理启动加载完成
+  const handleSplashComplete = () => {
+    setIsAppReady(true);
+  };
 
   // 获取应用版本号
   useEffect(() => {
@@ -404,6 +425,11 @@ ${err}
   // If this is a terminal window, render only the terminal
   if (isTerminalWindow) {
     return <TerminalWindow />;
+  }
+
+  // Show splash screen during initialization
+  if (!isAppReady) {
+    return <SplashScreen onComplete={handleSplashComplete} />;
   }
 
   // Main App - Narrow vertical layout

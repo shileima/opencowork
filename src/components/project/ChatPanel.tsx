@@ -16,6 +16,8 @@ interface ChatPanelProps {
     setConfig: (config: any) => void;
     /** Project 模式：锁定项目，底部聊天固定为当前项目且不允许切换 */
     lockedProjectName?: string | null;
+    /** 是否正在加载历史会话 */
+    isLoadingHistory?: boolean;
 }
 
 export function ChatPanel({
@@ -27,7 +29,8 @@ export function ChatPanel({
     workingDir,
     config,
     setConfig,
-    lockedProjectName
+    lockedProjectName,
+    isLoadingHistory = false
 }: ChatPanelProps) {
     const { t } = useI18n();
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -52,10 +55,18 @@ export function ChatPanel({
                             </div>
                             <div className="space-y-2">
                                 <h2 className="text-base font-semibold text-stone-800 dark:text-zinc-100">
-                                    {t('startConversation')}
+                                    {isLoadingHistory ? t('loadingHistory') : t('startConversation')}
                                 </h2>
                                 <p className="text-stone-500 dark:text-zinc-400 text-[11px] max-w-xs">
-                                    {t('startByDescribing')}
+                                    {isLoadingHistory ? (
+                                        <span className="inline-flex items-center gap-1">
+                                            <span className="inline-block w-1 h-1 bg-orange-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                                            <span className="inline-block w-1 h-1 bg-orange-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                                            <span className="inline-block w-1 h-1 bg-orange-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                                        </span>
+                                    ) : (
+                                        t('startByDescribing')
+                                    )}
                                 </p>
                             </div>
                         </div>
