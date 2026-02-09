@@ -98,11 +98,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
         run: |
           node scripts/verify-builtin-resources.cjs
           pnpm exec tsc
           pnpm exec vite build
-          pnpm exec electron-builder --${{ matrix.platform }} --publish never
+          pnpm exec electron-builder --${{ matrix.platform }} --publish never --config.npmRebuild=false
 
       -
         name: Generate Resource Manifest
