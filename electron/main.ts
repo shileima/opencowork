@@ -362,9 +362,14 @@ app.whenReady().then(() => {
 
 ipcMain.handle('agent:send-message', async (event, message: string | { content: string, images: string[] }) => {
   // Determine which agent to use based on sender window
-  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
+  const targetAgent = isFloatingBall ? floatingBallAgent : mainAgent
   if (!targetAgent) throw new Error('Agent not initialized')
-  return await targetAgent.processUserMessage(message)
+  // 项目视图下传入当前任务 ID 与项目 ID，以便 agent:done 时能可靠更新任务状态
+  const currentProject = isFloatingBall ? null : projectStore.getCurrentProject()
+  const taskId = isFloatingBall ? undefined : (currentProject && currentTaskIdForSession ? currentTaskIdForSession : undefined)
+  const projectId = currentProject?.id
+  return await targetAgent.processUserMessage(message, taskId, projectId)
 })
 
 ipcMain.handle('agent:abort', (event) => {
@@ -1820,6 +1825,20 @@ ipcMain.handle('project:task:update', (event, projectId: string, taskId: string,
 
 ipcMain.handle('project:task:delete', (_, projectId: string, taskId: string) => {
   return { success: projectStore.deleteTask(projectId, taskId) };
+});
+
+/** 将当前任务标题改为指定文案（如部署开始时改为「部署」） */
+ipcMain.handle('project:rename-current-task', (event, title: string) => {
+  const project = projectStore.getCurrentProject();
+  if (!project || !currentTaskIdForSession) return { success: false };
+  const success = projectStore.updateTask(project.id, currentTaskIdForSession, { title });
+  if (success) {
+    const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('project:task:updated', { projectId: project.id, taskId: currentTaskIdForSession, updates: { title } });
+    }
+  }
+  return { success };
 });
 
 // ═══════════════════════════════════════

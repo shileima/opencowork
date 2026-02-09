@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Minus, Square, X, Zap, FolderKanban, ChevronLeft, ChevronRight, ChevronDown, FolderOpen, FolderPlus, Trash2, Loader2, Rocket, CheckCircle } from 'lucide-react';
+import { Minus, Square, X, Zap, FolderKanban, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, ChevronDown, FolderOpen, FolderPlus, Trash2, Loader2, Rocket, CheckCircle } from 'lucide-react';
 import { CoworkView } from './components/CoworkView';
 import { SettingsView } from './components/SettingsView';
 import { ConfirmDialog, useConfirmations } from './components/ConfirmDialog';
@@ -20,6 +20,7 @@ function App() {
   const [appVersion, setAppVersion] = useState<string>('');
   const [activeView, setActiveView] = useState<ViewType>('project');
   const [isTaskPanelHidden, setIsTaskPanelHidden] = useState(false);
+  const [isExplorerPanelHidden, setIsExplorerPanelHidden] = useState(false);
   const [projects, setProjects] = useState<any[]>([]);
   const [currentProject, setCurrentProject] = useState<any | null>(null);
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
@@ -38,22 +39,23 @@ function App() {
     window.ipcRenderer.invoke('window:set-maximized', activeView === 'project');
   }, [activeView]);
 
-  // 从 localStorage 加载任务面板隐藏状态
+  // 从 localStorage 加载任务面板与资源管理器隐藏状态
   useEffect(() => {
     if (activeView === 'project') {
-      const saved = localStorage.getItem('projectView:taskPanelHidden');
-      if (saved === 'true') {
-        setIsTaskPanelHidden(true);
-      }
+      const savedTask = localStorage.getItem('projectView:taskPanelHidden');
+      if (savedTask === 'true') setIsTaskPanelHidden(true);
+      const savedExplorer = localStorage.getItem('projectView:explorerPanelHidden');
+      if (savedExplorer === 'true') setIsExplorerPanelHidden(true);
     }
   }, [activeView]);
 
-  // 保存任务面板隐藏状态到 localStorage
+  // 保存任务面板与资源管理器隐藏状态到 localStorage
   useEffect(() => {
     if (activeView === 'project') {
       localStorage.setItem('projectView:taskPanelHidden', String(isTaskPanelHidden));
+      localStorage.setItem('projectView:explorerPanelHidden', String(isExplorerPanelHidden));
     }
-  }, [isTaskPanelHidden, activeView]);
+  }, [isTaskPanelHidden, isExplorerPanelHidden, activeView]);
 
   // 加载项目列表
   useEffect(() => {
@@ -264,19 +266,24 @@ function App() {
     });
 
     const removeErrorListener = window.ipcRenderer.on('agent:error', (_event, ...args) => {
-      const payload = args[0] as string | { message: string; taskId?: string };
+      const payload = args[0] as string | { message: string; taskId?: string; projectId?: string };
       const err = typeof payload === 'string' ? payload : (payload?.message ?? '');
       const taskId = typeof payload === 'object' && payload?.taskId ? payload.taskId : undefined;
+      const projectId = typeof payload === 'object' && payload?.projectId ? payload.projectId : undefined;
       console.error("Agent Error:", err);
 
       // 项目视图：将当前任务标记为失败
       if (taskId) {
-        window.ipcRenderer.invoke('project:get-current').then((result) => {
-          const project = result as { id: string } | null;
-          if (project?.id) {
-            window.ipcRenderer.invoke('project:task:update', project.id, taskId, { status: 'failed' });
-          }
-        });
+        if (projectId) {
+          window.ipcRenderer.invoke('project:task:update', projectId, taskId, { status: 'failed' });
+        } else {
+          window.ipcRenderer.invoke('project:get-current').then((result) => {
+            const project = result as { id: string } | null;
+            if (project?.id) {
+              window.ipcRenderer.invoke('project:task:update', project.id, taskId, { status: 'failed' });
+            }
+          });
+        }
       }
 
       // Add error message to chat history so user can see it
@@ -298,14 +305,19 @@ ${err}
 
     // Only reset isProcessing when processing is truly done; 项目视图：将当前任务标记为完成
     const removeDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
-      const payload = args[0] as { taskId?: string } | undefined;
+      const payload = args[0] as { taskId?: string; projectId?: string } | undefined;
       if (payload?.taskId) {
-        window.ipcRenderer.invoke('project:get-current').then((result) => {
-          const project = result as { id: string } | null;
-          if (project?.id) {
-            window.ipcRenderer.invoke('project:task:update', project.id, payload.taskId, { status: 'completed' });
-          }
-        });
+        const projectId = payload.projectId;
+        if (projectId) {
+          window.ipcRenderer.invoke('project:task:update', projectId, payload.taskId, { status: 'completed' });
+        } else {
+          window.ipcRenderer.invoke('project:get-current').then((result) => {
+            const project = result as { id: string } | null;
+            if (project?.id) {
+              window.ipcRenderer.invoke('project:task:update', project.id, payload.taskId, { status: 'completed' });
+            }
+          });
+        }
       }
       setIsProcessing(false);
     });
@@ -354,6 +366,8 @@ ${err}
     if (!currentProject?.path || deployStatus === 'deploying') return;
     setDeployStatus('deploying');
     deployLogRef.current = '';
+    // 将当前任务标题改为「部署」，便于在任务列表中识别
+    window.ipcRenderer.invoke('project:rename-current-task', t('deploy')).catch(() => {});
 
     const deployStartMsg: Anthropic.MessageParam = {
       role: 'assistant',
@@ -451,8 +465,9 @@ ${err}
               onClick={() => setIsTaskPanelHidden(!isTaskPanelHidden)}
               className="p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 rounded transition-colors"
               title={isTaskPanelHidden ? t('showTaskList') : t('hideTaskList')}
+              aria-label={isTaskPanelHidden ? t('showTaskList') : t('hideTaskList')}
             >
-              {isTaskPanelHidden ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+              {isTaskPanelHidden ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
             </button>
           )}
 
@@ -580,14 +595,23 @@ ${err}
               {t('project')}
             </button>
           </div>
-
-          {/* Version - Moved next to navigation tabs */}
           {appVersion && (
-            <span className="text-xs text-stone-400 dark:text-zinc-500 ml-2">{appVersion}</span>
+            <span className="text-xs text-stone-400 dark:text-zinc-500 ml-0 shrink-0">{appVersion}</span>
           )}
         </div>
 
         <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          {/* Explorer Panel Toggle - Only show in Project view */}
+          {activeView === 'project' && (
+            <button
+              onClick={() => setIsExplorerPanelHidden(!isExplorerPanelHidden)}
+              className="p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 rounded transition-colors"
+              title={isExplorerPanelHidden ? t('showExplorer') : t('hideExplorer')}
+              aria-label={isExplorerPanelHidden ? t('showExplorer') : t('hideExplorer')}
+            >
+              {isExplorerPanelHidden ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
+            </button>
+          )}
           {/* Deploy Button - Only show in Project view */}
           {activeView === 'project' && currentProject && (
             <button
@@ -669,9 +693,12 @@ ${err}
             onSendMessage={handleSendMessage}
             onAbort={handleAbort}
             isProcessing={isProcessing}
+            isDeploying={deployStatus === 'deploying'}
             onOpenSettings={() => setShowSettings(true)}
             isTaskPanelHidden={isTaskPanelHidden}
             onToggleTaskPanel={() => setIsTaskPanelHidden(!isTaskPanelHidden)}
+            isExplorerPanelHidden={isExplorerPanelHidden}
+            onToggleExplorerPanel={() => setIsExplorerPanelHidden(!isExplorerPanelHidden)}
           />
         )}
         {showSettings && (

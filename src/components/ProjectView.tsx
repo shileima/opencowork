@@ -14,9 +14,12 @@ interface ProjectViewProps {
     onSendMessage: (message: string | { content: string, images: string[] }) => void;
     onAbort: () => void;
     isProcessing: boolean;
+    isDeploying?: boolean;
     onOpenSettings: () => void;
     isTaskPanelHidden: boolean;
     onToggleTaskPanel: () => void;
+    isExplorerPanelHidden: boolean;
+    onToggleExplorerPanel: () => void;
 }
 
 // 跟踪新任务的第一条消息，用于重命名
@@ -45,9 +48,12 @@ export function ProjectView({
     onSendMessage,
     onAbort,
     isProcessing,
+    isDeploying = false,
     onOpenSettings: _onOpenSettings,
     isTaskPanelHidden,
-    onToggleTaskPanel
+    onToggleTaskPanel,
+    isExplorerPanelHidden,
+    onToggleExplorerPanel
 }: ProjectViewProps) {
     const { t } = useI18n();
     const [currentProject, setCurrentProject] = useState<Project | null>(null);
@@ -67,8 +73,13 @@ export function ProjectView({
     } | null>(null);
     const multiTabEditorRefRef = useRef<typeof multiTabEditorRef>(null);
     const currentTaskIdRef = useRef<string | null>(null);
+    const historyRef = useRef<Anthropic.MessageParam[]>([]);
+    const defaultTaskTitleRef = useRef(t('newTask'));
+    defaultTaskTitleRef.current = t('newTask');
     const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const hoverRightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     currentTaskIdRef.current = currentTaskId;
+    historyRef.current = history;
     multiTabEditorRefRef.current = multiTabEditorRef;
 
     // 处理左侧悬停展开侧栏
@@ -93,12 +104,28 @@ export function ProjectView({
         }
     }, []);
 
+    // 右侧悬停展开资源管理器
+    const handleRightEdgeMouseEnter = useCallback(() => {
+        if (isExplorerPanelHidden) {
+            if (hoverRightTimeoutRef.current) clearTimeout(hoverRightTimeoutRef.current);
+            hoverRightTimeoutRef.current = setTimeout(() => {
+                onToggleExplorerPanel();
+            }, 1000);
+        }
+    }, [isExplorerPanelHidden, onToggleExplorerPanel]);
+
+    const handleRightEdgeMouseLeave = useCallback(() => {
+        if (hoverRightTimeoutRef.current) {
+            clearTimeout(hoverRightTimeoutRef.current);
+            hoverRightTimeoutRef.current = null;
+        }
+    }, []);
+
     // 清理定时器
     useEffect(() => {
         return () => {
-            if (hoverTimeoutRef.current) {
-                clearTimeout(hoverTimeoutRef.current);
-            }
+            if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+            if (hoverRightTimeoutRef.current) clearTimeout(hoverRightTimeoutRef.current);
         };
     }, []);
 
@@ -168,8 +195,23 @@ export function ProjectView({
             multiTabEditorRefRef.current?.openBrowserTab?.(url);
         });
 
-        // 监听对话完成：Project 模式下自动打开内置浏览器并刷新（不改变已有 Tab 的 URL）
-        const removeAgentDoneListener = window.ipcRenderer.on('agent:done', () => {
+        // 监听对话完成：Project 模式下自动打开内置浏览器并刷新；新任务根据首条用户消息重命名
+        const removeAgentDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
+            const payload = args[0] as { taskId?: string } | undefined;
+            if (payload?.taskId && pendingTaskRename && pendingTaskRename.taskId === payload.taskId) {
+                const messages = historyRef.current || [];
+                const firstUser = messages.find((m) => m.role === 'user');
+                const firstContent = firstUser && typeof firstUser.content === 'string'
+                    ? firstUser.content
+                    : Array.isArray(firstUser?.content)
+                        ? (firstUser.content.find((b: any) => b.type === 'text') as any)?.text ?? ''
+                        : '';
+                const cleanTitle = deriveTaskTitleFromMessage(firstContent) || defaultTaskTitleRef.current;
+                window.ipcRenderer.invoke('project:task:update', pendingTaskRename.projectId, pendingTaskRename.taskId, { title: cleanTitle }).catch((err) => {
+                    console.error('[ProjectView] Failed to rename task on done:', err);
+                });
+                pendingTaskRename = null;
+            }
             const ref = multiTabEditorRefRef.current;
             ref?.openBrowserTab?.(); // 无参：新建用默认 URL，已有则保留当前 URL
             ref?.refreshBrowserTab?.();
@@ -298,24 +340,10 @@ export function ProjectView({
         }
     };
 
-    // 包装 onSendMessage：发送第一条消息时用消息内容重命名任务（用 ref 避免闭包导致 currentTaskId 陈旧）
-    const handleSendMessageWithRename = useCallback(async (message: string | { content: string, images: string[] }) => {
-        const taskIdNow = currentTaskIdRef.current;
-        const shouldRename = pendingTaskRename && currentProject && taskIdNow === pendingTaskRename.taskId;
-        if (shouldRename && pendingTaskRename) {
-            const toRename = pendingTaskRename;
-            pendingTaskRename = null;
-            const messageText = typeof message === 'string' ? message : message.content;
-            const cleanText = deriveTaskTitleFromMessage(messageText || '') || t('newTask');
-            try {
-                await window.ipcRenderer.invoke('project:task:update', toRename.projectId, toRename.taskId, { title: cleanText });
-            } catch (error) {
-                console.error('Failed to rename task:', error);
-                pendingTaskRename = toRename;
-            }
-        }
+    // 发送消息；新任务在聊天完成后（agent:done）根据首条用户消息自动重命名
+    const handleSendMessageWithRename = useCallback((message: string | { content: string, images: string[] }) => {
         onSendMessage(message);
-    }, [currentProject, onSendMessage, t]);
+    }, [onSendMessage]);
 
     const handleSelectTask = async (taskId: string) => {
         if (!currentProject) return;
@@ -434,6 +462,7 @@ export function ProjectView({
                                 currentProject={currentProject}
                                 currentTaskId={currentTaskId}
                                 isProcessing={isProcessing}
+                                isDeploying={isDeploying}
                                 onSelectTask={handleSelectTask}
                                 onCreateTask={handleCreateTask}
                             />
@@ -484,15 +513,29 @@ export function ProjectView({
                                     }
                                 }}
                                 minSize={20}
+                                leftMinSizePx={390}
+                                rightMinSizePx={390}
                             />
                         </div>
 
+                        {/* 右侧悬停检测区域（仅在资源管理器收起时显示） */}
+                        {isExplorerPanelHidden && (
+                            <div
+                                className="absolute right-0 top-0 bottom-0 w-2 z-50 cursor-pointer"
+                                onMouseEnter={handleRightEdgeMouseEnter}
+                                onMouseLeave={handleRightEdgeMouseLeave}
+                                title="悬停 1 秒展开资源管理器"
+                            />
+                        )}
+
                         {/* 区域四：资源管理器 */}
-                        <FileExplorer
-                            projectPath={currentProject.path}
-                            onOpenFile={handleOpenFile}
-                            onFileDeleted={(path) => multiTabEditorRef?.closeTabByFilePath?.(path)}
-                        />
+                        <div className={`transition-all duration-300 ${isExplorerPanelHidden ? 'w-0 overflow-hidden' : 'w-64'}`}>
+                            <FileExplorer
+                                projectPath={currentProject.path}
+                                onOpenFile={handleOpenFile}
+                                onFileDeleted={(path) => multiTabEditorRef?.closeTabByFilePath?.(path)}
+                            />
+                        </div>
                     </div>
                 </>
             )}
