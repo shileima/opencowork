@@ -17,7 +17,7 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
         return () => clearInterval(interval);
     }, []);
 
-    // 模拟加载进度
+    // 模拟加载进度：进度只增不减，并正确清理定时器避免重复执行导致抖动
     useEffect(() => {
         const stages = [
             { progress: 20, text: '加载配置', duration: 200 },
@@ -29,33 +29,48 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
 
         let currentStage = 0;
         let currentProgress = 0;
+        const timeouts: ReturnType<typeof setTimeout>[] = [];
+        let progressInterval: ReturnType<typeof setInterval> | null = null;
+        let cancelled = false;
 
         const animate = () => {
+            if (cancelled) return;
             if (currentStage >= stages.length) {
-                // 延迟一点再完成，让用户看到 100%
-                setTimeout(() => onComplete(), 300);
+                const t = setTimeout(() => {
+                    if (!cancelled) onComplete();
+                }, 300);
+                timeouts.push(t);
                 return;
             }
 
             const stage = stages[currentStage];
             const increment = (stage.progress - currentProgress) / 10;
 
-            const progressInterval = setInterval(() => {
+            progressInterval = setInterval(() => {
+                if (cancelled) return;
                 currentProgress += increment;
-                setProgress(Math.min(currentProgress, stage.progress));
+                const next = Math.min(currentProgress, stage.progress);
+                setProgress(prev => Math.max(prev, next));
 
                 if (currentProgress >= stage.progress) {
-                    clearInterval(progressInterval);
-                    setLoadingText(stage.text);
+                    if (progressInterval) clearInterval(progressInterval);
+                    progressInterval = null;
+                    if (!cancelled) setLoadingText(stage.text);
                     currentStage++;
-                    setTimeout(animate, stage.duration);
+                    const t = setTimeout(animate, stage.duration);
+                    timeouts.push(t);
                 }
             }, 30);
         };
 
-        // 延迟启动，确保组件已挂载
-        const timer = setTimeout(animate, 100);
-        return () => clearTimeout(timer);
+        const startTimer = setTimeout(animate, 100);
+        timeouts.push(startTimer);
+
+        return () => {
+            cancelled = true;
+            timeouts.forEach(t => clearTimeout(t));
+            if (progressInterval) clearInterval(progressInterval);
+        };
     }, [onComplete]);
 
     return (

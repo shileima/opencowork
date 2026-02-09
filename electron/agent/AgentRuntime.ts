@@ -358,7 +358,7 @@ export class AgentRuntime {
         this.notifyUpdate();
     }
 
-    public async processUserMessage(input: string | { content: string, images: string[] }, taskId?: string) {
+    public async processUserMessage(input: string | { content: string, images: string[] }, taskId?: string, projectId?: string) {
         // 如果提供了 taskId，使用任务级别的并发控制；否则使用全局控制（向后兼容）
         const useTaskLevelConcurrency = taskId !== undefined;
         
@@ -395,7 +395,7 @@ export class AgentRuntime {
             this.isProcessing = true;
             
             try {
-                await this.processMessageWithContext(input, taskId);
+                await this.processMessageWithContext(input, taskId, projectId);
             } catch (error) {
                 // 即使出错也要确保状态恢复和任务清理
                 console.error(`[AgentRuntime] Task ${taskId} error:`, error);
@@ -410,7 +410,7 @@ export class AgentRuntime {
                 if (taskHistory.length > 0) {
                     this.notifyUpdate();
                 }
-                this.broadcast('agent:done', { timestamp: Date.now(), taskId });
+                this.broadcast('agent:done', { timestamp: Date.now(), taskId, projectId });
             }
         } else {
             // 全局并发控制（向后兼容）：保持原有逻辑
@@ -429,7 +429,7 @@ export class AgentRuntime {
             this.abortController = new AbortController();
             
             try {
-                await this.processMessageWithContext(input);
+                await this.processMessageWithContext(input, undefined, undefined);
             } finally {
                 this.isProcessing = false;
                 this.abortController = null;
@@ -439,7 +439,7 @@ export class AgentRuntime {
         }
     }
     
-    private async processMessageWithContext(input: string | { content: string, images: string[] }, taskId?: string) {
+    private async processMessageWithContext(input: string | { content: string, images: string[] }, taskId?: string, projectId?: string) {
         
         // 重置浏览器关闭意图检测（每次新消息时重置）
         this.userWantsCloseBrowser = false;
@@ -525,34 +525,32 @@ export class AgentRuntime {
                 this.history.push(friendlyMessage);
                 this.notifyUpdate();
                 // 仍然发送 done 事件，表示任务完成
-                this.broadcast('agent:done', { timestamp: Date.now(), taskId: taskId || undefined });
+                this.broadcast('agent:done', { timestamp: Date.now(), taskId: taskId || undefined, projectId });
                 return; // 提前返回，不显示错误弹窗
             }
 
             // [Fix] Handle MiniMax/provider sensitive content errors gracefully
             const errorTaskId = taskId || undefined;
+            const errorPayload = (msg: string) => ({ message: msg, taskId: errorTaskId, projectId });
             if (err.status === 500 && (err.message?.includes('sensitive') || JSON.stringify(error).includes('1027'))) {
-                this.broadcast('agent:error', 'AI Provider Error: The generated content was flagged as sensitive and blocked by the provider.', errorTaskId);
+                this.broadcast('agent:error', errorPayload('AI Provider Error: The generated content was flagged as sensitive and blocked by the provider.'));
             } else if (err.error?.type === 'invalid_request_error' && err.error?.message?.includes('tools[')) {
-                // Tool name validation error - provide helpful message
-                this.broadcast('agent:error', `配置错误: MCP 工具名称格式不正确\n\n详细信息: ${err.error.message}\n\n这通常是因为 MCP 服务器返回的工具名称包含了特殊字符（如中文）。请尝试：\n1. 禁用有问题的 MCP 服务器\n2. 或联系开发者修复此问题\n\n错误代码: ${err.status || 400}`, errorTaskId);
+                this.broadcast('agent:error', errorPayload(`配置错误: MCP 工具名称格式不正确\n\n详细信息: ${err.error.message}\n\n这通常是因为 MCP 服务器返回的工具名称包含了特殊字符（如中文）。请尝试：\n1. 禁用有问题的 MCP 服务器\n2. 或联系开发者修复此问题\n\n错误代码: ${err.status || 400}`));
             } else if (err.status === 400) {
-                // Generic 400 error with details
                 const details = err.error?.message || err.message || 'Unknown error';
-                this.broadcast('agent:error', `请求错误 (400): ${details}\n\n请检查：\n- API Key 是否正确\n- API 地址是否有效\n- 模型名称是否正确`, errorTaskId);
+                this.broadcast('agent:error', errorPayload(`请求错误 (400): ${details}\n\n请检查：\n- API Key 是否正确\n- API 地址是否有效\n- 模型名称是否正确`));
             } else if (err.status === 401) {
-                this.broadcast('agent:error', `认证失败 (401): API Key 无效或已过期\n\n请检查您的 API Key 配置。`, errorTaskId);
+                this.broadcast('agent:error', errorPayload('认证失败 (401): API Key 无效或已过期\n\n请检查您的 API Key 配置。'));
             } else if (err.status === 429) {
-                this.broadcast('agent:error', `请求过多 (429): API 调用频率超限\n\n请稍后再试或升级您的 API 套餐。`, errorTaskId);
+                this.broadcast('agent:error', errorPayload('请求过多 (429): API 调用频率超限\n\n请稍后再试或升级您的 API 套餐。'));
             } else if (err.status === 500) {
-                this.broadcast('agent:error', `服务器错误 (500): AI 服务提供商出现问题\n\n${err.message || '请稍后再试。'}`, errorTaskId);
+                this.broadcast('agent:error', errorPayload(`服务器错误 (500): AI 服务提供商出现问题\n\n${err.message || '请稍后再试。'}`));
             } else if (err.status === 503) {
-                this.broadcast('agent:error', `服务不可用 (503): AI 服务暂时无法访问\n\n请稍后再试或检查服务状态。`, errorTaskId);
+                this.broadcast('agent:error', errorPayload('服务不可用 (503): AI 服务暂时无法访问\n\n请稍后再试或检查服务状态。'));
             } else {
-                // Generic error with full details
                 const errorMsg = err.message || err.error?.message || 'An unknown error occurred';
                 const statusInfo = err.status ? `[${err.status}] ` : '';
-                this.broadcast('agent:error', `${statusInfo}${errorMsg}`, errorTaskId);
+                this.broadcast('agent:error', errorPayload(`${statusInfo}${errorMsg}`));
             }
         }
     }

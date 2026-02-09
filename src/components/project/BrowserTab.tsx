@@ -211,7 +211,7 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     }, [currentUrl]);
 
     return (
-        <div className="flex flex-col h-full bg-stone-100 dark:bg-zinc-950">
+        <div className="flex flex-col h-full min-w-[390px] bg-stone-100 dark:bg-zinc-950">
             {/* URL Bar */}
             <div className="flex items-center gap-2 px-3 py-2 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shrink-0">
                 <div className="flex items-center gap-0 shrink-0">

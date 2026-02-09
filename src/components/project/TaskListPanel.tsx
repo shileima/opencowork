@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Trash2, Pencil, MoreVertical, Loader2, CheckCircle, XCircle, Circle } from 'lucide-react';
+import { Plus, Trash2, Pencil, MoreVertical, Loader2, CircleCheckBig, XCircle, Circle } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
 import type { Project, ProjectTask } from '../../../electron/config/ProjectStore';
 
@@ -10,6 +10,7 @@ interface TaskListPanelProps {
     currentProject: Project | null;
     currentTaskId: string | null;
     isProcessing: boolean;
+    isDeploying?: boolean;
     onSelectTask: (taskId: string) => void;
     onCreateTask: () => void;
 }
@@ -20,9 +21,11 @@ export function TaskListPanel({
     currentProject,
     currentTaskId,
     isProcessing,
+    isDeploying = false,
     onSelectTask,
     onCreateTask
 }: TaskListPanelProps) {
+    const isBusy = isProcessing || isDeploying;
     const { t } = useI18n();
     const [tasks, setTasks] = useState<ProjectTask[]>([]);
     const [contextMenuTaskId, setContextMenuTaskId] = useState<string | null>(null);
@@ -246,8 +249,6 @@ export function TaskListPanel({
                                                     ? t('taskCompleted')
                                                     : task.status === 'failed'
                                                     ? t('taskFailed')
-                                                    : currentTaskId === task.id && isProcessing
-                                                    ? t('thinking')
                                                     : t('taskActive')
                                             }
                                             aria-label={
@@ -255,16 +256,14 @@ export function TaskListPanel({
                                                     ? t('taskCompleted')
                                                     : task.status === 'failed'
                                                     ? t('taskFailed')
-                                                    : currentTaskId === task.id && isProcessing
-                                                    ? t('thinking')
                                                     : t('taskActive')
                                             }
                                         >
                                             {task.status === 'completed' ? (
-                                                <CheckCircle size={18} className="text-green-500 dark:text-green-400 shrink-0 fill-green-500 dark:fill-green-400" strokeWidth={2} aria-hidden />
+                                                <CircleCheckBig size={18} className="text-green-500 dark:text-green-400 shrink-0" aria-hidden />
                                             ) : task.status === 'failed' ? (
                                                 <XCircle size={18} className="text-red-500 dark:text-red-400 shrink-0" aria-hidden />
-                                            ) : currentTaskId === task.id && isProcessing ? (
+                                            ) : currentTaskId === task.id && isBusy ? (
                                                 <Loader2 size={18} className="text-amber-500 dark:text-amber-400 animate-spin shrink-0" aria-hidden />
                                             ) : (
                                                 <Circle size={18} className="text-stone-300 dark:text-zinc-500 shrink-0" strokeWidth={2} aria-hidden />
@@ -294,7 +293,7 @@ export function TaskListPanel({
                                                     title={task.title}
                                                     className={`text-xs font-medium truncate ${
                                                         task.status === 'completed'
-                                                            ? 'text-stone-500 dark:text-zinc-400 line-through'
+                                                            ? 'text-stone-500 dark:text-zinc-400'
                                                             : task.status === 'failed'
                                                             ? 'text-stone-600 dark:text-zinc-400'
                                                             : 'text-stone-700 dark:text-zinc-300'
@@ -306,7 +305,7 @@ export function TaskListPanel({
                                             <div
                                                 className={`text-[9px] mt-0.5 flex items-center gap-1 ${
                                                     task.status === 'completed'
-                                                        ? 'text-green-600 dark:text-green-400'
+                                                        ? 'text-stone-400 dark:text-zinc-500'
                                                         : task.status === 'failed'
                                                         ? 'text-red-600 dark:text-red-400'
                                                         : 'text-stone-400 dark:text-zinc-500'
@@ -316,8 +315,6 @@ export function TaskListPanel({
                                                     <span>{t('taskCompleted')}</span>
                                                 ) : task.status === 'failed' ? (
                                                     <span>{t('taskFailed')}</span>
-                                                ) : currentTaskId === task.id && isProcessing ? (
-                                                    <span>{t('taskActive')} · {t('thinking')}</span>
                                                 ) : (
                                                     <span>{t('taskActive')}</span>
                                                 )}
