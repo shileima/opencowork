@@ -5,14 +5,12 @@ import { useI18n } from '../i18n/I18nContext';
 export function TerminalWindow() {
     const { t } = useI18n();
     const [cwd, setCwd] = useState<string>('');
-    const [windowId, setWindowId] = useState<string>('');
 
     useEffect(() => {
         const hash = window.location.hash;
         const match = hash.match(/terminal-window\?cwd=([^&]+)&windowId=([^&]+)/);
         if (match) {
             setCwd(decodeURIComponent(match[1]));
-            setWindowId(decodeURIComponent(match[2]));
         } else {
             // Fallback to home directory or current working directory from IPC
             // Try to get current project path, fallback to home directory
@@ -20,8 +18,8 @@ export function TerminalWindow() {
                 if (project?.path) {
                     setCwd(project.path);
                 } else {
-                    window.ipcRenderer.invoke('app:get-user-data-path').then((userDataPath: string) => {
-                        setCwd(userDataPath || process.env.HOME || '/');
+                    window.ipcRenderer.invoke('app:get-user-data-path').then((userDataPath: unknown) => {
+                        setCwd((userDataPath as string) || process.env.HOME || '/');
                     }).catch(() => {
                         setCwd(process.env.HOME || '/');
                     });
