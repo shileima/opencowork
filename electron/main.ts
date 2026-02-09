@@ -1810,7 +1810,17 @@ echo "  URL: \${EXPECTED_DEPLOY_URL}"
 
     sender.send('deploy:log', `Generated deploy.sh for ${projectName} v${version}\n`);
 
-    // Step 2.5: Patch vite.config to set correct base & outDir for CDN deployment
+    // Step 2.5: Generate complete vite.config for CDN deployment
+    // According to SKILL.md requirements, vite.config must include:
+    // - tailwindcss() plugin before federation
+    // - base: CDN URL
+    // - build.outDir: CDN output directory
+    // - build.assetsDir: ''
+    // - build.target: 'esnext'
+    // - build.minify: false
+    // - build.sourcemap: false
+    // - build.emptyOutDir: true
+    // - rollupOptions with complete configuration
     const cdnBase = `https://aie.sankuai.com/rdc_host/code/${projectName}/vite/${version}/`;
     const cdnOutDir = `dist/code/${projectName}/vite/${version}/`;
 
@@ -1826,87 +1836,134 @@ echo "  URL: \${EXPECTED_DEPLOY_URL}"
     }
 
     if (viteConfigPath) {
-      let viteConfigContent = fs.readFileSync(viteConfigPath, 'utf-8');
-      const originalContent = viteConfigContent;
+      const originalContent = fs.readFileSync(viteConfigPath, 'utf-8');
 
-      // Check if base and build.outDir are already correctly set
-      const hasCorrectBase = viteConfigContent.includes(cdnBase);
-      const hasCorrectOutDir = viteConfigContent.includes(cdnOutDir);
+      // Strategy: Smart patching to preserve existing plugins while ensuring SKILL.md requirements
+      let viteConfigContent = originalContent;
 
-      if (!hasCorrectBase || !hasCorrectOutDir) {
-        // Strategy: inject base and build config into defineConfig({...})
-        // Find the defineConfig call and inject/replace build config
-
-        // Remove existing base if present
-        viteConfigContent = viteConfigContent.replace(/^\s*base\s*:\s*[`'"](.*?)[`'"],?\s*$/m, '');
-
-        // Check if build section exists
-        const hasBuildSection = /build\s*:\s*\{/.test(viteConfigContent);
-
-        if (hasBuildSection) {
-          // Replace existing outDir in build section, or add it
-          if (/outDir\s*:/.test(viteConfigContent)) {
-            viteConfigContent = viteConfigContent.replace(
-              /outDir\s*:\s*[`'"](.*?)[`'"],?/,
-              `outDir: '${cdnOutDir}',`
-            );
-          } else {
-            // Add outDir to existing build section
-            viteConfigContent = viteConfigContent.replace(
-              /(build\s*:\s*\{)/,
-              `$1\n    outDir: '${cdnOutDir}',`
-            );
-          }
-          // Add/replace assetsDir
-          if (/assetsDir\s*:/.test(viteConfigContent)) {
-            viteConfigContent = viteConfigContent.replace(
-              /assetsDir\s*:\s*[`'"](.*?)[`'"],?/,
-              `assetsDir: '',`
-            );
-          } else {
-            viteConfigContent = viteConfigContent.replace(
-              /(build\s*:\s*\{)/,
-              `$1\n    assetsDir: '',`
-            );
-          }
-          // Add/replace emptyOutDir
-          if (!/emptyOutDir\s*:/.test(viteConfigContent)) {
-            viteConfigContent = viteConfigContent.replace(
-              /(build\s*:\s*\{)/,
-              `$1\n    emptyOutDir: true,`
-            );
-          }
+      // Step 1: Extract existing imports and plugins
+      const importLines: string[] = [];
+      const otherLines: string[] = [];
+      
+      originalContent.split('\n').forEach(line => {
+        if (line.trim().startsWith('import ')) {
+          importLines.push(line);
         } else {
-          // No build section, inject one before the closing of defineConfig
-          // Find the last }) or the closing of defineConfig
-          viteConfigContent = viteConfigContent.replace(
-            /(export\s+default\s+defineConfig\s*\(\s*\{)/,
-            `$1\n  build: {\n    outDir: '${cdnOutDir}',\n    target: 'esnext',\n    minify: false,\n    sourcemap: false,\n    emptyOutDir: true,\n    assetsDir: '',\n    rollupOptions: {\n      output: {\n        format: 'esm',\n        chunkFileNames: '[name].[hash].js',\n        assetFileNames: '[name].[hash].[ext]',\n        cssCodeSplit: true,\n      },\n      external: [],\n    },\n  },`
-          );
+          otherLines.push(line);
         }
+      });
 
-        // Inject base right after defineConfig({
-        viteConfigContent = viteConfigContent.replace(
-          /(export\s+default\s+defineConfig\s*\(\s*\{)/,
-          `$1\n  base: '${cdnBase}',`
-        );
+      // Step 2: Ensure required imports exist
+      const hasDefineConfig = importLines.some(l => l.includes('defineConfig'));
+      const hasTailwindImport = importLines.some(l => l.includes('@tailwindcss/vite') || l.includes('tailwindcss'));
+      const hasFederationImport = importLines.some(l => l.includes('federation'));
 
-        // Save backup of original config
-        const backupPath = viteConfigPath + '.deploy-backup';
-        fs.writeFileSync(backupPath, originalContent, 'utf-8');
-
-        // Write patched config
-        fs.writeFileSync(viteConfigPath, viteConfigContent, 'utf-8');
-
-        sender.send('deploy:log', `Patched ${path.basename(viteConfigPath)} with CDN base & outDir\n`);
-        sender.send('deploy:log', `  base: ${cdnBase}\n`);
-        sender.send('deploy:log', `  outDir: ${cdnOutDir}\n`);
-        sender.send('deploy:log', `  Backup saved to ${path.basename(viteConfigPath)}.deploy-backup\n\n`);
-      } else {
-        sender.send('deploy:log', `vite.config already has correct base & outDir, skipping patch\n\n`);
+      if (!hasDefineConfig) {
+        importLines.unshift("import { defineConfig } from 'vite'");
       }
+      if (!hasTailwindImport) {
+        sender.send('deploy:log', `⚠️  Warning: @tailwindcss/vite not imported. Add it if using Tailwind CSS.\n`);
+      }
+      if (!hasFederationImport) {
+        sender.send('deploy:log', `⚠️  Warning: Module Federation plugin not imported. Add it if needed.\n`);
+      }
+
+      // Step 3: Build the complete config with SKILL.md requirements
+      const configContent = otherLines.join('\n');
+      
+      // Remove existing base, build sections to rebuild them
+      const cleanedConfig = configContent
+        .replace(/^\s*base\s*:\s*[`'"].*?[`'"],?\s*$/gm, '')
+        .replace(/^\s*build\s*:\s*\{[\s\S]*?\n\s*\},?\s*$/gm, '');
+
+      // Find the defineConfig call and inject complete configuration
+      const defineConfigMatch = cleanedConfig.match(/(export\s+default\s+defineConfig\s*\(\s*\{)([\s\S]*?)(\}\s*\))/);
+      
+      if (defineConfigMatch) {
+        const beforeConfig = defineConfigMatch[1];
+        const existingConfig = defineConfigMatch[2];
+        const afterConfig = defineConfigMatch[3];
+
+        // Extract plugins section if exists
+        const pluginsMatch = existingConfig.match(/(plugins\s*:\s*\[[\s\S]*?\])/);
+        const pluginsSection = pluginsMatch ? pluginsMatch[0] : 'plugins: []';
+
+        // Build complete config according to SKILL.md
+        const completeConfig = `${beforeConfig}
+  // ========================================
+  // CDN Deployment Configuration (SKILL.md)
+  // ========================================
+  base: '${cdnBase}',
+  
+  ${pluginsSection},
+
+  build: {
+    outDir: '${cdnOutDir}',
+    target: 'esnext',
+    minify: false,
+    sourcemap: false,
+    emptyOutDir: true,
+    assetsDir: '', // All files at same level as index.html
+    rollupOptions: {
+      output: {
+        format: 'esm',
+        chunkFileNames: '[name].[hash].js',
+        assetFileNames: '[name].[hash].[ext]',
+        cssCodeSplit: true,
+        manualChunks: {
+          tailwind: ['tailwindcss'],
+        },
+      },
+      external: [],
+    },
+  },
+${afterConfig}`;
+
+        viteConfigContent = importLines.join('\n') + '\n\n' + completeConfig;
+      } else {
+        // Fallback: generate minimal config
+        viteConfigContent = `${importLines.join('\n')}
+
+export default defineConfig({
+  base: '${cdnBase}',
+  build: {
+    outDir: '${cdnOutDir}',
+    target: 'esnext',
+    minify: false,
+    sourcemap: false,
+    emptyOutDir: true,
+    assetsDir: '',
+    rollupOptions: {
+      output: {
+        format: 'esm',
+        chunkFileNames: '[name].[hash].js',
+        assetFileNames: '[name].[hash].[ext]',
+        cssCodeSplit: true,
+      },
+      external: [],
+    },
+  },
+})
+`;
+      }
+
+      // Save backup of original config
+      const backupPath = viteConfigPath + '.deploy-backup';
+      fs.writeFileSync(backupPath, originalContent, 'utf-8');
+
+      // Write patched config
+      fs.writeFileSync(viteConfigPath, viteConfigContent, 'utf-8');
+
+      sender.send('deploy:log', `✓ Patched vite.config with complete CDN deployment configuration\n`);
+      sender.send('deploy:log', `  base: ${cdnBase}\n`);
+      sender.send('deploy:log', `  outDir: ${cdnOutDir}\n`);
+      sender.send('deploy:log', `  assetsDir: '' (flat structure)\n`);
+      sender.send('deploy:log', `  target: esnext, minify: false, sourcemap: false\n`);
+      sender.send('deploy:log', `  rollupOptions: complete ESM configuration\n`);
+      sender.send('deploy:log', `  Backup: ${path.basename(viteConfigPath)}.deploy-backup\n\n`);
     } else {
-      sender.send('deploy:log', `Warning: No vite.config found, deploy may fail if build config is incorrect\n\n`);
+      sender.send('deploy:error', 'No vite.config found, cannot proceed with deployment');
+      return { success: false, error: 'No vite.config found' };
     }
 
     // Step 3: Execute the script
