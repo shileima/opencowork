@@ -1,12 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { BrowserWindow } from 'electron';
 
-import { FileSystemTools, ReadFileSchema, WriteFileSchema, ListDirSchema, RunCommandSchema, OpenBrowserPreviewSchema } from './tools/FileSystemTools';
+import { FileSystemTools, ReadFileSchema, WriteFileSchema, ListDirSchema, RunCommandSchema, OpenBrowserPreviewSchema, ValidatePageSchema } from './tools/FileSystemTools';
+import { ErrorDetector, DetectedError } from './tools/ErrorDetector';
+import { ErrorFixer } from './tools/ErrorFixer';
 import { SkillManager } from './skills/SkillManager';
 import { MCPClientService } from './mcp/MCPClientService';
 import { permissionManager } from './security/PermissionManager';
 import { configStore } from '../config/ConfigStore';
 import { directoryManager } from '../config/DirectoryManager';
+import { projectStore } from '../config/ProjectStore';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -555,7 +558,7 @@ export class AgentRuntime {
     }
     
 
-    private async runLoop(taskId?: string) {
+    private async runLoop(_taskId?: string) {
         let keepGoing = true;
         let iterationCount = 0;
         const MAX_ITERATIONS = 30;
@@ -571,14 +574,19 @@ export class AgentRuntime {
                 ListDirSchema,
                 RunCommandSchema,
                 OpenBrowserPreviewSchema,
+                ValidatePageSchema,
                 ...(this.skillManager.getTools() as Anthropic.Tool[]),
                 ...(await this.mcpService.getTools() as Anthropic.Tool[])
             ];
 
             // Build working directory context (Project 模式下 Primary = 当前已选项目路径)
             const authorizedFolders = permissionManager.getAuthorizedFolders();
+            const currentProject = projectStore.getCurrentProject();
+            const projectContext = currentProject 
+                ? `\n\nCURRENT PROJECT:\n- Project Name: "${currentProject.name}"\n- Project Path: ${currentProject.path}\n\n⚠️ CRITICAL: You are working INSIDE an existing project. When the user asks to create code, a website, or an application, you MUST create files directly in the current project directory (${currentProject.path}), NOT create a new project directory. Only create a NEW project if the user explicitly asks to "create a new project" or "新建项目".`
+                : '';
             const workingDirContext = authorizedFolders.length > 0
-                ? `\n\nWORKING DIRECTORY:\n- Primary (current selected project): ${authorizedFolders[0]}\n- All authorized: ${authorizedFolders.join(', ')}\n\nYou MUST primarily work within the Primary directory. When user does NOT specify a project (e.g. start/stop service), use ONLY the Primary. Always use absolute paths.`
+                ? `${projectContext}\n\nWORKING DIRECTORY:\n- Primary (current selected project): ${authorizedFolders[0]}\n- All authorized: ${authorizedFolders.join(', ')}\n\nYou MUST primarily work within the Primary directory. When user does NOT specify a project (e.g. start/stop service), use ONLY the Primary. Always use absolute paths.`
                 : '\n\nNote: No working directory has been selected yet. Ask the user to select a folder first.';
 
             const skillsDir = os.homedir() + '/.qa-cowork/skills';
@@ -619,6 +627,52 @@ You are OpenCowork, an advanced AI desktop assistant designed for efficient task
 - **Temporary Workspace**: System temp directories for intermediate processing
 - **Security**: Never access files outside authorized directories without explicit permission
 
+### Project Creation & Default Technology Stack
+When creating new projects or generating code, if the user does NOT specify a technology stack, use the following **default stack**:
+- **Framework**: React 18+ with TypeScript
+- **Build Tool**: Vite (latest version)
+- **Package Manager**: pnpm (use \`pnpm\` commands, not npm or yarn)
+- **Styling**: TailwindCSS 3.4+ for utility-first CSS
+- **UI Component Library**: Ant Design (antd) - use for professional, polished UI components
+- **UI/UX Best Practices**: 
+  - Use Ant Design components for consistent, professional UI
+  - Follow modern UI/UX principles: clean layouts, proper spacing, intuitive interactions
+  - Ensure responsive design and accessibility
+  - Use TailwindCSS for custom styling and theming
+  - Create visually appealing and well-organized interfaces
+
+**CRITICAL - Project Location Constraint**:
+- **If CURRENT PROJECT EXISTS**: You are working INSIDE an existing project. When the user asks to create code, a website, or an application, create files DIRECTLY in the current project directory. Do NOT create a new project directory. Use \`write_file\` to create files in the current project path.
+- **If NO CURRENT PROJECT** or **User explicitly asks for NEW project**: ALL new projects MUST be created in: \`~/Library/Application Support/qacowork/projects\` (use \`$HOME\` environment variable in shell commands to get the user's home directory dynamically)
+- **ALWAYS use absolute paths**: When creating NEW projects with \`pnpm create vite\` or similar commands, use the full absolute path: \`$HOME/Library/Application Support/qacowork/projects/<project-name>\` (expand \`$HOME\` to actual home directory)
+- **NEVER create projects elsewhere**: Do NOT create projects in the current working directory, home directory, or any other location. The specified directory is MANDATORY.
+- **Check react-project-builder skill**: For detailed project creation instructions, refer to the react-project-builder skill which enforces this location requirement.
+
+**CRITICAL - Code Generation Requirements**:
+- **You MUST use tools to generate code**: When the user asks to create a project, website, or application, you MUST use the \`write_file\` tool to create actual code files. Do NOT just describe what you will do—actually create the files.
+- **Complete Implementation**: Generate ALL necessary files including:
+  - Configuration files (package.json, vite.config.ts, tsconfig.json, tailwind.config.js, etc.)
+  - Source code files (src/App.tsx, src/main.tsx, src/index.css, etc.)
+  - Component files and any other required files
+- **Execution Steps**:
+  - **If CURRENT PROJECT EXISTS**: Create files directly in the current project directory using \`write_file\`. Then use \`run_command\` to install dependencies (\`pnpm install\`) and start the dev server (\`pnpm dev\`) in the current project directory.
+  - **If creating NEW project**: After creating files, use \`run_command\` to:
+    1. Initialize the project in the MANDATORY directory: \`cd "/Users/shilei/Library/Application Support/qacowork/projects" && pnpm create vite <project-name> --template react-ts\`
+    2. Navigate to project: \`cd "/Users/shilei/Library/Application Support/qacowork/projects/<project-name>"\`
+    3. Install dependencies (\`pnpm install\`)
+    4. Start the development server (\`pnpm dev\`)
+- **No Text-Only Responses**: If the user asks to create something, your response MUST include tool calls. A text-only response without tool calls is NOT acceptable for project creation tasks.
+
+**Important**: 
+- Always use \`pnpm\` as the package manager (e.g., \`pnpm create vite\`, \`pnpm install\`, \`pnpm dev\`)
+- Install Ant Design: \`pnpm add antd\`
+- Configure TailwindCSS properly with PostCSS
+- Use Ant Design components for forms, tables, buttons, modals, etc.
+- Combine Ant Design with TailwindCSS for custom styling needs
+- Ensure the project structure is clean and follows best practices
+
+**When to deviate**: Only use a different stack if the user explicitly specifies it (e.g., "use Next.js", "use Vue", "use npm instead of pnpm").
+
 ### Tool Usage Protocol
 1. **Skills First**: Before any task, check for relevant skills in \`${skillsDir}\`
 2. **MCP Integration**: Leverage available MCP servers for enhanced capabilities
@@ -626,7 +680,33 @@ You are OpenCowork, an advanced AI desktop assistant designed for efficient task
 
 ### Development Server & Browser Preview
 When starting or stopping a dev server, **always use the Primary Working Directory** (current selected project). Do NOT look in other directories (e.g. ~/.qa-cowork) for projects—use the Primary path directly.
-When you start a local development server (e.g., \`npm run dev\`, \`pnpm dev\`, \`yarn dev\`), **always call \`open_browser_preview\`** with the preview URL to show the user the result in the built-in browser tab. **Development servers are always started on port 3000** (Vite, CRA, Next.js, etc.). Use **http://localhost:3000** for open_browser_preview and when answering questions about the dev server port.
+When you start a local development server (e.g., \`npm run dev\`, \`pnpm dev\`, \`yarn dev\`), follow these steps:
+
+1. **Start the dev server** using \`run_command\`
+2. **Open browser preview** using \`open_browser_preview\` with the preview URL (usually http://localhost:3000)
+3. **CRITICAL - Validate the page**: ~~After opening browser preview, **IMMEDIATELY call \`validate_page\`** with the preview URL to check for errors. This is MANDATORY and cannot be skipped.~~ (Temporarily disabled to avoid false positives)
+4. **Auto-heal if errors found**: ~~If \`validate_page\` reports ANY errors:~~ (Temporarily disabled)
+   - **Parse the error message** to identify the exact issue:
+     - If you see "Failed to resolve import" or "@ant-design/icons" or similar: This means a dependency is missing
+     - Extract the package name from the error (e.g., "@ant-design/icons" from "Failed to resolve import '@ant-design/icons'")
+     - If you see "require is not defined": This means code is using Node.js \`require()\` syntax in browser context. Fix by:
+       1. Find the file causing the error (check error stack trace for file path)
+       2. Replace \`require()\` with ES6 \`import\` statements
+       3. For example: \`const something = require('module')\` → \`import something from 'module'\`
+       4. For default exports: \`const module = require('module')\` → \`import module from 'module'\`
+       5. For named exports: \`const { func } = require('module')\` → \`import { func } from 'module'\`
+   - **Automatically fix the issue**:
+     - **If missing dependency**: Install it IMMEDIATELY using \`run_command\` (e.g., \`pnpm add @ant-design/icons\`). Do NOT skip this step.
+     - **If "require is not defined"**: Read the file mentioned in the error, convert all \`require()\` to \`import\` statements, and write the fixed code using \`write_file\`
+     - If import error: Fix the import statement in the code file using \`write_file\`
+     - If syntax error: Fix the code using \`write_file\`
+   - **Restart the dev server**: Stop the current server (kill process on port 3000) and start it again using \`run_command\`
+   - **Re-validate**: ~~Call \`validate_page\` again with the same URL to check if the error is fixed~~ (Temporarily disabled)
+   - **Repeat until success**: ~~Continue fixing and restarting until \`validate_page\` returns "✅ Page validation successful"~~ (Temporarily disabled)
+   - **DO NOT give up**: Keep trying until validation succeeds. Missing dependencies and require/import issues are common and easy to fix.
+5. **Only mark as done when validation succeeds**: ~~Do NOT mark the task as complete, do NOT say "服务器正常运行" (server is running normally), and do NOT say "成功创建" (successfully created) until \`validate_page\` explicitly returns "✅ Page validation successful". If you see ANY error in validate_page response, you MUST fix it.~~ (Temporarily disabled - validation check removed)
+
+**Development servers are always started on port 3000** (Vite, CRA, Next.js, etc.). Use **http://localhost:3000** for open_browser_preview and validate_page.
 
 ### Closing/Stopping Local Services (CRITICAL)
 When the user asks to close/stop a service **without specifying which one** (e.g. "关闭服务", "关闭本地服务", "stop the server"):
@@ -873,12 +953,15 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
 
                                     if (approved) {
                                         result = await this.fsTools.runCommand(args, defaultCwd);
-                                        // 开发服务器启动后自动打开内置浏览器并导航到预览地址，并标记任务完成（聊天显示完成态）
+                                        // 开发服务器启动后自动打开内置浏览器并导航到预览地址
                                         if (result.includes('[Dev server started in background]')) {
                                             const urlMatch = result.match(/Preview URL:\s*(https?:\/\/\S+)/);
                                             const previewUrl = urlMatch?.[1]?.trim() || 'http://localhost:3000';
                                             this.broadcast('agent:open-browser-preview', previewUrl);
-                                            this.broadcast('agent:done', { timestamp: Date.now(), taskId }, taskId);
+                                            
+                                            // 自动错误检测和修复循环
+                                            const workingDir = args.cwd || defaultCwd;
+                                            await this.autoFixErrors(workingDir, previewUrl, 5);
                                         }
                                     } else {
                                         result = 'User denied the command execution.';
@@ -895,6 +978,9 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         this.broadcast('agent:open-browser-preview', url);
                                         result = `Opened browser preview tab with URL: ${url}`;
                                     }
+                                } else if (toolUse.name === 'validate_page') {
+                                    const args = toolUse.input as { url: string; timeout?: number };
+                                    result = await this.fsTools.validatePage(args);
                                 } else {
                                     const skillInfo = this.skillManager.getSkillInfo(toolUse.name);
                                     console.log(`[Runtime] Skill ${toolUse.name} info found? ${!!skillInfo} (len: ${skillInfo?.instructions?.length})`);
@@ -967,7 +1053,44 @@ ${skillInfo.instructions}
                         this.history.push({ role: 'user', content: toolResults });
                         this.notifyUpdate();
                     } else {
-                        keepGoing = false;
+                        // 如果没有工具调用，检查是否是项目创建/代码生成任务
+                        // 如果是，应该继续循环让AI有机会调用工具
+                        // 查找最后一条用户消息（跳过tool_result消息）
+                        let lastUserMessage: Anthropic.MessageParam | null = null;
+                        for (let i = this.history.length - 1; i >= 0; i--) {
+                            if (this.history[i].role === 'user') {
+                                lastUserMessage = this.history[i];
+                                break;
+                            }
+                        }
+                        
+                        const userMessageText = lastUserMessage 
+                            ? (typeof lastUserMessage.content === 'string' 
+                                ? lastUserMessage.content 
+                                : Array.isArray(lastUserMessage.content)
+                                    ? lastUserMessage.content.map((c: any) => c.type === 'text' ? c.text : '').join(' ')
+                                    : '')
+                            : '';
+                        
+                        const isProjectCreationRequest = userMessageText && (
+                            (/创建|生成|建立|新建|build|create|generate|make/i.test(userMessageText) &&
+                            (/项目|网站|应用|project|website|app|application/i.test(userMessageText))) ||
+                            (/代码|code|file|文件/i.test(userMessageText) && /生成|create|write|创建/i.test(userMessageText))
+                        );
+                        
+                        if (isProjectCreationRequest && iterationCount < 5) {
+                            // 如果是项目创建请求但AI没有调用工具，继续循环（最多5次）
+                            console.log(`[AgentRuntime] Project creation request detected but no tools called, continuing loop (iteration ${iterationCount}/${MAX_ITERATIONS})`);
+                            // 添加提示消息，引导AI使用工具
+                            this.history.push({
+                                role: 'user',
+                                content: '[SYSTEM REMINDER] You need to use tools (write_file, run_command) to actually create the project files and initialize the project. Please use the available tools to generate code files. Do NOT just describe what you will do—actually create the files using write_file tool.'
+                            });
+                            this.notifyUpdate();
+                            // 继续循环，不设置 keepGoing = false
+                        } else {
+                            keepGoing = false;
+                        }
                     }
                 } else {
                     keepGoing = false;
@@ -1122,6 +1245,87 @@ ${skillInfo.instructions}
         this.isProcessing = false;
         this.abortController = null;
     }
+    /**
+     * 自动错误检测和修复循环
+     */
+    private async autoFixErrors(cwd: string, url: string, maxRetries: number = 5): Promise<void> {
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            // 等待服务器稳定
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            
+            // 验证页面
+            const validationResult = await this.fsTools.validatePage({ url, cwd, timeout: 15000 });
+            
+            // 如果验证成功，退出循环
+            if (validationResult.includes('✅ Page validation successful')) {
+                console.log(`[AgentRuntime] Page validation successful after ${attempt} fix attempt(s)`);
+                return;
+            }
+            
+            // 解析错误
+            const errors = this.parseErrorsFromValidation(validationResult, cwd);
+            const fixableErrors = errors.filter(e => e.fixable);
+            
+            if (fixableErrors.length === 0) {
+                console.log(`[AgentRuntime] No fixable errors found, stopping auto-fix loop`);
+                break;
+            }
+            
+            console.log(`[AgentRuntime] Attempt ${attempt + 1}/${maxRetries}: Found ${fixableErrors.length} fixable error(s)`);
+            
+            // 修复错误
+            let fixed = false;
+            for (const error of fixableErrors) {
+                const fixResult = await ErrorFixer.fixError(error, cwd);
+                if (fixResult.success) {
+                    console.log(`[AgentRuntime] Fixed error: ${fixResult.message}`);
+                    fixed = true;
+                } else {
+                    console.log(`[AgentRuntime] Failed to fix error: ${fixResult.message}`);
+                }
+            }
+            
+            // 如果没有修复任何错误，退出循环
+            if (!fixed) {
+                console.log(`[AgentRuntime] No errors were fixed, stopping auto-fix loop`);
+                break;
+            }
+            
+            // 等待修复生效（依赖安装等需要时间）
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+    }
+
+    /**
+     * 从验证结果中解析错误
+     */
+    private parseErrorsFromValidation(validationResult: string, cwd: string): DetectedError[] {
+        const errors: DetectedError[] = [];
+        
+        // 从验证结果中提取错误信息
+        if (validationResult.includes('Errors detected:')) {
+            const errorSection = validationResult.split('Errors detected:')[1]?.split('\n\n')[0] || '';
+            
+            // 检测依赖缺失错误
+            const missingDepMatches = errorSection.matchAll(/Failed to resolve import\s+["']([^"']+)["']/gi);
+            for (const match of missingDepMatches) {
+                const importPath = match[1];
+                const errorsFromText = ErrorDetector.detectFromOutput(`Failed to resolve import "${importPath}"`, cwd);
+                errors.push(...errorsFromText);
+            }
+            
+            // 检测模块未找到错误
+            const moduleNotFoundMatches = errorSection.matchAll(/Cannot find module\s+["']([^"']+)["']/gi);
+            for (const match of moduleNotFoundMatches) {
+                const importPath = match[1];
+                const errorsFromText = ErrorDetector.detectFromOutput(`Cannot find module "${importPath}"`, cwd);
+                errors.push(...errorsFromText);
+            }
+        }
+        
+        return errors;
+    }
+
     public dispose() {
         this.abort();
         this.mcpService.dispose();

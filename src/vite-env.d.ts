@@ -15,3 +15,9 @@ declare global {
         platform: NodeJS.Platform
     }
 }
+
+declare namespace JSX {
+    interface IntrinsicElements {
+        webview: Record<string, unknown>;
+    }
+}

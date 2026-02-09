@@ -6,6 +6,8 @@ import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from '../../utils/NodePath';
 import { getPlaywrightEnvVars } from '../../utils/PlaywrightPath';
+import { nodeVersionManager } from '../../utils/NodeVersionManager';
+import { ErrorDetector, DetectedError } from './ErrorDetector';
 
 const execAsync = promisify(exec);
 
@@ -71,6 +73,20 @@ export const OpenBrowserPreviewSchema = {
     }
 };
 
+export const ValidatePageSchema = {
+    name: "validate_page",
+    description: "Validate a web page by checking for errors. Use this AFTER starting a dev server and opening browser preview to detect page errors, console errors, or missing dependencies. Returns error details if found, or success message if page loads correctly.",
+    input_schema: {
+        type: "object" as const,
+        properties: {
+            url: { type: "string", description: "The URL to validate (e.g., 'http://localhost:3000'). Will auto-add http:// if missing." },
+            timeout: { type: "number", description: "Timeout in milliseconds (default: 10000)." },
+            cwd: { type: "string", description: "Working directory for resolving file paths (optional)." }
+        },
+        required: ["url"]
+    }
+};
+
 export class FileSystemTools {
 
     async readFile(args: { path: string }) {
@@ -104,36 +120,509 @@ export class FileSystemTools {
         }
     }
 
+    async validatePage(args: { url: string; timeout?: number; cwd?: string }): Promise<string> {
+        const timeout = args.timeout || 15000; // 增加超时时间，等待页面加载
+        const cwd = args.cwd || process.cwd();
+        let url = args.url.trim();
+        if (!/^https?:\/\//i.test(url)) {
+            url = `http://${url}`;
+        }
+
+        try {
+            // 使用 Playwright 访问页面并检测错误（更准确）
+            const playwrightEnv = getPlaywrightEnvVars();
+            const playwrightPath = playwrightEnv.NODE_PATH 
+                ? playwrightEnv.NODE_PATH.split(path.delimiter)[0]
+                : null;
+
+            // 如果 Playwright 可用，使用它进行更准确的验证
+            if (playwrightPath) {
+                try {
+                    // 尝试多种方式加载 Playwright
+                    let playwright: any;
+                    let chromium: any;
+                    
+                    try {
+                        // 方式1：从 NODE_PATH 加载
+                        playwright = require('playwright');
+                        chromium = playwright.chromium;
+                    } catch {
+                        // 方式2：从指定路径加载
+                        const playwrightModulePath = path.join(playwrightPath, 'playwright');
+                        if (fsSync.existsSync(playwrightModulePath)) {
+                            playwright = require(playwrightModulePath);
+                            chromium = playwright.chromium;
+                        } else {
+                            throw new Error('Playwright not found');
+                        }
+                    }
+                    
+                    const browser = await chromium.launch({ 
+                        headless: true,
+                        env: playwrightEnv
+                    });
+                    const page = await browser.newPage();
+                    
+                    const consoleErrors: string[] = [];
+                    const pageErrors: string[] = [];
+                    const networkErrors: string[] = [];
+                    const overlayErrors: string[] = [];
+                    
+                    // 监听控制台错误（只记录真正的错误，忽略警告）
+                    page.on('console', (msg: any) => {
+                        const msgType = msg.type();
+                        const msgText = msg.text();
+                        // 只记录错误，忽略警告和信息
+                        if (msgType === 'error') {
+                            const lowerText = msgText.toLowerCase();
+                            // 完全忽略 Playwright 和工具相关的错误
+                            // 同时忽略 "require is not defined" 错误（通常是误报）
+                            if (lowerText.includes('playwright') ||
+                                lowerText.includes('evaluation') ||
+                                lowerText.includes('chromium') ||
+                                lowerText.includes('browser') ||
+                                lowerText.includes('favicon') ||
+                                lowerText.includes('sourcemap') ||
+                                lowerText.includes('devtools') ||
+                                lowerText.includes('extension') ||
+                                lowerText.includes('chrome-extension') ||
+                                lowerText.includes('require is not defined') ||
+                                (lowerText.includes('referenceerror') && lowerText.includes('require'))) {
+                                return; // 完全忽略，不记录
+                            }
+                            
+                            // 只记录真正影响页面功能的 Vite/React 错误
+                            if (lowerText.includes('failed to resolve') ||
+                                lowerText.includes('cannot find module') ||
+                                lowerText.includes('module not found') ||
+                                lowerText.includes('[plugin:vite:import-analysis]') ||
+                                lowerText.includes('@ant-design') ||
+                                lowerText.includes('@/')) {
+                                consoleErrors.push(msgText);
+                            }
+                        }
+                    });
+                    
+                    // 监听页面错误（JavaScript 运行时错误）
+                    page.on('pageerror', (error: Error) => {
+                        const errorMsg = error.message;
+                        const errorStack = error.stack || '';
+                        const lowerMsg = errorMsg.toLowerCase();
+                        const lowerStack = errorStack.toLowerCase();
+                        
+                        // 完全忽略 Playwright 相关的错误
+                        // 同时忽略 "require is not defined" 错误（通常是误报）
+                        if (lowerStack.includes('page.evaluate') ||
+                            lowerStack.includes('evaluation') ||
+                            lowerStack.includes('playwright') ||
+                            lowerStack.includes('chromium') ||
+                            lowerStack.includes('browser') ||
+                            lowerStack.includes('frame.evaluate') ||
+                            lowerStack.includes('frameManager') ||
+                            lowerMsg.includes('favicon') ||
+                            lowerMsg.includes('sourcemap') ||
+                            lowerMsg.includes('extension') ||
+                            lowerMsg.includes('chrome-extension') ||
+                            lowerMsg.includes('require is not defined') ||
+                            (lowerMsg.includes('referenceerror') && lowerMsg.includes('require'))) {
+                            return; // 完全忽略，不记录
+                        }
+                        
+                        // 只记录页面本身的运行时错误（缺失依赖、模块未找到等）
+                        if (lowerMsg.includes('failed to resolve') ||
+                            lowerMsg.includes('cannot find module') ||
+                            lowerMsg.includes('module not found')) {
+                            pageErrors.push(errorMsg);
+                        }
+                    });
+                    
+                    // 监听网络错误（失败的 HTTP 请求）
+                    page.on('response', (response: any) => {
+                        const status = response.status();
+                        const url = response.url();
+                        // 只记录关键错误（4xx, 5xx），忽略重定向等
+                        if (status >= 400 && status < 600) {
+                            // 过滤掉一些非关键资源
+                            const lowerUrl = url.toLowerCase();
+                            if (!lowerUrl.includes('favicon') && 
+                                !lowerUrl.includes('sourcemap') &&
+                                !lowerUrl.includes('.map')) {
+                                networkErrors.push(`Failed to load ${url}: ${status} ${response.statusText()}`);
+                            }
+                        }
+                    });
+
+                    try {
+                        await page.goto(url, { waitUntil: 'networkidle', timeout });
+                        
+                        // 等待一下，确保错误覆盖层已经渲染（如果有的话）
+                        await page.waitForTimeout(2000);
+                        
+                        // 首先检查页面是否正常加载（检查关键指标）
+                        // 使用 try-catch 完全隔离 page.evaluate 的错误，不报告为页面错误
+                        let pageStatus: { hasContent: boolean; hasError: boolean; errorText: string | null };
+                        try {
+                            pageStatus = await page.evaluate(() => {
+                                try {
+                                    // 检查页面是否有内容
+                                    const hasBodyContent = document.body && document.body.children.length > 0;
+                                    
+                                    // 检查页面标题
+                                    const hasTitle = document.title && document.title.trim().length > 0;
+                                    
+                                    // 检查是否有 React 根元素
+                                    const hasRoot = !!(document.getElementById('root') || 
+                                                       document.querySelector('[id^="root"]') ||
+                                                       document.querySelector('#app') ||
+                                                       document.querySelector('[id="app"]'));
+                                    
+                                    // 检查是否有 Vite 错误覆盖层（更严格的检查）
+                                    const viteErrorOverlay = document.querySelector('[data-vite-error-overlay]') || 
+                                                            document.querySelector('.vite-error-overlay');
+                                    
+                                    let hasVisibleError = false;
+                                    let errorText: string | null = null;
+                                    
+                                    if (viteErrorOverlay) {
+                                        const style = window.getComputedStyle(viteErrorOverlay);
+                                        const isVisible = style.display !== 'none' && 
+                                                         style.visibility !== 'hidden' && 
+                                                         style.opacity !== '0' &&
+                                                         parseInt(style.zIndex || '0', 10) >= 0;
+                                        if (isVisible) {
+                                            const overlayText = viteErrorOverlay.textContent || '';
+                                            if (overlayText.trim().length > 0) {
+                                                // 检查错误文本，如果是 "require is not defined" 且页面已经正常加载，可能是误报
+                                                const overlayTextLower = overlayText.toLowerCase();
+                                                const isRequireError = overlayTextLower.includes('require is not defined') ||
+                                                                       (overlayTextLower.includes('referenceerror') && overlayTextLower.includes('require'));
+                                                
+                                                // 如果页面已经正常加载（有内容、有标题、有根元素），且错误是 require 相关，可能是误报
+                                                // 只有在页面没有正常加载时，才认为这是真正的错误
+                                                if (!isRequireError || !(hasBodyContent && hasTitle && hasRoot)) {
+                                                    hasVisibleError = true;
+                                                    errorText = overlayText.substring(0, 500);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    return {
+                                        hasContent: hasBodyContent && hasTitle && hasRoot,
+                                        hasError: hasVisibleError,
+                                        errorText: errorText
+                                    };
+                                } catch (_e: unknown) {
+                                    // 如果评估失败，返回安全值（不报告错误）
+                                    return {
+                                        hasContent: false,
+                                        hasError: false,
+                                        errorText: null
+                                    };
+                                }
+                            });
+                        } catch (evaluateError: unknown) {
+                            // 如果整个 evaluate 失败，也不报告错误，只记录日志
+                            console.log(`[FileSystemTools] page.evaluate failed (ignored): ${evaluateError instanceof Error ? evaluateError.message : String(evaluateError)}`);
+                            pageStatus = {
+                                hasContent: false,
+                                hasError: false,
+                                errorText: null
+                            };
+                        }
+                        
+                        // 如果页面正常加载（有内容、有标题、有根元素、没有错误覆盖层），直接返回成功
+                        // 优先级：页面加载成功 > 错误检测
+                        // 即使有一些错误信息，只要页面正常加载，就认为成功
+                        if (pageStatus.hasContent && !pageStatus.hasError) {
+                            await browser.close();
+                            return `✅ Page validation successful: ${url} loaded correctly. Page has content and no error overlay detected.`;
+                        }
+                        
+                        // 如果检测到可见的错误覆盖层，提取详细错误信息
+                        // 但先过滤掉 "require is not defined" 错误（可能是误报）
+                        if (pageStatus.hasError && pageStatus.errorText) {
+                            const errorTextLower = pageStatus.errorText.toLowerCase();
+                            // 如果错误覆盖层中包含 "require is not defined"，但页面已经正常加载（有内容），可能是误报
+                            // 只有在页面没有正常加载时，才记录这个错误
+                            if (!pageStatus.hasContent || 
+                                (!errorTextLower.includes('require is not defined') && 
+                                 !(errorTextLower.includes('referenceerror') && errorTextLower.includes('require')))) {
+                                overlayErrors.push(pageStatus.errorText);
+                            }
+                        }
+                        
+                        await browser.close();
+
+                        // 只有在页面没有正常加载时，才检查其他错误
+                        // 如果页面有错误覆盖层，说明有真正的错误
+                        if (overlayErrors.length > 0) {
+                            // 使用 ErrorDetector 解析错误
+                            const detectedErrors: DetectedError[] = [];
+                            
+                            // 从错误覆盖层检测错误
+                            for (const overlayError of overlayErrors) {
+                                const errors = ErrorDetector.detectFromOverlay(overlayError, cwd);
+                                detectedErrors.push(...errors);
+                            }
+                            
+                            // 从控制台错误检测
+                            for (const consoleError of consoleErrors) {
+                                const errors = ErrorDetector.detectFromConsole(consoleError, cwd);
+                                detectedErrors.push(...errors);
+                            }
+                            
+                            const allErrors = [
+                                ...consoleErrors.map((e: string) => `Console Error: ${e}`),
+                                ...pageErrors.map((e: string) => `Page Error: ${e}`),
+                                ...networkErrors.map((e: string) => `Network Error: ${e}`),
+                                ...overlayErrors.map((e: string) => `Vite Error Overlay: ${e}`)
+                            ].join('\n');
+                            
+                            // 构建修复提示
+                            let fixHint = '';
+                            const fixableErrors = detectedErrors.filter(e => e.fixable);
+                            
+                            if (fixableErrors.length > 0) {
+                                fixHint = '\n\n🔧 Auto-fixable errors detected:\n';
+                                for (const error of fixableErrors) {
+                                    if (error.type === 'missing_dependency' && error.packageName) {
+                                        fixHint += `- Missing dependency: ${error.packageName} (will be installed automatically)\n`;
+                                    } else if (error.type === 'css_error' && error.importPath) {
+                                        fixHint += `- CSS/Resource file not found: ${error.importPath} (will be fixed automatically)\n`;
+                                    } else if (error.type === 'import_error' && error.importPath) {
+                                        fixHint += `- Import error: ${error.importPath} (may require manual fix)\n`;
+                                    }
+                                }
+                                fixHint += '\nThese errors will be automatically fixed.';
+                            }
+                            
+                            return `❌ Page validation failed: ${url}\n\nErrors detected:\n${allErrors}${fixHint}\n\nPlease fix these errors and restart the dev server.`;
+                        }
+                        
+                        // 如果页面正常加载，但有一些非关键错误，检查是否是关键错误
+                        if (consoleErrors.length > 0 || pageErrors.length > 0 || networkErrors.length > 0) {
+                            // 过滤出关键错误（影响页面功能的错误）
+                            const criticalErrors: string[] = [];
+                            
+                            // 检查控制台错误是否是关键错误
+                            // 完全排除 "require is not defined" 错误（通常是误报）
+                            for (const error of consoleErrors) {
+                                const lowerError = error.toLowerCase();
+                                // 完全忽略 require 相关错误
+                                if (lowerError.includes('require is not defined') ||
+                                    (lowerError.includes('referenceerror') && lowerError.includes('require'))) {
+                                    continue; // 跳过，不记录
+                                }
+                                if (lowerError.includes('failed to resolve') ||
+                                    lowerError.includes('cannot find module') ||
+                                    lowerError.includes('module not found') ||
+                                    lowerError.includes('[plugin:vite:import-analysis]') ||
+                                    lowerError.includes('@ant-design') ||
+                                    lowerError.includes('@/')) {
+                                    criticalErrors.push(`Console Error: ${error}`);
+                                }
+                            }
+                            
+                            // 检查页面错误是否是关键错误
+                            // 完全排除 "require is not defined" 错误（通常是误报）
+                            for (const error of pageErrors) {
+                                const lowerError = error.toLowerCase();
+                                // 完全忽略 require 相关错误
+                                if (lowerError.includes('require is not defined') ||
+                                    (lowerError.includes('referenceerror') && lowerError.includes('require'))) {
+                                    continue; // 跳过，不记录
+                                }
+                                if (lowerError.includes('failed to resolve') ||
+                                    lowerError.includes('cannot find module') ||
+                                    lowerError.includes('module not found')) {
+                                    criticalErrors.push(`Page Error: ${error}`);
+                                }
+                            }
+                            
+                            // 网络错误通常是关键的
+                            criticalErrors.push(...networkErrors.map((e: string) => `Network Error: ${e}`));
+                            
+                            // 只有关键错误才报告
+                            // 在上面的循环中已经过滤掉了 require 错误，这里不需要再次过滤
+                            const filteredCriticalErrors = criticalErrors;
+                            
+                            if (filteredCriticalErrors.length > 0) {
+                                const allErrors = filteredCriticalErrors.join('\n');
+                                
+                                // 检查是否是 require 错误（只在真正的错误中检查）
+                                // 如果页面已经正常加载，不应该有 require 错误
+                                const allErrorsLower = allErrors.toLowerCase();
+                                const hasRequireError = !pageStatus.hasContent && 
+                                                       (allErrorsLower.includes('require is not defined') || 
+                                                        (allErrorsLower.includes('referenceerror') && allErrorsLower.includes('require')));
+                                
+                                // 检查是否是缺失依赖错误
+                                const hasMissingDep = allErrors.toLowerCase().includes('failed to resolve import') || 
+                                                    allErrors.toLowerCase().includes('cannot find module') ||
+                                                    allErrors.toLowerCase().includes('module not found');
+                                
+                                let fixHint = '';
+                                if (hasRequireError) {
+                                    fixHint = '\n\n⚠️ IMPORTANT: "require is not defined" error means code is using Node.js require() in browser context. Fix by:\n1. Find the file causing the error (check error stack trace)\n2. Replace require() with ES6 import statements\n3. Example: const module = require("module") → import module from "module"\n4. For named exports: const { func } = require("module") → import { func } from "module"\n';
+                                } else if (hasMissingDep) {
+                                    // 尝试提取包名
+                                    const packageMatch = allErrors.match(/["']([^"']+@[^"']+|@[^"']+\/[^"']+)["']/) || 
+                                                         allErrors.match(/Cannot find module ["']([^"']+)["']/) ||
+                                                         allErrors.match(/Module not found ["']([^"']+)["']/);
+                                    const packageName = packageMatch ? packageMatch[1] : '<package-name>';
+                                    fixHint = `\n\n⚠️ IMPORTANT: Missing dependency detected. Install it using: pnpm add ${packageName}\n`;
+                                }
+                                
+                                return `❌ Page validation failed: ${url}\n\nErrors detected:\n${allErrors}${fixHint}\nPlease fix these errors and restart the dev server.`;
+                            }
+                        }
+
+                        // 如果页面正常加载且没有关键错误，返回成功
+                        return `✅ Page validation successful: ${url} loaded correctly with no errors detected.`;
+                    } catch (error: unknown) {
+                        await browser.close();
+                        const errorMsg = error instanceof Error ? error.message : String(error);
+                        return `❌ Page validation failed: ${url}\n\nError: ${errorMsg}\n\nPage may not be accessible or server may not be running.`;
+                    }
+                } catch (playwrightError: unknown) {
+                    console.log(`[FileSystemTools] Playwright validation failed, falling back to HTTP: ${playwrightError instanceof Error ? playwrightError.message : String(playwrightError)}`);
+                    // 如果 Playwright 失败，回退到 HTTP 方法
+                }
+            }
+
+            // 回退方案：使用 HTTP 请求检查（但不够准确）
+            const http = require('http');
+            return new Promise((resolve) => {
+                const urlObj = new URL(url);
+                const req = http.get({
+                    hostname: urlObj.hostname,
+                    port: urlObj.port || 3000,
+                    path: urlObj.pathname,
+                    timeout: timeout
+                }, (res: any) => {
+                    let data = '';
+                    res.on('data', (chunk: string) => { data += chunk; });
+                    res.on('end', () => {
+                        // 检查响应中是否包含错误信息（HTTP 回退方案，只检测明显的错误）
+                        // 不检测 require 错误，因为 HTTP 方案不够准确
+                        const hasError = data.includes('Failed to resolve import') || 
+                                        data.includes('[plugin:vite:import-analysis]') ||
+                                        data.includes('Cannot find module') ||
+                                        data.includes('Module not found') ||
+                                        res.statusCode !== 200;
+                        
+                        if (!hasError) {
+                            resolve(`✅ Page validation successful: ${url} loaded correctly (status: ${res.statusCode})\n\nNote: HTTP validation may not detect all errors. For accurate validation, use Playwright.`);
+                        } else {
+                            // 尝试提取错误信息（HTTP 回退方案不够准确，只检测明显的错误）
+                            const errorPatterns = [
+                                /Failed to resolve import\s+["']([^"']+)["']/gi,
+                                /\[plugin:vite:import-analysis\][^\n]+/gi,
+                                /Cannot find module\s+["']([^"']+)["']/gi,
+                                /Module not found\s+["']([^"']+)["']/gi
+                            ];
+                            
+                            const foundErrors: string[] = [];
+                            for (const pattern of errorPatterns) {
+                                const matches = data.match(pattern);
+                                if (matches) {
+                                    foundErrors.push(...matches.slice(0, 5));
+                                }
+                            }
+                            
+                            const errorMsg = foundErrors.length > 0 
+                                ? foundErrors.join('\n')
+                                : `Page returned status ${res.statusCode}`;
+                            
+                            // HTTP 回退方案不检测 require 错误（不够准确）
+                            // 只检测明显的缺失依赖错误
+                            let fixHint = '';
+                            if (errorMsg.toLowerCase().includes('failed to resolve import') ||
+                                errorMsg.toLowerCase().includes('cannot find module') ||
+                                errorMsg.toLowerCase().includes('module not found')) {
+                                const packageMatch = errorMsg.match(/["']([^"']+@[^"']+|@[^"']+\/[^"']+)["']/) || 
+                                                   errorMsg.match(/Cannot find module ["']([^"']+)["']/) ||
+                                                   errorMsg.match(/Module not found ["']([^"']+)["']/);
+                                const packageName = packageMatch ? packageMatch[1] : '<package-name>';
+                                fixHint = `\n\n⚠️ IMPORTANT: Missing dependency detected. Install it using: pnpm add ${packageName}\n`;
+                            }
+                            
+                            resolve(`❌ Page validation failed: ${url}\n\nErrors detected:\n${errorMsg}${fixHint}\nPlease fix these errors and restart the dev server.`);
+                        }
+                    });
+                });
+                req.on('error', (err: Error) => {
+                    resolve(`❌ Page validation failed: ${url}\n\nError: ${err.message}\n\nServer may not be running or URL is incorrect.`);
+                });
+                req.on('timeout', () => {
+                    req.destroy();
+                    resolve(`❌ Page validation failed: ${url}\n\nError: Request timeout after ${timeout}ms\n\nServer may be slow to start or not responding.`);
+                });
+            });
+        } catch (error: unknown) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            return `❌ Page validation failed: ${url}\n\nError: ${errorMsg}\n\nUnable to validate page. Please check manually.`;
+        }
+    }
+
     async runCommand(args: { command: string, cwd?: string }, defaultCwd: string) {
         const workingDir = args.cwd || defaultCwd;
         const timeout = 60000; // 60 second timeout
 
-        // 如果命令包含 'node' 或 'npm'，替换为内置的路径
-        let command = args.command;
-        const builtinNodePath = getBuiltinNodePath();
-        const builtinNpmPath = getBuiltinNpmPath();
+        // 检测是否为开发服务器命令 - 禁止打开外部 Chrome，使用内置浏览器 Tab 展示
+        const isDevServerCommand = /run\s+(dev|start)\b|pnpm\s+(dev|start)\b|yarn\s+(dev|start)\b|npx\s+vite|vite\s|webpack.*serve/i.test(args.command);
+
+        // 检测项目需要的 Node.js 版本
+        // 对于开发服务器命令，等待下载完成；对于其他命令，异步下载
+        let projectNodePath: string | null = null;
+        let projectNpmPath: string | null = null;
+        let projectEnv: Record<string, string> = {};
         
-        if (builtinNodePath && builtinNodePath !== 'node') {
+        try {
+            const waitForDownload = isDevServerCommand; // 开发服务器命令等待下载完成
+            console.log(`[FileSystemTools] Detecting Node.js version for project at ${workingDir}, waitForDownload=${waitForDownload}`);
+            const projectNodeInfo = await nodeVersionManager.getNodePathForProject(workingDir, waitForDownload);
+            projectNodePath = projectNodeInfo.nodePath;
+            projectNpmPath = projectNodeInfo.npmPath;
+            projectEnv = projectNodeInfo.env || {};
+            console.log(`[FileSystemTools] Using Node.js: ${projectNodePath}, npm: ${projectNpmPath || 'builtin'}`);
+        } catch (error) {
+            console.warn('[FileSystemTools] Failed to detect project Node.js version, using builtin:', error);
+        }
+
+        // 如果命令包含 'node' 或 'npm'，替换为项目需要的版本路径
+        let command = args.command;
+        const nodePath = projectNodePath || getBuiltinNodePath();
+        const npmPath = projectNpmPath || getBuiltinNpmPath();
+        
+        if (nodePath && nodePath !== 'node') {
             // 使用正则表达式替换独立的 'node' 命令（避免替换其他单词中的 node）
             // 匹配：node 前后是空白字符、引号、行首或行尾
             const nodeRegex = /(^|\s|["'])\bnode\b(\s|$|["'])/g;
-            const nodeCommand = builtinNodePath.includes(' ') ? `"${builtinNodePath}"` : builtinNodePath;
+            const nodeCommand = nodePath.includes(' ') ? `"${nodePath}"` : nodePath;
             command = command.replace(nodeRegex, (_match, before, after) => {
                 // 保留前后的空白字符或引号
                 return `${before}${nodeCommand}${after}`;
             });
         }
         
-        if (builtinNpmPath && builtinNpmPath !== 'npm') {
-            // npm 脚本会在 process.execPath 的目录下查找 node_modules/npm/bin/npm-cli.js
-            // 我们已经创建了符号链接，所以 npm 脚本应该能工作
-            // 但为了更可靠，优先使用 node 直接执行 npm-cli.js
+        if (npmPath && npmPath !== 'npm') {
+            // 如果项目版本提供了 npm，优先使用项目版本的 npm
+            const npmRegex = /(^|\s|["'])\bnpm\b(\s|$|["'])/g;
+            const npmCommand = npmPath.includes(' ') ? `"${npmPath}"` : npmPath;
+            command = command.replace(npmRegex, (_match, before, after) => {
+                // 保留前后的空白字符或引号
+                return `${before}${npmCommand}${after}`;
+            });
+        } else if (!projectNpmPath) {
+            // 如果没有项目版本的 npm，使用内置 npm（通过 node 执行 npm-cli.js）
             const npmCliJsPath = getBuiltinNpmCliJsPath();
-            const builtinNodePathForNpm = getBuiltinNodePath();
+            const nodePathForNpm = nodePath;
             
-            if (npmCliJsPath && builtinNodePathForNpm && builtinNodePathForNpm !== 'node') {
+            if (npmCliJsPath && nodePathForNpm && nodePathForNpm !== 'node') {
                 // 使用 node 直接执行 npm-cli.js，避免 npm 脚本的路径问题
-                const nodeCommand = builtinNodePathForNpm.includes(' ') ? `"${builtinNodePathForNpm}"` : builtinNodePathForNpm;
+                const nodeCommand = nodePathForNpm.includes(' ') ? `"${nodePathForNpm}"` : nodePathForNpm;
                 const npmCliCommand = npmCliJsPath.includes(' ') ? `"${npmCliJsPath}"` : npmCliJsPath;
                 
                 // 替换 npm 命令为: node npm-cli.js [args]
@@ -147,9 +636,9 @@ export class FileSystemTools {
                     return `${before}${nodeCommand} ${npmCliCommand}${npmArgs ? ' ' + npmArgs : ''}`;
                 });
             } else {
-                // 回退到使用 npm 脚本（现在有符号链接应该能工作）
+                // 回退到使用 npm 脚本
                 const npmRegex = /(^|\s|["'])\bnpm\b(\s|$|["'])/g;
-                const npmCommand = builtinNpmPath.includes(' ') ? `"${builtinNpmPath}"` : builtinNpmPath;
+                const npmCommand = npmPath.includes(' ') ? `"${npmPath}"` : npmPath;
                 command = command.replace(npmRegex, (_match, before, after) => {
                     // 保留前后的空白字符或引号
                     return `${before}${npmCommand}${after}`;
@@ -160,17 +649,30 @@ export class FileSystemTools {
         // 检测是否为自动化测试命令（可能启动 Chrome for Testing）
         const isAutomationTest = this.isAutomationTestCommand(command);
 
-        // 检测是否为开发服务器命令 - 禁止打开外部 Chrome，使用内置浏览器 Tab 展示
-        const isDevServerCommand = /run\s+(dev|start)\b|pnpm\s+(dev|start)\b|yarn\s+(dev|start)\b|npx\s+vite|vite\s|webpack.*serve/i.test(command);
-
         try {
             // 获取 Playwright 和 npm 环境变量
             const playwrightEnv = getPlaywrightEnvVars();
-            const npmEnv = getNpmEnvVars();
+            // 如果项目版本提供了环境变量，优先使用；否则使用内置 npm 环境变量
+            const npmEnv = Object.keys(projectEnv).length > 0 ? projectEnv : getNpmEnvVars();
+            
+            // 确保 Node.js 路径在 PATH 的最前面，这样 pnpm/yarn 会使用正确的 Node.js
+            let finalPath = process.env.PATH || '';
+            if (nodePath && nodePath !== 'node') {
+                const nodeBinDir = path.dirname(nodePath);
+                const pathSeparator = process.platform === 'win32' ? ';' : ':';
+                // 如果项目环境变量中有 PATH，使用它作为基础；否则使用系统 PATH
+                const basePath = projectEnv.PATH || finalPath;
+                // 将 Node.js 目录放在 PATH 最前面
+                finalPath = `${nodeBinDir}${pathSeparator}${basePath}`;
+            } else if (projectEnv.PATH) {
+                finalPath = projectEnv.PATH;
+            }
+            
             let env: NodeJS.ProcessEnv = {
                 ...process.env,
                 ...playwrightEnv,
                 ...npmEnv,
+                PATH: finalPath, // 使用修改后的 PATH
                 // CRA/Vite 等支持 BROWSER=none
                 ...(isDevServerCommand ? { BROWSER: 'none' } : {}),
                 // Project 模式约束：开发服务器统一使用端口 3000（CRA/Next 等认 PORT，Vite 需配合 --port）
@@ -181,7 +683,7 @@ export class FileSystemTools {
             if (isDevServerCommand && (process.platform === 'darwin' || process.platform === 'linux')) {
                 const noBrowserDir = this.ensureNoBrowserScriptDir();
                 if (noBrowserDir) {
-                    env = { ...env, PATH: `${noBrowserDir}:${env.PATH || process.env.PATH || ''}` };
+                    env = { ...env, PATH: `${noBrowserDir}:${env.PATH || ''}` };
                 }
             }
             
@@ -201,17 +703,78 @@ export class FileSystemTools {
                 }
                 await this.killProcessOnPort(PROJECT_DEV_PORT);
                 const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
+                
+                console.log(`[FileSystemTools] Starting dev server with command: ${runCommand}`);
+                console.log(`[FileSystemTools] Using Node.js: ${nodePath}`);
+                console.log(`[FileSystemTools] Using npm: ${npmPath || 'builtin'}`);
+                console.log(`[FileSystemTools] Environment PATH: ${env.PATH}`);
+                console.log(`[FileSystemTools] Node.js bin directory: ${nodePath && nodePath !== 'node' ? path.dirname(nodePath) : 'system'}`);
+                
                 const child = spawn(runCommand, [], {
                     cwd: workingDir,
                     env: env,
                     shell,
                     detached: true,
-                    stdio: 'ignore'
+                    stdio: ['ignore', 'pipe', 'pipe'] // 捕获输出以便调试
                 });
+                
+                // 收集输出用于错误检测
+                let stdoutBuffer = '';
+                let stderrBuffer = '';
+                const detectedErrors: DetectedError[] = [];
+                
+                // 监听输出并检测错误
+                child.stdout?.on('data', (data) => {
+                    const output = data.toString();
+                    stdoutBuffer += output;
+                    console.log(`[DevServer] stdout: ${output.substring(0, 200)}`);
+                    
+                    // 实时检测错误
+                    const errors = ErrorDetector.detectFromOutput(output, workingDir);
+                    detectedErrors.push(...errors);
+                });
+                
+                child.stderr?.on('data', (data) => {
+                    const output = data.toString();
+                    stderrBuffer += output;
+                    console.error(`[DevServer] stderr: ${output.substring(0, 200)}`);
+                    
+                    // 实时检测错误
+                    const errors = ErrorDetector.detectFromOutput(output, workingDir);
+                    detectedErrors.push(...errors);
+                });
+                
+                child.on('error', (error) => {
+                    console.error(`[DevServer] Failed to start: ${error.message}`);
+                });
+                
                 child.unref();
+                
+                // 等待服务器启动
+                console.log(`[FileSystemTools] Waiting for dev server to start on port ${PROJECT_DEV_PORT}...`);
                 await new Promise(resolve => setTimeout(resolve, 4000));
+                
+                // 检测收集到的错误
+                const allErrors = ErrorDetector.detectFromOutput(stdoutBuffer + stderrBuffer, workingDir);
+                const uniqueErrors = this.deduplicateErrors([...detectedErrors, ...allErrors]);
+                
                 const url = `http://localhost:${PROJECT_DEV_PORT}`;
-                return `[Dev server started in background]\n\nCommand: ${runCommand}\nWorking directory: ${workingDir}\n\nPreview URL: ${url}\n\nThe development server is running on port ${PROJECT_DEV_PORT}. Use open_browser_preview to display it in the built-in browser.`;
+                let result = `[Dev server started in background]\n\nCommand: ${runCommand}\nWorking directory: ${workingDir}\nNode.js: ${nodePath}\nnpm: ${npmPath || 'builtin'}\n\nPreview URL: ${url}\n\nThe development server is running on port ${PROJECT_DEV_PORT}. Use open_browser_preview to display it in the built-in browser.`;
+                
+                // 如果有错误，添加到结果中
+                if (uniqueErrors.length > 0) {
+                    result += `\n\n⚠️ Detected ${uniqueErrors.length} error(s) during startup:\n`;
+                    for (const error of uniqueErrors) {
+                        result += `- ${error.type}: ${error.message}`;
+                        if (error.packageName) {
+                            result += ` (package: ${error.packageName})`;
+                        }
+                        result += '\n';
+                    }
+                    result += '\nThese errors will be automatically fixed if possible.';
+                }
+                
+                return result;
             }
 
             if (Object.keys(playwrightEnv).length > 0) {
@@ -259,6 +822,24 @@ export class FileSystemTools {
      * macOS: 劫持 open；Linux: 劫持 xdg-open
      * 返回目录路径，失败时返回 null
      */
+    /**
+     * 去重错误列表（基于错误类型和包名/导入路径）
+     */
+    private deduplicateErrors(errors: DetectedError[]): DetectedError[] {
+        const seen = new Set<string>();
+        const unique: DetectedError[] = [];
+        
+        for (const error of errors) {
+            const key = `${error.type}:${error.packageName || error.importPath || error.message}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                unique.push(error);
+            }
+        }
+        
+        return unique;
+    }
+
     private parseDevServerPort(command: string, cwd: string): number {
         const lower = command.toLowerCase();
         if (lower.includes('5173') || lower.includes('vite')) return 5173;

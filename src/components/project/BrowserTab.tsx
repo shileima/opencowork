@@ -1,12 +1,22 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Globe, RotateCw } from 'lucide-react';
+import { ExternalLink, RotateCw, Globe } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
 
 const DEFAULT_URL = 'http://localhost:3000';
 
+/** 注入到预览页的 CSS：将 Vite 错误 overlay 字号小 1 号 */
+const VITE_ERROR_OVERLAY_CSS = `
+  [data-vite-error-overlay], .vite-error-overlay, [class*="vite-error-overlay"] {
+    font-size: 87.5% !important;
+  }
+  [data-vite-error-overlay] *, .vite-error-overlay * {
+    font-size: inherit !important;
+  }
+`;
+
 interface BrowserTabProps {
     initialUrl?: string;
-    /** 外部刷新触发器：数值变化时强制刷新 iframe */
+    /** 外部刷新触发器：数值变化时强制刷新 webview */
     refreshTrigger?: number;
 }
 
@@ -24,8 +34,8 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     const [url, setUrl] = useState(initialUrl || '');
     const [currentUrl, setCurrentUrl] = useState(initialUrl || '');
     const [isLoading, setIsLoading] = useState(!!(initialUrl || '').trim());
-    const [refreshKey, setRefreshKey] = useState(0); // 用于强制刷新 iframe
-    const iframeRef = useRef<HTMLIFrameElement>(null);
+    const [refreshKey, setRefreshKey] = useState(0); // 用于强制刷新 webview
+    const webviewRef = useRef<HTMLElement | null>(null);
 
     const handleNavigate = useCallback(() => {
         const fullUrl = ensureProtocol(url);
@@ -36,9 +46,8 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     }, [url]);
 
     const handleRefresh = useCallback(() => {
-        if (iframeRef.current) {
+        if (webviewRef.current) {
             setIsLoading(true);
-            // 强制刷新 iframe
             setRefreshKey(prev => prev + 1);
         }
     }, []);
@@ -67,30 +76,63 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
         }
     };
 
-    const handleIframeLoad = () => {
-        setIsLoading(false);
-    };
+    // webview 加载完成后隐藏 loading 并注入 CSS（缩小 Vite 报错 overlay 字号）
+    useEffect(() => {
+        const el = webviewRef.current;
+        if (!currentUrl || !el) return;
+        const onDidFinishLoad = () => {
+            setIsLoading(false);
+            try {
+                (el as unknown as { insertCSS: (css: string) => void }).insertCSS(VITE_ERROR_OVERLAY_CSS);
+            } catch {
+                // ignore
+            }
+        };
+        el.addEventListener('did-finish-load', onDidFinishLoad);
+        return () => el.removeEventListener('did-finish-load', onDidFinishLoad);
+    }, [currentUrl, refreshKey]);
 
-    const handleIframeError = () => {
+    const handleWebviewError = () => {
         setIsLoading(false);
         console.error('Failed to load URL:', currentUrl);
     };
+
+    const handleOpenExternal = useCallback(async () => {
+        if (!currentUrl) return;
+        try {
+            const fullUrl = ensureProtocol(currentUrl);
+            await window.ipcRenderer.invoke('app:open-external-url', fullUrl);
+        } catch (error) {
+            console.error('Failed to open external URL:', error);
+        }
+    }, [currentUrl]);
 
     return (
         <div className="flex flex-col h-full bg-stone-100 dark:bg-zinc-950">
             {/* URL Bar */}
             <div className="flex items-center gap-2 px-3 py-2 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shrink-0">
-                <Globe size={16} className="text-stone-400 dark:text-zinc-500 shrink-0" />
-                <button
-                    type="button"
-                    onClick={handleRefresh}
-                    className="p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 rounded transition-colors shrink-0"
-                    title={t('refresh') || '刷新'}
-                    aria-label={t('refresh') || '刷新'}
-                    disabled={!currentUrl}
-                >
-                    <RotateCw size={16} className={isLoading ? 'animate-spin' : ''} />
-                </button>
+                <div className="flex items-center gap-0 shrink-0">
+                    <button
+                        type="button"
+                        onClick={handleOpenExternal}
+                        disabled={!currentUrl}
+                        className="p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="在系统浏览器中打开"
+                        aria-label="在系统浏览器中打开"
+                    >
+                        <ExternalLink size={16} />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleRefresh}
+                        className="p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 rounded transition-colors"
+                        title={t('refresh') || '刷新'}
+                        aria-label={t('refresh') || '刷新'}
+                        disabled={!currentUrl}
+                    >
+                        <RotateCw size={16} className={isLoading ? 'animate-spin' : ''} />
+                    </button>
+                </div>
                 <input
                     type="text"
                     value={url}
@@ -111,16 +153,15 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                                 <RotateCw size={24} className="animate-spin text-orange-500" />
                             </div>
                         )}
-                        <iframe
-                            ref={iframeRef}
+                        {/* 使用 webview 以便注入 CSS 缩小 Vite 报错 overlay 字号 */}
+                        <webview
+                            ref={webviewRef}
                             key={`${currentUrl}-${refreshKey}`}
                             src={currentUrl}
-                            title={t('browserPreview') || '页面预览'}
-                            className="w-full h-full border-0"
-                            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads"
-                            onLoad={handleIframeLoad}
-                            onError={handleIframeError}
-                            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                            className="w-full h-full border-0 min-h-0"
+                            style={{ display: 'flex' }}
+                            allowpopups
+                            onError={handleWebviewError}
                         />
                     </>
                 ) : (

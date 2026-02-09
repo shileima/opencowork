@@ -12,6 +12,11 @@ export function CopyButton({ content, size = 'md', showLabel = false }: CopyButt
     const { t } = useI18n();
     const [copied, setCopied] = useState(false);
 
+    // 如果内容为空，不显示复制按钮
+    if (!content || content.trim().length === 0) {
+        return null;
+    }
+
     const handleCopy = async () => {
         try {
             await navigator.clipboard.writeText(content);

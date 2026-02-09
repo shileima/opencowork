@@ -42,8 +42,8 @@ export function ChatPanel({
 
     return (
         <div className="flex flex-col h-full bg-white dark:bg-zinc-900">
-            {/* Chat Messages */}
-            <div className="flex-1 overflow-y-auto px-4 py-6" ref={scrollRef}>
+            {/* Chat Messages - 聊天区域文字小 2 号 */}
+            <div className="flex-1 overflow-y-auto px-4 py-6 text-xs" ref={scrollRef}>
                 <div className="max-w-2xl mx-auto space-y-5">
                     {relevantHistory.length === 0 && !streamingText ? (
                         <div className="flex flex-col items-center justify-center h-full text-center space-y-4 py-20">
@@ -51,10 +51,10 @@ export function ChatPanel({
                                 <img src="./icon.png" alt="Logo" className="opacity-90 dark:opacity-80 w-full h-full object-cover" />
                             </div>
                             <div className="space-y-2">
-                                <h2 className="text-xl font-semibold text-stone-800 dark:text-zinc-100">
+                                <h2 className="text-base font-semibold text-stone-800 dark:text-zinc-100">
                                     {t('startConversation')}
                                 </h2>
-                                <p className="text-stone-500 dark:text-zinc-400 text-sm max-w-xs">
+                                <p className="text-stone-500 dark:text-zinc-400 text-[11px] max-w-xs">
                                     {t('startByDescribing')}
                                 </p>
                             </div>
@@ -69,25 +69,34 @@ export function ChatPanel({
                                     ? (msg.content.find((b: any) => b.type === 'text') as any)?.text || ''
                                     : '';
 
+                                // 如果内容为空，不渲染消息
+                                if (!content || content.trim().length === 0) {
+                                    return null;
+                                }
+
                                 return (
                                     <div key={idx} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                                        <div className={`max-w-[85%] ${isUser ? '' : 'w-full'}`}>
+                                        <div className={` ${isUser ? '' : 'w-full'}`}>
                                             {isUser ? (
                                                 <div className="relative group inline-block">
                                                     <div className="user-bubble">
                                                         {content}
                                                     </div>
-                                                    <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                        <CopyButton content={content} size="sm" />
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <div className="text-stone-700 dark:text-zinc-300 text-[15px] leading-7 max-w-none">
-                                                    <div className="relative group">
-                                                        <MarkdownRenderer content={content} isDark={true} />
-                                                        <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    {content && content.trim().length > 0 && (
+                                                        <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                             <CopyButton content={content} size="sm" />
                                                         </div>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <div className="text-stone-700 dark:text-zinc-300 text-xs leading-5 max-w-none">
+                                                    <div className="relative group">
+                                                        <MarkdownRenderer content={content} isDark={true} className="prose-sm !text-xs !leading-5" />
+                                                        {content && content.trim().length > 0 && (
+                                                            <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <CopyButton content={content} size="sm" />
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
                                             )}
@@ -96,22 +105,24 @@ export function ChatPanel({
                                 );
                             })}
 
-                            {streamingText && (
+                            {streamingText && streamingText.trim().length > 0 && (
                                 <div className="animate-in fade-in duration-200">
-                                    <div className="text-stone-700 dark:text-zinc-300 text-[15px] leading-7 max-w-none">
+                                    <div className="text-stone-700 dark:text-zinc-300 text-xs leading-5 max-w-none">
                                         <div className="relative group">
-                                            <MarkdownRenderer content={streamingText} isDark={true} />
+                                            <MarkdownRenderer content={streamingText} isDark={true} className="prose-sm !text-xs !leading-5" />
                                             <span className="inline-block w-2 h-5 bg-orange-500 ml-0.5 animate-pulse" />
-                                            <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <CopyButton content={streamingText} size="sm" />
-                                            </div>
+                                            {streamingText && streamingText.trim().length > 0 && (
+                                                <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <CopyButton content={streamingText} size="sm" />
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
                             )}
 
                             {isProcessing && !streamingText && (
-                                <div className="flex items-center gap-2 text-stone-400 text-sm animate-pulse">
+                                <div className="flex items-center gap-2 text-stone-400 text-[11px] animate-pulse">
                                     <div className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-bounce" />
                                     <span>{t('thinking')}</span>
                                 </div>

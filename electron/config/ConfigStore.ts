@@ -38,6 +38,12 @@ export interface AppConfig {
 
     // User Role
     userRole?: 'user' | 'admin'; // 用户角色：普通用户或超级管理员
+
+    // Terminal Mode
+    terminalMode?: 'pty' | 'pipe' | 'auto'; // 终端模式：pty=强制PTY，pipe=强制Pipe，auto=自动选择
+
+    // UI Layout
+    chatEditorSplitRatio?: number; // 聊天/编辑器分割比例（0-100，默认 50）
 }
 
 const DEFAULT_MAX_TOKENS = 131072;
@@ -105,7 +111,9 @@ const defaults: AppConfig = {
     shortcut: 'Alt+Space',
     allowedPermissions: [],
     activeProviderId: 'minimax_intl', // Default to what we had
-    providers: defaultProviders
+    providers: defaultProviders,
+    terminalMode: 'auto', // 默认自动选择模式
+    chatEditorSplitRatio: 50 // 默认聊天/编辑器各占 50%
 };
 
 class ConfigStore {
@@ -330,6 +338,10 @@ class ConfigStore {
 
             this.store.set('providers', mergedProviders);
             console.log('[ConfigStore] Updated providers, keys:', Object.keys(mergedProviders));
+        }
+        if (cfg.chatEditorSplitRatio !== undefined) {
+            this.store.set('chatEditorSplitRatio', cfg.chatEditorSplitRatio);
+            console.log('[ConfigStore] Updated chatEditorSplitRatio:', cfg.chatEditorSplitRatio);
         }
 
         // Verify the save

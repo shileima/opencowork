@@ -214,3 +214,74 @@
     animation: success-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
 }
+
+/* XTerm.js terminal styles - ensure proper rendering */
+.terminal-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: block;
+  /* 与 xterm theme.background 一致，左右间距不再显黑色 */
+  background-color: #1e1e1e;
+}
+
+.terminal-container .xterm {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0.5rem !important;
+  right: 0.5rem !important;
+  width: calc(100% - 1rem) !important;
+  height: 100% !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.terminal-container .xterm-viewport {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  background-color: transparent;
+}
+
+.terminal-container .xterm-screen {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.terminal-container .xterm-cursor-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.terminal-container .xterm-text-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: pre;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace !important;
+  font-size: 14px !important;
+  line-height: 1.2 !important;
+  letter-spacing: 0 !important;
+}
+
+.terminal-container .xterm-char-measure-element {
+  position: absolute;
+  visibility: hidden;
+  top: 0;
+  left: 0;
+  white-space: pre;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}

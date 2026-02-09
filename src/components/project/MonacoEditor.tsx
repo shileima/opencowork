@@ -67,7 +67,7 @@ export function MonacoEditor({ filePath, content, onChange, onSave }: MonacoEdit
                 onMount={handleEditorDidMount}
                 theme="vs-dark"
                 options={{
-                    fontSize: 14,
+                    fontSize: 12,
                     minimap: { enabled: true },
                     wordWrap: 'on',
                     automaticLayout: true,

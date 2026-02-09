@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus, Trash2, Pencil, MoreVertical, Loader2, CheckCircle, XCircle, Circle } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
-import { InputDialog } from './InputDialog';
 import type { Project, ProjectTask } from '../../../electron/config/ProjectStore';
 
 interface TaskListPanelProps {
@@ -28,9 +27,11 @@ export function TaskListPanel({
     const [tasks, setTasks] = useState<ProjectTask[]>([]);
     const [contextMenuTaskId, setContextMenuTaskId] = useState<string | null>(null);
     const [contextMenuPosition, setContextMenuPosition] = useState({ top: 0, left: 0 });
-    const [showRenameDialog, setShowRenameDialog] = useState(false);
-    const [taskToRename, setTaskToRename] = useState<ProjectTask | null>(null);
+    /** 原地重命名：正在编辑的任务 id，不弹框 */
+    const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+    const [editValue, setEditValue] = useState('');
     const contextMenuRef = useRef<HTMLDivElement>(null);
+    const renameInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         if (currentProject) {
@@ -71,24 +72,34 @@ export function TaskListPanel({
         setTasks(sortedTasks);
     };
 
+    /** 进入原地重命名：在名称处显示输入框 */
     const handleRenameTask = (task: ProjectTask) => {
         if (!currentProject) return;
-        setContextMenuTaskId(null); // 关闭菜单
-        setTaskToRename(task);
-        setShowRenameDialog(true);
+        setContextMenuTaskId(null);
+        setEditingTaskId(task.id);
+        setEditValue(task.title);
     };
 
-    const handleConfirmRenameTask = async (newTitle: string) => {
-        if (!currentProject || !taskToRename) return;
-        
-        if (newTitle !== taskToRename.title) {
-            const result = await window.ipcRenderer.invoke('project:task:update', currentProject.id, taskToRename.id, { title: newTitle }) as { success: boolean };
-            if (result.success) {
-                loadTasks(currentProject.id);
-            }
+    /** 原地重命名：聚焦输入框 */
+    useEffect(() => {
+        if (editingTaskId && renameInputRef.current) {
+            renameInputRef.current.focus();
+            renameInputRef.current.select();
         }
-        setShowRenameDialog(false);
-        setTaskToRename(null);
+    }, [editingTaskId]);
+
+    /** 确认原地重命名（保存或取消） */
+    const handleRenameConfirm = async () => {
+        if (!currentProject || !editingTaskId) return;
+        const task = tasks.find(t => t.id === editingTaskId);
+        const newTitle = editValue.trim();
+        setEditingTaskId(null);
+        setEditValue('');
+        if (!task || newTitle === task.title || !newTitle) return;
+        const result = await window.ipcRenderer.invoke('project:task:update', currentProject.id, task.id, { title: newTitle }) as { success: boolean };
+        if (result.success) {
+            loadTasks(currentProject.id);
+        }
     };
 
     const handleDeleteTask = async (task: ProjectTask) => {
@@ -188,26 +199,13 @@ export function TaskListPanel({
 
     return (
         <>
-            {showRenameDialog && taskToRename && (
-                <InputDialog
-                    title={t('rename')}
-                    label={t('rename')}
-                    defaultValue={taskToRename.title}
-                    placeholder={t('rename')}
-                    onClose={() => {
-                        setShowRenameDialog(false);
-                        setTaskToRename(null);
-                    }}
-                    onConfirm={handleConfirmRenameTask}
-                />
-            )}
         <div className="w-64 bg-white dark:bg-zinc-900 border-r border-stone-200 dark:border-zinc-800 flex flex-col transition-all duration-300 overflow-hidden">
             {/* New Task Button */}
             {currentProject && (
-                <div className="p-3 border-b border-stone-200 dark:border-zinc-800">
+                <div className="h-10 flex items-center px-3 border-b border-stone-200 dark:border-zinc-800">
                     <button
                         onClick={onCreateTask}
-                        className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors text-sm font-medium"
+                        className="w-full h-6 flex items-center justify-center gap-2 px-3 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors text-sm font-medium"
                     >
                         <Plus size={16} />
                         {t('newTask')}
@@ -230,7 +228,7 @@ export function TaskListPanel({
                         {tasks.map(task => (
                             <div
                                 key={task.id}
-                                className={`group relative w-full text-left p-3 rounded-lg transition-colors border ${
+                                className={`group relative w-full text-left p-2 rounded-lg transition-colors border ${
                                     currentTaskId === task.id
                                         ? 'bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30'
                                         : 'bg-stone-50 dark:bg-zinc-800 border-stone-200 dark:border-zinc-700 hover:bg-stone-100 dark:hover:bg-zinc-700'
@@ -273,20 +271,40 @@ export function TaskListPanel({
                                             )}
                                         </div>
                                         <div className="flex-1 min-w-0 overflow-hidden">
+                                            {editingTaskId === task.id ? (
+                                                <input
+                                                    ref={renameInputRef}
+                                                    type="text"
+                                                    value={editValue}
+                                                    onChange={(e) => setEditValue(e.target.value)}
+                                                    onBlur={handleRenameConfirm}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') handleRenameConfirm();
+                                                        if (e.key === 'Escape') {
+                                                            setEditingTaskId(null);
+                                                            setEditValue('');
+                                                        }
+                                                    }}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="w-full px-1 py-0.5 text-xs font-medium bg-white dark:bg-zinc-900 border border-orange-500 dark:border-orange-500 rounded focus:outline-none focus:ring-1 focus:ring-orange-500 text-stone-700 dark:text-zinc-300"
+                                                    aria-label={t('rename')}
+                                                />
+                                            ) : (
+                                                <div
+                                                    title={task.title}
+                                                    className={`text-xs font-medium truncate ${
+                                                        task.status === 'completed'
+                                                            ? 'text-stone-500 dark:text-zinc-400 line-through'
+                                                            : task.status === 'failed'
+                                                            ? 'text-stone-600 dark:text-zinc-400'
+                                                            : 'text-stone-700 dark:text-zinc-300'
+                                                    }`}
+                                                >
+                                                    {task.title}
+                                                </div>
+                                            )}
                                             <div
-                                                title={task.title}
-                                                className={`text-sm font-medium line-clamp-2 break-words ${
-                                                    task.status === 'completed'
-                                                        ? 'text-stone-500 dark:text-zinc-400 line-through'
-                                                        : task.status === 'failed'
-                                                        ? 'text-stone-600 dark:text-zinc-400'
-                                                        : 'text-stone-700 dark:text-zinc-300'
-                                                }`}
-                                            >
-                                                {task.title}
-                                            </div>
-                                            <div
-                                                className={`text-[11px] mt-1 flex items-center gap-1 ${
+                                                className={`text-[9px] mt-0.5 flex items-center gap-1 ${
                                                     task.status === 'completed'
                                                         ? 'text-green-600 dark:text-green-400'
                                                         : task.status === 'failed'
@@ -362,9 +380,9 @@ export function TaskListPanel({
                             e.stopPropagation();
                             handleRenameTask(menuTask);
                         }}
-                        className="w-full text-left px-4 py-2 text-sm text-stone-700 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-700 flex items-center gap-2"
+                        className="w-full text-left px-3 py-1.5 text-xs text-stone-700 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-700 flex items-center gap-2"
                     >
-                        <Pencil size={14} />
+                        <Pencil size={10} />
                         {t('rename')}
                     </button>
                     <button
@@ -374,9 +392,9 @@ export function TaskListPanel({
                             e.stopPropagation();
                             handleDeleteTask(menuTask);
                         }}
-                        className="w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 flex items-center gap-2"
+                        className="w-full text-left px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 flex items-center gap-2"
                     >
-                        <Trash2 size={14} />
+                        <Trash2 size={10} />
                         {t('deleteTask')}
                     </button>
                 </div>

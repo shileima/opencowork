@@ -24,6 +24,12 @@ import { useI18n } from '../i18n/I18nContext';
 
 export function MarkdownRenderer({ content, className = '', isDark = false }: MarkdownRendererProps) {
     const { t } = useI18n();
+    
+    // 如果内容为空，不渲染任何内容
+    if (!content || content.trim().length === 0) {
+        return null;
+    }
+    
     return (
         <div className={`prose ${isDark ? 'prose-invert' : 'prose-stone'} max-w-none ${className}`}>
             <ReactMarkdown
@@ -37,6 +43,28 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
                             // Mermaid handling
                             if (match[1] === 'mermaid') {
                                 return <MermaidDiagram code={codeContent} isDark={isDark} />;
+                            }
+
+                            // Deploy log: compact terminal-style block
+                            if (match[1] === 'deploy-log') {
+                                return (
+                                    <div className="my-2 rounded-lg border border-stone-200 dark:border-zinc-700 overflow-hidden">
+                                        <pre
+                                            className="m-0 pl-2.5 pr-1.5 py-2 overflow-x-auto max-h-[360px] overflow-y-auto"
+                                            style={{
+                                                fontSize: '10px',
+                                                lineHeight: '1.4',
+                                                fontFamily: "'Menlo', 'Monaco', 'Consolas', 'Courier New', monospace",
+                                                background: isDark ? '#18181b' : '#f5f5f4',
+                                                color: isDark ? '#a1a1aa' : '#57534e',
+                                                whiteSpace: 'pre-wrap',
+                                                wordBreak: 'break-all',
+                                            }}
+                                        >
+                                            {codeContent}
+                                        </pre>
+                                    </div>
+                                );
                             }
 
                             // Standard Syntax Highlighting
@@ -189,6 +217,11 @@ function MermaidDiagram({ code, isDark }: { code: string, isDark: boolean }) {
 function CopyButton({ text }: { text: string }) {
     const { t } = useI18n();
     const [copied, setCopied] = useState(false);
+
+    // 如果内容为空，不显示复制按钮
+    if (!text || text.trim().length === 0) {
+        return null;
+    }
 
     const handleCopy = () => {
         navigator.clipboard.writeText(text);
