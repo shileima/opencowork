@@ -10,7 +10,7 @@ interface SplitPaneProps {
     minSize?: number;
 }
 
-export function SplitPane({ direction, sizes, children, onSizesChange, onClose, minSize = 10 }: SplitPaneProps) {
+export function SplitPane({ direction, sizes, children, onSizesChange, minSize = 10 }: SplitPaneProps) {
     const [localSizes, setLocalSizes] = useState(sizes);
     const containerRef = useRef<HTMLDivElement>(null);
     const dragStateRef = useRef<{ index: number; startPos: number; startSizes: number[] } | null>(null);
