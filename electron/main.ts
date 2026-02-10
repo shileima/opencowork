@@ -16,6 +16,7 @@ import { permissionService } from './config/PermissionService'
 import { getBuiltinNodePath } from './utils/NodePath'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
+import { registerContextSwitchHandler } from './contextSwitchCoordinator'
 import Anthropic from '@anthropic-ai/sdk'
 
 // Extend App type to include isQuitting property
@@ -369,7 +370,7 @@ ipcMain.handle('agent:send-message', async (event, message: string | { content: 
   const currentProject = isFloatingBall ? null : projectStore.getCurrentProject()
   const taskId = isFloatingBall ? undefined : (currentProject && currentTaskIdForSession ? currentTaskIdForSession : undefined)
   const projectId = currentProject?.id
-  return await targetAgent.processUserMessage(message, taskId, projectId)
+  return await targetAgent.processUserMessage(message, taskId, projectId, isFloatingBall)
 })
 
 ipcMain.handle('agent:abort', (event) => {
@@ -655,7 +656,7 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
       try {
         // 使用 agent 的 processUserMessage 方法，传递 taskId 以支持并发执行
         // 使用当前会话 ID 作为 taskId，保持在当前会话中
-        await targetAgent.processUserMessage(executeMessage, currentSessionId)
+        await targetAgent.processUserMessage(executeMessage, currentSessionId, undefined, isFloatingBall)
       } catch (error) {
         console.error('[Script] Error executing script:', error)
         const errorMsg = (error as Error).message
@@ -1759,6 +1760,10 @@ ipcMain.handle('project:task:list', (_, projectId: string) => {
 
 // 存储当前任务ID，用于 session 绑定
 let currentTaskIdForSession: string | null = null;
+
+registerContextSwitchHandler((taskId) => {
+    currentTaskIdForSession = taskId;
+});
 
 ipcMain.handle('project:task:switch', async (event, projectId: string, taskId: string) => {
   try {

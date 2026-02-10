@@ -70,8 +70,10 @@ export function TaskListPanel({
 
     const loadTasks = async (projectId: string) => {
         const taskList = await window.ipcRenderer.invoke('project:task:list', projectId) as ProjectTask[];
+        // 过滤掉 400 错误导致的 failed 任务，不再展示
+        const filtered = taskList.filter((t) => t.status !== 'failed');
         // 按更新时间倒序排序，最新的任务在最上面
-        const sortedTasks = [...taskList].sort((a, b) => b.updatedAt - a.updatedAt);
+        const sortedTasks = [...filtered].sort((a, b) => b.updatedAt - a.updatedAt);
         setTasks(sortedTasks);
     };
 

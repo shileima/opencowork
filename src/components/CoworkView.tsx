@@ -6,6 +6,7 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 import Anthropic from '@anthropic-ai/sdk';
 import { CopyButton } from './CopyButton';
 import { PlaywrightPrompt } from './PlaywrightPrompt';
+import { useToast } from './Toast';
 
 type Mode = 'chat' | 'work' | 'automation';
 
@@ -43,6 +44,7 @@ interface CoworkViewProps {
 // Memoize the entire view to prevent re-renders when parent state (like settings) changes
 export const CoworkView = memo(function CoworkView({ history, onSendMessage, onAbort, isProcessing, onOpenSettings }: CoworkViewProps) {
     const { t } = useI18n();
+    const { showToast } = useToast();
     const [mode, setMode] = useState<Mode>('work');
     const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set());
     const [streamingText, setStreamingText] = useState('');
@@ -231,6 +233,13 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             setStreamingText(''); // Stop streaming effect on error
         });
 
+        const removeContextSwitchedListener = window.ipcRenderer.on('agent:context-switched', () => {
+            showToast(t('contextSwitchedToNewSession'), 'info');
+            window.ipcRenderer.invoke('session:list').then((list) => {
+                setSessions(list as SessionSummary[]);
+            });
+        });
+
         return () => {
             // Save session on unmount to prevent data loss
             if (history && history.length > 0) {
@@ -260,10 +269,11 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             removeConfirmListener?.();
             removeAbortListener?.();
             removeErrorListener?.();
+            removeContextSwitchedListener?.();
             removeDoneListener?.();
             removeUpdateListener?.();
         };
-    }, []);
+    }, [showToast, t]);
 
     // Fetch session list when history panel is opened
     useEffect(() => {

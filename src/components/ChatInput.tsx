@@ -353,7 +353,7 @@ export function ChatInput({
                                     <button
                                         type="button"
                                         onClick={onAbort}
-                                        className="p-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all flex items-center gap-1 px-2 shadow-sm"
+                                        className="p-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all flex items-center gap-1 px-2 shadow-sm whitespace-nowrap shrink-0"
                                         title={t('stop')}
                                     >
                                         <Square size={12} fill="currentColor" />
