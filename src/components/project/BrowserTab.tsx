@@ -1,8 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { ExternalLink, RotateCw, Globe } from 'lucide-react';
+import { ExternalLink, RotateCw, Globe, AlertCircle } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
 
 const DEFAULT_URL = ''; // 默认为空，避免启动时立即尝试连接
+const LOAD_TIMEOUT_MS = 15000; // 15 秒加载超时
 
 /** 注入到预览页的 CSS：将 Vite 错误 overlay 字号小 1 号 */
 const VITE_ERROR_OVERLAY_CSS = `
@@ -37,6 +38,8 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     const [refreshKey, setRefreshKey] = useState(0); // 用于强制刷新 webview
     const [loadError, setLoadError] = useState<string | null>(null); // 加载错误信息
     const webviewRef = useRef<HTMLElement | null>(null);
+    /** 主帧加载失败标记：did-fail-load 后 webview 可能仍会加载内置错误页并触发 did-finish-load，需避免清除 loadError */
+    const loadFailedRef = useRef(false);
 
     // 组件挂载时打印诊断信息
     useEffect(() => {
@@ -58,11 +61,12 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     }, [url]);
 
     const handleRefresh = useCallback(() => {
-        if (webviewRef.current) {
+        setLoadError(null);
+        if (currentUrl) {
             setIsLoading(true);
             setRefreshKey(prev => prev + 1);
         }
-    }, []);
+    }, [currentUrl]);
 
     // 当父组件更新 URL（如 Agent 调用 open_browser_preview）时同步
     useEffect(() => {
@@ -81,6 +85,17 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
             setRefreshKey(prev => prev + 1);
         }
     }, [refreshTrigger]);
+
+    // 加载超时：长时间加载失败时显示友好提示
+    useEffect(() => {
+        if (!isLoading || !currentUrl) return;
+        const timer = setTimeout(() => {
+            loadFailedRef.current = true;
+            setIsLoading(false);
+            setLoadError('timeout');
+        }, LOAD_TIMEOUT_MS);
+        return () => clearTimeout(timer);
+    }, [isLoading, currentUrl, refreshKey]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter') {
@@ -101,6 +116,7 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
         // 监听 webview 各生命周期事件以排查加载问题
         const onDidStartLoading = () => {
             console.log('[BrowserTab] webview did-start-loading', { url: currentUrl });
+            loadFailedRef.current = false;
             setLoadError(null);
         };
         const onDidStopLoading = () => {
@@ -109,7 +125,10 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
         const onDidFinishLoad = () => {
             console.log('[BrowserTab] webview did-finish-load (成功)', { url: currentUrl });
             setIsLoading(false);
-            setLoadError(null);
+            // 若主帧加载失败，webview 可能仍会加载内置错误页并触发 did-finish-load，此时不清除 loadError，避免闪烁后黑屏
+            if (!loadFailedRef.current) {
+                setLoadError(null);
+            }
             try {
                 (el as unknown as { insertCSS: (css: string) => void }).insertCSS(VITE_ERROR_OVERLAY_CSS);
             } catch (e) {
@@ -135,14 +154,17 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                 friendlyError = `无法连接到 ${validatedURL}。请确保开发服务器正在运行。`;
             } else if (errorCode === -3 || errorDescription === 'ERR_ABORTED') {
                 // 页面加载被中断，通常是用户主动操作，不显示错误
+                setIsLoading(false);
                 return;
             } else {
                 friendlyError = `加载失败 (${errorCode}): ${errorDescription}`;
             }
+            loadFailedRef.current = true;
             setLoadError(friendlyError);
         };
         const onCrashed = () => {
             console.error('[BrowserTab] webview crashed! (webview 进程崩溃)');
+            loadFailedRef.current = true;
             setIsLoading(false);
             setLoadError('webview 进程崩溃');
         };
@@ -194,6 +216,7 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     }, [currentUrl, refreshKey]);
 
     const handleWebviewError = () => {
+        loadFailedRef.current = true;
         setIsLoading(false);
         const errorMsg = `webview onError 触发, URL: ${currentUrl}`;
         console.error('[BrowserTab]', errorMsg);
@@ -251,43 +274,70 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
             <div className="flex-1 min-h-0 relative overflow-hidden">
                 {currentUrl ? (
                     <>
-                        {isLoading && (
+                        {isLoading && !loadError && (
                             <div className="absolute inset-0 flex items-center justify-center bg-stone-50 dark:bg-zinc-900 z-10">
                                 <RotateCw size={24} className="animate-spin text-orange-500" />
                             </div>
                         )}
-                        {loadError && (
-                            <div className="absolute bottom-0 left-0 right-0 bg-red-50 dark:bg-red-900/20 border-t border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-sm px-4 py-3 z-20 flex items-start gap-2">
-                                <svg className="w-5 h-5 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                                </svg>
-                                <div className="flex-1">
-                                    <p className="font-medium">{loadError}</p>
-                                    {loadError.includes('无法连接') && (
-                                        <p className="text-xs mt-1 opacity-80">
-                                            提示：您可以让 AI 助手启动开发服务器，或手动在终端运行 <code className="px-1 py-0.5 bg-red-100 dark:bg-red-900/40 rounded">npm run dev</code> 或 <code className="px-1 py-0.5 bg-red-100 dark:bg-red-900/40 rounded">pnpm dev</code>
-                                        </p>
-                                    )}
+                        {/* 加载失败时显示友好提示页，替代黑屏 */}
+                        {loadError ? (
+                            <div
+                                className="absolute inset-0 flex flex-col items-center justify-center bg-stone-50 dark:bg-zinc-900 p-8 z-20"
+                                role="alert"
+                                aria-live="polite"
+                            >
+                                <AlertCircle size={64} className="mb-6 text-amber-500 dark:text-amber-400 opacity-80" aria-hidden />
+                                <h2 className="text-xl font-semibold text-stone-700 dark:text-zinc-300 mb-2">
+                                    {loadError === 'timeout'
+                                        ? (t('browserLoadTimeout') || '页面加载超时')
+                                        : (t('browserLoadFailed') || '页面加载失败')}
+                                </h2>
+                                <p className="text-sm text-stone-500 dark:text-zinc-500 text-center max-w-md mb-6">
+                                    {loadError === 'timeout'
+                                        ? (t('browserLoadTimeoutHint') || '开发服务器可能未启动，请在终端运行 npm run dev 或 pnpm dev。')
+                                        : (t('browserLoadFailedHint') || '请确保开发服务器已启动，或让 AI 助手帮您启动。')}
+                                </p>
+                                {loadError !== 'timeout' && (
+                                    <p className="text-xs text-stone-400 dark:text-zinc-600 text-center max-w-md mb-6">
+                                        {loadError}
+                                    </p>
+                                )}
+                                <div className="flex gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={handleRefresh}
+                                        className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors"
+                                        aria-label={t('browserRetry') || '重试'}
+                                    >
+                                        <RotateCw size={16} />
+                                        {t('browserRetry') || '重试'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setLoadError(null)}
+                                        className="px-4 py-2.5 text-sm font-medium text-stone-600 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 border border-stone-300 dark:border-zinc-600 rounded-lg transition-colors"
+                                        aria-label={t('browserClose') || '关闭'}
+                                    >
+                                        {t('browserClose') || '关闭'}
+                                    </button>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setLoadError(null)}
-                                    className="p-1 hover:bg-red-100 dark:hover:bg-red-900/40 rounded transition-colors"
-                                    title="关闭"
-                                >
-                                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                                    </svg>
-                                </button>
+                                <div className="mt-8 p-4 bg-stone-100 dark:bg-zinc-800/50 rounded-lg border border-stone-200 dark:border-zinc-700 max-w-md">
+                                    <p className="text-xs font-medium text-stone-600 dark:text-zinc-400 mb-2">💡 {t('browserSuggestionsTitle') || '解决建议'}</p>
+                                    <ul className="text-xs text-stone-500 dark:text-zinc-500 space-y-1.5 list-disc list-inside">
+                                        <li>{t('browserSuggestion1') || '在终端运行 npm run dev 或 pnpm dev 启动开发服务器'}</li>
+                                        <li>{t('browserSuggestion2') || '告诉 AI 助手「启动开发服务器」自动打开预览'}</li>
+                                        <li>{t('browserSuggestion3') || '确认端口正确（常见：3000、5173、8080）'}</li>
+                                    </ul>
+                                </div>
                             </div>
-                        )}
+                        ) : null}
                         {/* 使用 webview 以便注入 CSS 缩小 Vite 报错 overlay 字号 */}
                         <webview
                             ref={webviewRef}
                             key={`${currentUrl}-${refreshKey}`}
                             src={currentUrl}
                             className="w-full h-full border-0 min-h-0"
-                            style={{ display: 'flex' }}
+                            style={{ display: loadError ? 'none' : 'flex' }}
                             allowpopups
                             onError={handleWebviewError}
                         />

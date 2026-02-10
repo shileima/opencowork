@@ -360,6 +360,16 @@ export const translations = {
         browserOpenLocalhost: 'Try opening localhost:3000',
         browserBack: 'Back',
         browserForward: 'Forward',
+        browserLoadFailed: 'Page failed to load',
+        browserLoadFailedHint: 'Please ensure the dev server is running, or let the AI assistant start it for you.',
+        browserRetry: 'Retry',
+        browserClose: 'Close',
+        browserLoadTimeout: 'Page load timeout',
+        browserLoadTimeoutHint: 'The dev server may not be running. Try running npm run dev or pnpm dev in the terminal.',
+        browserSuggestionsTitle: 'Suggestions',
+        browserSuggestion1: 'Run npm run dev or pnpm dev in the terminal to start the dev server',
+        browserSuggestion2: 'Ask the AI assistant to "start the dev server" to open the preview automatically',
+        browserSuggestion3: 'Confirm the port is correct (common: 3000, 5173, 8080)',
         
         // Project View - Editor
         noTabsOpen: 'No tabs open',
@@ -731,6 +741,16 @@ export const translations = {
         browserOpenLocalhost: '尝试打开 localhost:3000',
         browserBack: '后退',
         browserForward: '前进',
+        browserLoadFailed: '页面加载失败',
+        browserLoadFailedHint: '请确保开发服务器已启动，或让 AI 助手帮您启动。',
+        browserRetry: '重试',
+        browserClose: '关闭',
+        browserLoadTimeout: '页面加载超时',
+        browserLoadTimeoutHint: '开发服务器可能未启动，请在终端运行 npm run dev 或 pnpm dev。',
+        browserSuggestionsTitle: '解决建议',
+        browserSuggestion1: '在终端运行 npm run dev 或 pnpm dev 启动开发服务器',
+        browserSuggestion2: '告诉 AI 助手「启动开发服务器」自动打开预览',
+        browserSuggestion3: '确认端口正确（常见：3000、5173、8080）',
         
         // Project View - Editor
         noTabsOpen: '没有打开的标签页',
