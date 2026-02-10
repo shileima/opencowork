@@ -25,9 +25,11 @@ interface Message {
 }
 
 import { useI18n } from '../i18n/I18nContext';
+import { useToast } from './Toast';
 
 export function FloatingBallPage() {
     const { t } = useI18n();
+    const { showToast } = useToast();
     const [ballState, setBallState] = useState<BallState>('collapsed');
     // input/images moved to FloatingInput, but we track presence for auto logic
     const [hasContent, setHasContent] = useState(false);
@@ -128,6 +130,19 @@ ${error}
             setStreamingText('');
         });
 
+        const removeContextSwitchedListener = window.ipcRenderer.on('agent:context-switched', (_event, ...args) => {
+            const payload = args[0] as { newSessionId?: string; taskId?: string; projectId?: string };
+            if (payload?.newSessionId) {
+                setSessionId(payload.newSessionId);
+            }
+            showToast(t('contextSwitchedToNewSession'), 'info');
+            if (showHistory) {
+                window.ipcRenderer.invoke('session:list').then((list) => {
+                    setSessions(list as SessionSummary[]);
+                });
+            }
+        });
+
         const removeAbortListener = window.ipcRenderer.on('agent:aborted', () => {
             setIsProcessing(false);
             setStreamingText('');
@@ -162,12 +177,13 @@ ${error}
             }
 
             removeUpdateListener?.();
+            removeContextSwitchedListener?.();
             removeStreamListener?.();
             removeErrorListener?.();
             removeAbortListener?.();
             removeDoneListener?.();
         };
-    }, []);
+    }, [showToast, t]);
 
     // ... (refs and resizing logic same as before) ...
     // Change ref to textarea

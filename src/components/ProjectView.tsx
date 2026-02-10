@@ -7,6 +7,7 @@ import { ProjectCreateDialog } from './project/ProjectCreateDialog';
 import { ResizableSplitPane } from './project/ResizableSplitPane';
 import Anthropic from '@anthropic-ai/sdk';
 import { useI18n } from '../i18n/I18nContext';
+import { useToast } from './Toast';
 import type { Project, ProjectTask } from '../../electron/config/ProjectStore';
 
 interface ProjectViewProps {
@@ -28,8 +29,14 @@ let pendingTaskRename: { taskId: string; projectId: string } | null = null;
 /** 根据用户输入生成更有寓意的任务名称：取首句/首行、去噪、限制长度 */
 const deriveTaskTitleFromMessage = (messageText: string, maxLen = 28): string => {
     if (!messageText || typeof messageText !== 'string') return '';
+    let text = messageText;
+    // 上下文切换格式：提取 "用户最新请求：" 后的内容作为标题
+    const latestRequestMatch = text.match(/用户最新请求[：:]\s*([^\n]+)/);
+    if (latestRequestMatch) {
+        text = latestRequestMatch[1].trim();
+    }
     // 去掉 Markdown 符号，换行统一为空格，合并多余空白
-    let text = messageText
+    text = text
         .replace(/[#*_`\[\]()]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
@@ -56,6 +63,7 @@ export function ProjectView({
     onToggleExplorerPanel
 }: ProjectViewProps) {
     const { t } = useI18n();
+    const { showToast } = useToast();
     const [currentProject, setCurrentProject] = useState<Project | null>(null);
     const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
     const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -195,6 +203,21 @@ export function ProjectView({
             multiTabEditorRefRef.current?.openBrowserTab?.(url);
         });
 
+        const removeContextSwitchedListener = window.ipcRenderer.on('agent:context-switched', async (_event, ...args) => {
+            const payload = args[0] as { newSessionId?: string; newTaskId?: string; taskId?: string; projectId?: string };
+            showToast(t('contextSwitchedToNewSession'), 'info');
+            if (payload?.newTaskId && payload.projectId) {
+                pendingTaskRename = {
+                    taskId: payload.newTaskId,
+                    projectId: payload.projectId
+                };
+                setCurrentTaskId(payload.newTaskId);
+                await window.ipcRenderer.invoke('project:task:switch', payload.projectId, payload.newTaskId);
+                const project = await window.ipcRenderer.invoke('project:get-current') as Project | null;
+                if (project) setCurrentProject(project);
+            }
+        });
+
         // 监听对话完成：Project 模式下自动打开内置浏览器并刷新；新任务根据首条用户消息重命名
         const removeAgentDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
             const payload = args[0] as { taskId?: string } | undefined;
@@ -226,12 +249,13 @@ export function ProjectView({
             removeConfigListener();
             removeStreamListener();
             removeHistoryListener();
+            removeContextSwitchedListener();
             removeProjectSwitchListener();
             removeProjectCreatedListener();
             removeBrowserPreviewListener();
             removeAgentDoneListener();
         };
-    }, []);
+    }, [showToast, t]);
 
     // 监听任务创建事件，如果是当前项目的任务，自动选中
     useEffect(() => {
@@ -280,8 +304,8 @@ export function ProjectView({
         setCurrentProject(project);
         
         if (project) {
-            // 获取任务列表
-            const tasks = await window.ipcRenderer.invoke('project:task:list', project.id) as ProjectTask[];
+            // 获取任务列表，过滤掉 400 错误导致的 failed 任务
+            const tasks = (await window.ipcRenderer.invoke('project:task:list', project.id) as ProjectTask[]).filter((t) => t.status !== 'failed');
             if (tasks.length > 0) {
                 // 按更新时间排序，最新的在前
                 const sortedTasks = [...tasks].sort((a, b) => b.updatedAt - a.updatedAt);

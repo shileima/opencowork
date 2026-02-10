@@ -173,6 +173,7 @@ export const translations = {
 
         // Cowork View - Additional
         newSession: 'New Session',
+        contextSwitchedToNewSession: 'Context switched to new session to continue',
         history: 'History',
         taskHistory: 'Task History',
         noHistorySessions: 'No history sessions',
@@ -565,6 +566,7 @@ export const translations = {
 
         // Cowork View - Additional
         newSession: '新会话',
+        contextSwitchedToNewSession: '上下文已切换至新会话继续执行',
         history: '历史记录',
         taskHistory: '历史任务',
         noHistorySessions: '暂无历史会话',

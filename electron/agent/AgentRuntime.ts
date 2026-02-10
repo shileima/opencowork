@@ -10,6 +10,8 @@ import { permissionManager } from './security/PermissionManager';
 import { configStore } from '../config/ConfigStore';
 import { directoryManager } from '../config/DirectoryManager';
 import { projectStore } from '../config/ProjectStore';
+import { sessionStore } from '../config/SessionStore';
+import { setCurrentTaskIdForContextSwitch } from '../contextSwitchCoordinator';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -358,9 +360,10 @@ export class AgentRuntime {
         this.notifyUpdate();
     }
 
-    public async processUserMessage(input: string | { content: string, images: string[] }, taskId?: string, projectId?: string) {
+    public async processUserMessage(input: string | { content: string, images: string[] }, taskId?: string, projectId?: string, isFloatingBall?: boolean) {
         // 如果提供了 taskId，使用任务级别的并发控制；否则使用全局控制（向后兼容）
         const useTaskLevelConcurrency = taskId !== undefined;
+        const restoreRef = { originalHistory: this.history };
         
         if (useTaskLevelConcurrency) {
             // 任务级别并发：检查该任务是否已在处理中
@@ -386,23 +389,27 @@ export class AgentRuntime {
             
             // 保存全局状态（用于恢复）
             const originalAbortController = this.abortController;
-            const originalHistory = this.history;
+            restoreRef.originalHistory = this.history;
             const originalIsProcessing = this.isProcessing;
-            
+
             // 使用任务级别的状态（每个任务有独立的上下文）
             this.abortController = abortController;
             this.history = taskHistory;
             this.isProcessing = true;
-            
+
+            let effectiveTaskIdForDone = taskId;
             try {
-                await this.processMessageWithContext(input, taskId, projectId);
+                const result = await this.processMessageWithContext(input, taskId, projectId, isFloatingBall, restoreRef);
+                if (result?.effectiveTaskId) {
+                    effectiveTaskIdForDone = result.effectiveTaskId;
+                }
             } catch (error) {
                 // 即使出错也要确保状态恢复和任务清理
                 console.error(`[AgentRuntime] Task ${taskId} error:`, error);
                 throw error; // 重新抛出，让外层处理
             } finally {
                 // 确保状态恢复和任务清理（无论成功还是失败）
-                this.history = originalHistory;
+                this.history = restoreRef.originalHistory;
                 this.isProcessing = originalIsProcessing;
                 this.abortController = originalAbortController;
                 this.activeTasks.delete(taskId);
@@ -410,7 +417,7 @@ export class AgentRuntime {
                 if (taskHistory.length > 0) {
                     this.notifyUpdate();
                 }
-                this.broadcast('agent:done', { timestamp: Date.now(), taskId, projectId });
+                this.broadcast('agent:done', { timestamp: Date.now(), taskId: effectiveTaskIdForDone, projectId });
             }
         } else {
             // 全局并发控制（向后兼容）：保持原有逻辑
@@ -429,7 +436,7 @@ export class AgentRuntime {
             this.abortController = new AbortController();
             
             try {
-                await this.processMessageWithContext(input, undefined, undefined);
+                await this.processMessageWithContext(input, undefined, undefined, isFloatingBall, restoreRef);
             } finally {
                 this.isProcessing = false;
                 this.abortController = null;
@@ -439,7 +446,16 @@ export class AgentRuntime {
         }
     }
     
-    private async processMessageWithContext(input: string | { content: string, images: string[] }, taskId?: string, projectId?: string) {
+    /**
+     * @returns effectiveTaskId 若发生上下文切换创建了新任务，返回新任务 ID，供 agent:done 使用
+     */
+    private async processMessageWithContext(
+        input: string | { content: string, images: string[] },
+        taskId?: string,
+        projectId?: string,
+        isFloatingBall?: boolean,
+        restoreRef?: { originalHistory: Anthropic.MessageParam[] }
+    ): Promise<{ effectiveTaskId?: string } | void> {
         
         // 重置浏览器关闭意图检测（每次新消息时重置）
         this.userWantsCloseBrowser = false;
@@ -494,7 +510,7 @@ export class AgentRuntime {
             await this.runLoop(taskId);
 
         } catch (error: unknown) {
-            const err = error as { status?: number; message?: string; error?: { message?: string; type?: string } };
+            const err = error as { status?: number; statusCode?: number; message?: string; error?: { message?: string; type?: string } };
             console.error('Agent Loop Error:', error);
 
             // 检查是否有成功的工具执行（特别是脚本执行）
@@ -514,19 +530,63 @@ export class AgentRuntime {
                 return false;
             });
 
-            // 如果脚本已经执行成功，对于后续的 AI 调用错误，只记录日志，不显示错误弹窗
-            if (hasSuccessfulScriptExecution && (err.status === 400 || err.status === 429 || err.status === 500 || err.status === 503)) {
+            // 若脚本已执行成功且非可重试错误，则仅友好提示不弹窗；否则由下方逻辑处理
+            if (hasSuccessfulScriptExecution && (err.status === 400 || err.status === 429 || err.status === 500 || err.status === 503) && !this.isRetryableContextError(err, error)) {
                 console.warn(`[AgentRuntime] Script execution succeeded, but subsequent AI call failed (${err.status}). This is non-critical.`);
-                // 添加一个友好的提示消息到历史记录，但不显示错误弹窗
                 const friendlyMessage: Anthropic.MessageParam = {
                     role: 'assistant',
                     content: `✅ 脚本执行已完成。\n\n注意：后续的 AI 响应处理遇到了问题（状态码 ${err.status}），但这不影响脚本的执行结果。`
                 };
                 this.history.push(friendlyMessage);
                 this.notifyUpdate();
-                // 仍然发送 done 事件，表示任务完成
                 this.broadcast('agent:done', { timestamp: Date.now(), taskId: taskId || undefined, projectId });
-                return; // 提前返回，不显示错误弹窗
+                return;
+            }
+
+            // 上下文超限/可重试错误：自动创建新任务（新会话）并继续执行
+            if (this.isRetryableContextError(err, error)) {
+                try {
+                    const lastUserMsg = this.history.length > 0 ? this.history[this.history.length - 1] : null;
+                    const lastUserInput = lastUserMsg && lastUserMsg.role === 'user'
+                        ? this.extractTextFromMessage(lastUserMsg)
+                        : typeof input === 'string' ? input : (input?.content ?? '');
+                    const condensed = this.buildCondensedContext(this.history, lastUserInput);
+
+                    const newSession = sessionStore.createSession('上下文切换继续');
+                    sessionStore.setSessionId(newSession.id, isFloatingBall ?? false);
+
+                    let effectiveTaskId = taskId;
+                    if (taskId && projectId) {
+                        // 将旧任务标记为 failed（400 错误），后续不再展示
+                        projectStore.updateTask(projectId, taskId, { status: 'failed' });
+                        // Project 模式：新建任务（如点击 + 新任务），关联新 session
+                        const newTask = projectStore.createTask(projectId, '上下文切换继续', newSession.id);
+                        if (newTask) {
+                            effectiveTaskId = newTask.id;
+                            setCurrentTaskIdForContextSwitch(newTask.id);
+                            this.broadcast('project:task:updated', { projectId, taskId, updates: { status: 'failed' } });
+                            this.broadcast('project:task:created', newTask);
+                            this.broadcast('project:task:updated', { projectId, taskId: newTask.id, updates: { sessionId: newSession.id } });
+                        } else {
+                            projectStore.updateTask(projectId, taskId, { sessionId: newSession.id });
+                            this.broadcast('project:task:updated', { projectId, taskId, updates: { sessionId: newSession.id } });
+                        }
+                    }
+
+                    this.history = condensed;
+                    if (restoreRef) {
+                        restoreRef.originalHistory = condensed;
+                    }
+                    sessionStore.updateSession(newSession.id, condensed);
+                    this.notifyUpdate();
+                    this.broadcast('agent:context-switched', { newSessionId: newSession.id, newTaskId: effectiveTaskId, taskId: effectiveTaskId, projectId });
+
+                    await this.runLoop(effectiveTaskId);
+                    return { effectiveTaskId };
+                } catch (retryError) {
+                    console.error('[AgentRuntime] Context switch retry failed:', retryError);
+                    throw error;
+                }
             }
 
             // [Fix] Handle MiniMax/provider sensitive content errors gracefully
@@ -554,7 +614,61 @@ export class AgentRuntime {
             }
         }
     }
-    
+
+    private isRetryableContextError(err: { status?: number; statusCode?: number; message?: string; error?: { message?: string } }, rawError?: unknown): boolean {
+        const status = err.status ?? err.statusCode;
+        // 400: 上下文超限或上游/代理返回的 bad response，均可尝试切换新会话重试
+        if (status === 400) {
+            const msg = (err.message || err.error?.message || '').toLowerCase();
+            const rawStr = rawError ? JSON.stringify(rawError).toLowerCase() : '';
+            return (
+                /context|exceed|input length|token/.test(msg) ||
+                /context|exceed|input length|token/.test(rawStr) ||
+                /bad response status code|provider_response_error|upstream_error/.test(msg) ||
+                /bad response status code|provider_response_error|upstream_error/.test(rawStr)
+            );
+        }
+        return status === 429 || status === 500 || status === 503;
+    }
+
+    private extractTextFromMessage(msg: Anthropic.MessageParam): string {
+        const content = msg.content;
+        if (typeof content === 'string') {
+            return content;
+        }
+        if (Array.isArray(content)) {
+            const texts: string[] = [];
+            for (const block of content) {
+                const b = block as { type?: string; text?: string };
+                if (b.type === 'text' && b.text) {
+                    texts.push(b.text);
+                }
+            }
+            return texts.join(' ');
+        }
+        return '';
+    }
+
+    private buildCondensedContext(history: Anthropic.MessageParam[], lastUserInput: string): Anthropic.MessageParam[] {
+        const older = history.slice(0, -1);
+        if (older.length === 0) {
+            return [{ role: 'user', content: lastUserInput }];
+        }
+
+        const bullets: string[] = [];
+        for (const msg of older) {
+            const text = this.extractTextFromMessage(msg);
+            if (text.trim()) {
+                bullets.push(text.slice(0, 80) + (text.length > 80 ? '...' : ''));
+            }
+        }
+
+        const summary = bullets.length > 0
+            ? `[上一轮对话因上下文过长已自动切换]\n\n简要摘要：\n${bullets.join('\n')}\n\n---\n用户最新请求：\n`
+            : `[继续执行] 用户最新请求：\n`;
+
+        return [{ role: 'user', content: summary + lastUserInput }];
+    }
 
     private async runLoop(_taskId?: string) {
         let keepGoing = true;
@@ -1149,20 +1263,20 @@ ${skillInfo.instructions}
                     // Allow the loop to continue to the next iteration
                     continue;
                 } else if (hasSuccessfulScriptExecution && (loopErr.status === 400 || loopErr.status === 429 || loopErr.status === 500 || loopErr.status === 503)) {
-                    // 如果脚本已经执行成功，对于后续的 API 调用错误，优雅处理
+                    // 若是可重试错误，抛出以交由 processMessageWithContext 触发新会话切换并继续
+                    if (this.isRetryableContextError(loopErr, loopError)) {
+                        console.warn(`[AgentRuntime] Script execution succeeded but API failed (${loopErr.status}). Re-throwing to trigger context switch retry.`);
+                        throw loopError;
+                    }
+                    // 不可重试时沿用原有友好提示
                     console.warn(`[AgentRuntime] Script execution succeeded, but subsequent AI call failed (${loopErr.status}). Ending loop gracefully.`);
-                    
-                    // 检查是否有已创建的文件
                     const createdFiles = this.artifacts.filter(a => a.type === 'file').map(a => a.name).join('、') || '无';
-                    
-                    // 添加一个友好的提示消息
                     const friendlyMessage: Anthropic.MessageParam = {
                         role: 'assistant',
                         content: `✅ 脚本执行已完成。\n\n📁 已生成的文件：${createdFiles}\n\n⚠️ 注意：后续的 AI 响应处理遇到了问题（状态码 ${loopErr.status}），但这不影响脚本的执行结果。如果文件已生成，请在文件资源管理器中查看。`
                     };
                     this.history.push(friendlyMessage);
                     this.notifyUpdate();
-                    // 正常结束循环
                     keepGoing = false;
                     return;
                 } else {
