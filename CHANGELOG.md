@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0] - 2026-02-11
+
+### ✨ 新增功能
+
+- **项目模板**：新建项目支持模板化流程
+  - 基于 draw-tool 精简的 React + Vite + TailwindCSS + Ant Design 模板
+  - 新建项目自动拷贝模板，无需 `pnpm create vite`
+  - Agent 直接生成业务代码，执行 `pnpm install` 和 `pnpm dev` 即可
+  - 模板路径：`resources/templates/react-vite/`
+
+### 🔧 技术改进
+
+- 修改 `project:create-new`：从空目录改为拷贝模板并替换占位符
+- 更新 Agent 系统提示：明确模板化流程，不再执行 `pnpm create vite`
+- 更新 react-project-builder Skill：区分模板化与手动创建流程
+- electron-builder 增加 templates 资源打包
+- verify-builtin-resources 增加模板校验
+
+---
+
 ## [0.0.42] - 2026-02-10
 
 ### ✨ 新增功能

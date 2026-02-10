@@ -151,6 +151,11 @@ jobs:
             cp -r resources/playwright temp-resources/resources/
           fi
           
+          if [ -d "resources/templates" ]; then
+            echo "Copying resources/templates/"
+            cp -r resources/templates temp-resources/resources/
+          fi
+          
           # 打包为 zip
           cd temp-resources
           zip -r ../resources-v${VERSION}.zip . -x "*.DS_Store" -x "__MACOSX/*"
