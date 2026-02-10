@@ -7,6 +7,14 @@ description: Guide for creating React projects with default technology stack (Re
 
 This skill provides guidance for creating modern React projects with a standardized technology stack.
 
+## Template-Based Workflow (OpenCowork)
+
+**When user creates a NEW project via OpenCowork's "New Project" button:**
+- The project is **automatically initialized from a template** (React + Vite + TailwindCSS + Ant Design)
+- **Do NOT run `pnpm create vite`**—the template already has all config files
+- **Only generate business code** (e.g., `src/App.tsx`, `src/components/*`) based on user requirements
+- Then run `pnpm install` and `pnpm dev` in the project directory
+
 ## ⚠️ CRITICAL: Project Location Requirement
 
 **ALL projects MUST be created in:**
@@ -21,7 +29,7 @@ This skill provides guidance for creating modern React projects with a standardi
 - **NEVER** create projects in the current working directory or any other location
 - **ALWAYS** use absolute paths when specifying project location
 - The project name will be appended to this base path: `~/Library/Application Support/qacowork/projects/<project-name>` (use `$HOME` environment variable or `~` in shell commands)
-- When using `pnpm create vite`, use the full absolute path: `~/Library/Application Support/qacowork/projects/<project-name>` (expand `~` to actual home directory)
+- **Template-based projects**: Do NOT run `pnpm create vite`; generate business code only
 
 ## Default Technology Stack
 
@@ -35,91 +43,56 @@ When creating new projects, use the following **default stack** unless the user 
 
 ## Project Creation Steps
 
+### A. Template-Based (OpenCowork New Project)
+
+When the project was created via OpenCowork, the template already includes:
+- package.json, vite.config.ts, tsconfig*, tailwind.config.js, postcss.config.js, eslint.config.js
+- src/main.tsx (with ConfigProvider), src/App.tsx, src/index.css, src/App.css
+- Ant Design, TailwindCSS, PostCSS pre-configured
+
+**Steps:**
+1. Generate business code using `write_file` (e.g., `src/App.tsx`, `src/components/*`)
+2. Run `pnpm install` in the project directory
+3. Run `pnpm dev` to start the development server
+
+```bash
+cd "$HOME/Library/Application Support/qacowork/projects/<project-name>"
+pnpm install
+pnpm dev
+```
+
+### B. Manual Creation (Non-OpenCowork)
+
+**Use only when creating projects outside OpenCowork.**
+
 ### 1. Initialize Project
 
 **CRITICAL: You MUST create the project in the specified directory:**
 
 ```bash
-# Define the base projects directory (MANDATORY)
-# Use $HOME environment variable to get user's home directory dynamically
 PROJECTS_DIR="$HOME/Library/Application Support/qacowork/projects"
-
-# Ensure the directory exists
 mkdir -p "$PROJECTS_DIR"
-
-# Create Vite React TypeScript project in the specified location
 cd "$PROJECTS_DIR"
 pnpm create vite <project-name> --template react-ts
-
-# Navigate to project directory
 cd "$PROJECTS_DIR/<project-name>"
-
-# Install dependencies
-pnpm install
-```
-
-**Alternative using absolute path directly:**
-
-```bash
-# Create project directly in the required directory
-# Use $HOME to get user's home directory dynamically
-pnpm create vite "$HOME/Library/Application Support/qacowork/projects/<project-name>" --template react-ts
-
-# Navigate to project directory
-cd "$HOME/Library/Application Support/qacowork/projects/<project-name>"
-
-# Install dependencies
 pnpm install
 ```
 
 ### 2. Install Required Dependencies
 
 ```bash
-# Install TailwindCSS and dependencies
 pnpm add -D tailwindcss postcss autoprefixer
 pnpm exec tailwindcss init -p
-
-# Install Ant Design
-pnpm add antd
-
-# Install additional useful dependencies
-pnpm add @ant-design/icons  # Ant Design icons
-pnpm add dayjs  # Date handling (used by antd)
+pnpm add antd @ant-design/icons dayjs
 ```
 
 ### 3. Configure TailwindCSS
 
-Update `tailwind.config.js`:
-
-```javascript
-/** @type {import('tailwindcss').Config} */
-export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-}
-```
-
-Add TailwindCSS directives to `src/index.css`:
-
-```css
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-```
+Update `tailwind.config.js` and add `@tailwind base/components/utilities` to `src/index.css`.
 
 ### 4. Configure Ant Design
 
-Import Ant Design styles in `src/main.tsx` or `src/index.tsx`:
-
-```typescript
-import 'antd/dist/reset.css'; // or 'antd/dist/antd.css' for older versions
-```
+Import Ant Design styles and use `ConfigProvider` with zhCN locale in `src/main.tsx`.
 
 ### 5. Project Structure
 
@@ -167,57 +140,33 @@ project-name/
 - Optimize performance (use React.memo, useMemo, useCallback when appropriate)
 - Write clean, maintainable code
 
-## Example: Creating a Complete Project
+## Example: Creating a Complete Project (Template-Based)
 
-**CRITICAL: Always use the required project directory:**
+**When project is created via OpenCowork (template already applied):**
 
 ```bash
-# Define the mandatory projects directory
-# Use $HOME environment variable to get user's home directory dynamically
-PROJECTS_DIR="$HOME/Library/Application Support/qacowork/projects"
-PROJECT_NAME="my-app"
-PROJECT_PATH="$PROJECTS_DIR/$PROJECT_NAME"
-
-# 1. Ensure directory exists and create project
-mkdir -p "$PROJECTS_DIR"
-cd "$PROJECTS_DIR"
-pnpm create vite "$PROJECT_NAME" --template react-ts
+PROJECT_PATH="$HOME/Library/Application Support/qacowork/projects/<project-name>"
 cd "$PROJECT_PATH"
 
-# 2. Install dependencies
+# 1. Generate business code (write_file) - src/App.tsx, src/components/*, etc.
+
+# 2. Install dependencies and start dev server
 pnpm install
-pnpm add -D tailwindcss postcss autoprefixer
-pnpm exec tailwindcss init -p
-pnpm add antd @ant-design/icons dayjs
-
-# 3. Configure TailwindCSS (update tailwind.config.js and src/index.css)
-
-# 4. Import Ant Design styles in src/main.tsx
-import 'antd/dist/reset.css';
-
-# 5. Start development server
 pnpm dev
 ```
 
-**Or using absolute path directly:**
+**Manual creation (outside OpenCowork):**
 
 ```bash
-# 1. Create project in required location
-pnpm create vite "~/Library/Application Support/qacowork/projects/my-app" --template react-ts
-cd "~/Library/Application Support/qacowork/projects/my-app"
-
-# 2. Install dependencies
+PROJECTS_DIR="$HOME/Library/Application Support/qacowork/projects"
+cd "$PROJECTS_DIR"
+pnpm create vite <project-name> --template react-ts
+cd "$PROJECTS_DIR/<project-name>"
 pnpm install
 pnpm add -D tailwindcss postcss autoprefixer
 pnpm exec tailwindcss init -p
 pnpm add antd @ant-design/icons dayjs
-
-# 3. Configure TailwindCSS (update tailwind.config.js and src/index.css)
-
-# 4. Import Ant Design styles in src/main.tsx
-import 'antd/dist/reset.css';
-
-# 5. Start development server
+# Configure tailwind.config.js, src/index.css, src/main.tsx
 pnpm dev
 ```
 

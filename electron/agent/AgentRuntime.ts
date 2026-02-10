@@ -754,31 +754,24 @@ When creating new projects or generating code, if the user does NOT specify a te
   - Create visually appealing and well-organized interfaces
 
 **CRITICAL - Project Location Constraint**:
-- **If CURRENT PROJECT EXISTS**: You are working INSIDE an existing project. When the user asks to create code, a website, or an application, create files DIRECTLY in the current project directory. Do NOT create a new project directory. Use \`write_file\` to create files in the current project path.
-- **If NO CURRENT PROJECT** or **User explicitly asks for NEW project**: ALL new projects MUST be created in: \`~/Library/Application Support/qacowork/projects\` (use \`$HOME\` environment variable in shell commands to get the user's home directory dynamically)
-- **ALWAYS use absolute paths**: When creating NEW projects with \`pnpm create vite\` or similar commands, use the full absolute path: \`$HOME/Library/Application Support/qacowork/projects/<project-name>\` (expand \`$HOME\` to actual home directory)
+- **If CURRENT PROJECT EXISTS**: You are working INSIDE an existing project (created from template). When the user asks to create code, a website, or an application, create files DIRECTLY in the current project directory. Use \`write_file\` to create files in the current project path.
+- **If NO CURRENT PROJECT** or **User explicitly asks for NEW project**: ALL new projects MUST be created in: \`~/Library/Application Support/qacowork/projects\` (use \`$HOME\` environment variable in shell commands). Projects are created from template by OpenCowork—do NOT run \`pnpm create vite\`.
+- **ALWAYS use absolute paths**: When running commands in a project, use the full absolute path: \`$HOME/Library/Application Support/qacowork/projects/<project-name>\`
 - **NEVER create projects elsewhere**: Do NOT create projects in the current working directory, home directory, or any other location. The specified directory is MANDATORY.
-- **Check react-project-builder skill**: For detailed project creation instructions, refer to the react-project-builder skill which enforces this location requirement.
+- **Check react-project-builder skill**: For detailed project creation instructions, refer to the react-project-builder skill.
 
 **CRITICAL - Code Generation Requirements**:
 - **You MUST use tools to generate code**: When the user asks to create a project, website, or application, you MUST use the \`write_file\` tool to create actual code files. Do NOT just describe what you will do—actually create the files.
-- **Complete Implementation**: Generate ALL necessary files including:
-  - Configuration files (package.json, vite.config.ts, tsconfig.json, tailwind.config.js, etc.)
-  - Source code files (src/App.tsx, src/main.tsx, src/index.css, etc.)
-  - Component files and any other required files
+- **Template-based workflow**: When user creates a NEW project via OpenCowork, the project is ALREADY initialized from a template (React + Vite + TailwindCSS + Ant Design). Do NOT run \`pnpm create vite\`. The template already has all config files.
 - **Execution Steps**:
-  - **If CURRENT PROJECT EXISTS**: Create files directly in the current project directory using \`write_file\`. Then use \`run_command\` to install dependencies (\`pnpm install\`) and start the dev server (\`pnpm dev\`) in the current project directory.
-  - **If creating NEW project**: After creating files, use \`run_command\` to:
-    1. Initialize the project in the MANDATORY directory: \`cd "/Users/shilei/Library/Application Support/qacowork/projects" && pnpm create vite <project-name> --template react-ts\`
-    2. Navigate to project: \`cd "/Users/shilei/Library/Application Support/qacowork/projects/<project-name>"\`
-    3. Install dependencies (\`pnpm install\`)
-    4. Start the development server (\`pnpm dev\`)
+  - **If CURRENT PROJECT EXISTS** (including newly created projects with template): Generate business code directly using \`write_file\` (e.g., \`src/App.tsx\`, \`src/components/*\`). Then run \`pnpm install\` and \`pnpm dev\` in the project directory. Do NOT run \`pnpm create vite\`.
+  - **If creating NEW project**: The project directory was already created and populated from template. Generate only the business logic files (e.g., \`src/App.tsx\`, \`src/components/*\`). Run \`pnpm install\` and \`pnpm dev\` in the project directory.
 - **No Text-Only Responses**: If the user asks to create something, your response MUST include tool calls. A text-only response without tool calls is NOT acceptable for project creation tasks.
 
 **Important**: 
-- Always use \`pnpm\` as the package manager (e.g., \`pnpm create vite\`, \`pnpm install\`, \`pnpm dev\`)
-- Install Ant Design: \`pnpm add antd\`
-- Configure TailwindCSS properly with PostCSS
+- Always use \`pnpm\` as the package manager (e.g., \`pnpm install\`, \`pnpm dev\`)
+- Do NOT run \`pnpm create vite\`—projects are created from template
+- Template already includes Ant Design, TailwindCSS, PostCSS
 - Use Ant Design components for forms, tables, buttons, modals, etc.
 - Combine Ant Design with TailwindCSS for custom styling needs
 - Ensure the project structure is clean and follows best practices

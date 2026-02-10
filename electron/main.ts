@@ -1593,15 +1593,25 @@ ipcMain.handle('project:open-folder', async (event, dirPath: string) => {
   }
 });
 
-// 新建项目：在 ~/Library/Application Support/qacowork/projects 下创建目录，重名则加后缀 -1、-2…
+// 新建项目：在 ~/Library/Application Support/qacowork/projects 下创建目录，从模板拷贝，重名则加后缀 -1、-2…
 ipcMain.handle('project:create-new', async (event, name: string) => {
   if (!name || typeof name !== 'string') return { success: false, error: 'Invalid project name' };
   const sanitized = name.trim().replace(/[/\\:*?"<>|]/g, '-').replace(/-+/g, '-') || 'project';
-  
+
+  // 模板路径：开发用 app 目录，生产用 extraResources
+  const templateDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'templates', 'react-vite')
+    : path.join(app.getAppPath(), 'resources', 'templates', 'react-vite');
+
+  if (!fs.existsSync(templateDir)) {
+    console.error(`[Project] Template not found: ${templateDir}`);
+    return { success: false, error: 'Project template not found' };
+  }
+
   // 使用固定的项目目录：~/Library/Application Support/qacowork/projects
   const homeDir = os.homedir();
   const projectsDir = path.join(homeDir, 'Library', 'Application Support', 'qacowork', 'projects');
-  
+
   try {
     if (!fs.existsSync(projectsDir)) {
       fs.mkdirSync(projectsDir, { recursive: true });
@@ -1614,7 +1624,19 @@ ipcMain.handle('project:create-new', async (event, name: string) => {
       dirPath = path.join(projectsDir, dirName);
       n += 1;
     }
-    fs.mkdirSync(dirPath, { recursive: true });
+    fs.cpSync(templateDir, dirPath, { recursive: true });
+
+    // 替换占位符 {{PROJECT_NAME}}
+    const replaceInFile = (filePath: string) => {
+      const fullPath = path.join(dirPath, filePath);
+      if (fs.existsSync(fullPath)) {
+        let content = fs.readFileSync(fullPath, 'utf-8');
+        content = content.replace(/\{\{PROJECT_NAME\}\}/g, dirName);
+        fs.writeFileSync(fullPath, content);
+      }
+    };
+    replaceInFile('package.json');
+    replaceInFile('index.html');
     const project = projectStore.createProject(dirName, dirPath);
     notifyProjectSwitched(event, project);
     const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
