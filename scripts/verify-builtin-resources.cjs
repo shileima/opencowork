@@ -111,6 +111,28 @@ if (builderConfig.includes('resources/mcp')) {
     console.error('❌ MCP directory NOT included in extraResources');
 }
 
+// Check project template
+console.log('\n📄 Checking project template...');
+
+const templatePath = path.join(__dirname, '../resources/templates/react-vite');
+if (fs.existsSync(templatePath)) {
+    const requiredFiles = ['package.json', 'index.html', 'vite.config.ts', 'src/main.tsx', 'src/App.tsx'];
+    const missingFiles = requiredFiles.filter(f => !fs.existsSync(path.join(templatePath, f)));
+    if (missingFiles.length === 0) {
+        console.log('✅ Project template (react-vite) found with required files');
+    } else {
+        console.error('❌ Project template missing files:', missingFiles.join(', '));
+    }
+} else {
+    console.error('❌ Project template not found at:', templatePath);
+}
+
+if (builderConfig.includes('resources/templates')) {
+    console.log('✅ Templates directory included in extraResources');
+} else {
+    console.error('❌ Templates directory NOT included in extraResources');
+}
+
 if (builderConfig.includes('resources/playwright') || builderConfig.includes('playwright/package')) {
     console.log('✅ Playwright package included in extraResources');
 } else {

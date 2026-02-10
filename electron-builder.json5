@@ -35,6 +35,11 @@
       "filter": "**/*"
     },
     {
+      "from": "resources/templates",
+      "to": "templates",
+      "filter": "**/*"
+    },
+    {
       "from": "resources/mcp",
       "to": "mcp",
       "filter": "**/*"
