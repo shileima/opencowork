@@ -183,10 +183,11 @@ export function ProjectView({
             }
         });
 
-        // 监听项目切换事件：关闭所有 tab，再加载新项目
+        // 监听项目切换事件：清空聊天/流式文本、关闭所有 tab，待任务列表加载后再加载最近一条任务
         const removeProjectSwitchListener = window.ipcRenderer.on('project:switched', () => {
+            setStreamingText('');
             multiTabEditorRefRef.current?.closeAllTabs?.();
-            loadCurrentProject();
+            loadCurrentProject(); // 内部会加载任务列表，再选中最近一条
         });
 
         // 监听项目创建事件，自动加载项目并选中新任务

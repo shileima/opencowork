@@ -80,6 +80,7 @@ function App() {
       });
 
       const removeProjectSwitchedListener = window.ipcRenderer.on('project:switched', () => {
+        setHistory([]); // 切换工程时立即清空聊天区域
         loadCurrentProject();
       });
 
