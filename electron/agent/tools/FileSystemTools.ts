@@ -663,14 +663,17 @@ export class FileSystemTools {
         // 检测是否为开发服务器命令 - 禁止打开外部 Chrome，使用内置浏览器 Tab 展示
         const isDevServerCommand = /run\s+(dev|start)\b|pnpm\s+(dev|start)\b|yarn\s+(dev|start)\b|npx\s+vite|vite\s|webpack.*serve/i.test(args.command);
 
+        // 检测是否为预览服务器命令（构建后查看，Vite 默认 4173）
+        const isPreviewServerCommand = /(?:pnpm|npm|yarn)\s+(?:run\s+)?preview\b|vite\s+preview/i.test(args.command);
+
         // 检测项目需要的 Node.js 版本
-        // 对于开发服务器命令，等待下载完成；对于其他命令，异步下载
+        // 对于开发/预览服务器命令，等待下载完成；对于其他命令，异步下载
         let projectNodePath: string | null = null;
         let projectNpmPath: string | null = null;
         let projectEnv: Record<string, string> = {};
         
         try {
-            const waitForDownload = isDevServerCommand; // 开发服务器命令等待下载完成
+            const waitForDownload = isDevServerCommand || isPreviewServerCommand;
             console.log(`[FileSystemTools] Detecting Node.js version for project at ${workingDir}, waitForDownload=${waitForDownload}`);
             const projectNodeInfo = await nodeVersionManager.getNodePathForProject(workingDir, waitForDownload);
             projectNodePath = projectNodeInfo.nodePath;
@@ -764,13 +767,13 @@ export class FileSystemTools {
                 ...npmEnv,
                 PATH: finalPath, // 使用修改后的 PATH
                 // CRA/Vite 等支持 BROWSER=none
-                ...(isDevServerCommand ? { BROWSER: 'none' } : {}),
+                ...(isDevServerCommand || isPreviewServerCommand ? { BROWSER: 'none' } : {}),
                 // Project 模式约束：开发服务器统一使用端口 3000（CRA/Next 等认 PORT，Vite 需配合 --port）
                 ...(isDevServerCommand ? { PORT: '3000', VITE_PORT: '3000' } : {})
             };
 
-            // macOS/Linux：用假命令劫持 open/xdg-open，阻止 webpack-dev-server 等打开外部浏览器
-            if (isDevServerCommand && (process.platform === 'darwin' || process.platform === 'linux')) {
+            // macOS/Linux：用假命令劫持 open/xdg-open，阻止 webpack-dev-server / vite preview 等打开外部浏览器
+            if ((isDevServerCommand || isPreviewServerCommand) && (process.platform === 'darwin' || process.platform === 'linux')) {
                 const noBrowserDir = this.ensureNoBrowserScriptDir();
                 if (noBrowserDir) {
                     env = { ...env, PATH: `${noBrowserDir}:${env.PATH || ''}` };
@@ -875,6 +878,38 @@ export class FileSystemTools {
                 }
                 
                 return result;
+            }
+
+            // 预览服务器命令：后台运行，Vite 默认 4173，便于内置浏览器预览构建结果
+            if (isPreviewServerCommand) {
+                const PROJECT_PREVIEW_PORT = 4173;
+                await this.killProcessOnPort(PROJECT_PREVIEW_PORT);
+                const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
+
+                console.log(`[FileSystemTools] Starting preview server with command: ${command}`);
+                const child = spawn(command, [], {
+                    cwd: workingDir,
+                    env: env,
+                    shell,
+                    detached: true,
+                    stdio: ['ignore', 'pipe', 'pipe'],
+                });
+
+                FileSystemTools.childProcesses.add(child);
+                FileSystemTools.activePorts.add(PROJECT_PREVIEW_PORT);
+
+                child.on('exit', () => {
+                    FileSystemTools.childProcesses.delete(child);
+                    FileSystemTools.activePorts.delete(PROJECT_PREVIEW_PORT);
+                });
+
+                child.unref();
+
+                console.log(`[FileSystemTools] Waiting for preview server to start on port ${PROJECT_PREVIEW_PORT}...`);
+                await new Promise((resolve) => setTimeout(resolve, 3000));
+
+                const url = `http://localhost:${PROJECT_PREVIEW_PORT}`;
+                return `[Preview server started in background]\n\nCommand: ${command}\nWorking directory: ${workingDir}\n\nPreview URL: ${url}\n\nThe preview server is running on port ${PROJECT_PREVIEW_PORT}. Use open_browser_preview to display it in the built-in browser.`;
             }
 
             if (Object.keys(playwrightEnv).length > 0) {

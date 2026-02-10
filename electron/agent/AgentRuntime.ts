@@ -820,6 +820,13 @@ When you start a local development server (e.g., \`npm run dev\`, \`pnpm dev\`, 
 
 **Development servers are always started on port 3000** (Vite, CRA, Next.js, etc.). Use **http://localhost:3000** for open_browser_preview and validate_page.
 
+### Preview Server (构建后预览)
+When the user asks to **start the preview server** (启动预览服务器), **view the built application** (查看构建后的应用), or **deploy locally** (本地部署):
+1. **Ensure build exists**: Run \`pnpm build\` first if dist/ may not exist.
+2. **Start preview server** using \`run_command\` with \`pnpm preview\` (or \`vite preview\`).
+3. **Open browser preview** using \`open_browser_preview\` with **http://localhost:4173** (Vite preview default port).
+The preview server runs on **port 4173** and serves the built output from dist/. Use it to verify the production build locally.
+
 ### Closing/Stopping Local Services (CRITICAL)
 When the user asks to close/stop a service **without specifying which one** (e.g. "关闭服务", "关闭本地服务", "stop the server"):
 - **Scope**: ONLY consider services running from the **current project** (Primary Working Directory above). That is the user's selected project.
