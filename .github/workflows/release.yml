@@ -16,6 +16,7 @@ jobs:
       contents: write
     outputs:
       release_url: ${{ steps.create_release.outputs.url }}
+      tag_name: ${{ steps.extract_version.outputs.version }}
     steps:
       -
         name: Check out Git repository
@@ -24,11 +25,17 @@ jobs:
       -
         name: Extract version from tag
         id: extract_version
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "version=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
       -
         name: Create Release
         id: create_release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.extract_version.outputs.version }}
@@ -175,6 +182,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
+          tag_name: ${{ needs.create-release.outputs.tag_name }}
           files: |
             release/*/*.dmg
             release/*/*.exe
@@ -189,6 +197,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success() && matrix.platform == 'linux'
         with:
+          tag_name: ${{ needs.create-release.outputs.tag_name }}
           files: |
             resource-manifest.json
             resources-*.zip
