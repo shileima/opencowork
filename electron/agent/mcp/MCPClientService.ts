@@ -343,44 +343,80 @@ export class MCPClientService {
         // Initialize Status Map & Collect Connection Promises
         const connectionPromises: Promise<void>[] = [];
 
+        /** 检查配置是否缺少 API Key（提前过滤，减少日志噪音） */
+        const isMissingApiKey = (config: MCPServerConfig): boolean => {
+            const hasUnreplacedPlaceholder = (str: string | undefined) => str && str.includes('{{') && str.includes('_API_KEY}}');
+            
+            if (config.type === 'sse' || config.type === 'http') {
+                const headers = config.headers || {};
+                for (const key in headers) {
+                    const value = headers[key];
+                    // Check for empty Bearer token or unreplaced placeholders
+                    if (key.toLowerCase() === 'authorization' && (value === 'Bearer ' || value === 'Bearer')) {
+                        return true;
+                    }
+                    if (hasUnreplacedPlaceholder(value)) {
+                        return true;
+                    }
+                }
+            } else if (config.type === 'stdio') {
+                const env = config.env || {};
+                for (const key in env) {
+                    // Check for API_KEY or TOKEN env vars that are empty or have placeholders
+                    if ((key.includes('API_KEY') || key.includes('TOKEN')) && !env[key]) {
+                        return true;
+                    }
+                    if (hasUnreplacedPlaceholder(env[key])) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
         for (const [key, serverConfig] of Object.entries(masterConfig)) {
             // Ensure name property exists or inject key
             if (!serverConfig.name) serverConfig.name = key;
 
-            // Debug log before checking disabled status
-            console.log(`[MCP] Checking ${key}: disabled=${serverConfig.disabled}`);
-
             this.updateStatus(key, 'stopped', undefined, serverConfig);
 
-            if (!serverConfig.disabled) {
-                console.log(`[MCP] ${key} is ENABLED, attempting to connect...`);
-                // [Optimization] Push to array instead of awaiting sequentially
-                // Relaxed Timeout: Just log warning if slow, but don't fail.
-                // This allows background loading for slow servers without blocking.
-                const connectWithSafeTimeout = async () => {
-                    // Create a timeout promise (e.g., 15 seconds)
-                    const timeoutMs = 15000;
-                    const timeoutPromise = new Promise((_, reject) =>
-                        setTimeout(() => reject(new Error(`Connection timed out after ${timeoutMs}ms`)), timeoutMs)
-                    );
-
-                    try {
-                        console.log(`[MCP] Initiating connection to ${key}...`);
-                        // Race connection against timeout
-                        await Promise.race([
-                            this.connectToServer(key, serverConfig),
-                            timeoutPromise
-                        ]);
-                        console.log(`[MCP] Connection to ${key} completed.`);
-                    } catch (e: any) {
-                        console.error(`[MCP] ${key} connection failed: ${e.message}`);
-                        this.updateStatus(key, 'error', `Connection Failed: ${e.message}`);
-                    }
-                };
-                connectionPromises.push(connectWithSafeTimeout());
-            } else {
-                console.log(`[MCP] ${key} is DISABLED, skipping connection.`);
+            // 静默跳过禁用的服务器（不打印日志）
+            if (serverConfig.disabled) {
+                continue;
             }
+
+            // 提前检查 API Key，如果缺失则静默跳过（减少日志噪音）
+            if (isMissingApiKey(serverConfig)) {
+                this.updateStatus(key, 'error', 'Missing API Key: API Key not configured. Please check Settings.');
+                continue;
+            }
+
+            // 只有真正需要连接时才打印日志
+            console.log(`[MCP] Connecting to ${key}...`);
+            
+            // [Optimization] Push to array instead of awaiting sequentially
+            // Relaxed Timeout: Just log warning if slow, but don't fail.
+            // This allows background loading for slow servers without blocking.
+            const connectWithSafeTimeout = async () => {
+                // Create a timeout promise (e.g., 15 seconds)
+                const timeoutMs = 15000;
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error(`Connection timed out after ${timeoutMs}ms`)), timeoutMs)
+                );
+
+                try {
+                    // Race connection against timeout
+                    await Promise.race([
+                        this.connectToServer(key, serverConfig),
+                        timeoutPromise
+                    ]);
+                    console.log(`[MCP] ✓ ${key} connected`);
+                } catch (e: any) {
+                    console.error(`[MCP] ✗ ${key} connection failed: ${e.message}`);
+                    this.updateStatus(key, 'error', `Connection Failed: ${e.message}`);
+                }
+            };
+            connectionPromises.push(connectWithSafeTimeout());
         }
 
         // [Optimization] Execute all connections in parallel

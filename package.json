@@ -1,7 +1,7 @@
 {
   "name": "qacowork",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "QACowork - 你的数字测试同事",
   "author": {
     "name": "shileima",
@@ -16,6 +16,8 @@
     "build:dir": "node scripts/verify-builtin-resources.cjs && tsc && vite build && electron-builder --dir",
     "build:icons": "node scripts/build-icons.mjs",
     "build:manifest": "node scripts/generate-resource-manifest.mjs",
+    "deploy": "node scripts/deploy.mjs",
+    "deploy:test": "node scripts/test-deploy.mjs",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives",
     "preview": "vite preview",
     "verify:resources": "node scripts/verify-builtin-resources.cjs",
