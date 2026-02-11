@@ -24,6 +24,7 @@ interface ProviderConfig {
     maxTokens?: number;
     isCustom?: boolean;
     readonlyUrl?: boolean;
+    isPreset?: boolean;
 }
 
 interface Config {
@@ -128,6 +129,18 @@ const ProviderLogo = ({ id, name }: { id: string, name: string }) => {
         </div>
     );
 };
+
+/**
+ * 掩码显示 API 密钥
+ */
+function maskApiKey(key: string): string {
+    if (!key || key.length < 10) {
+        return '***';
+    }
+    const start = key.substring(0, 3);
+    const end = key.substring(key.length - 4);
+    return `${start}***...***${end}`;
+}
 
 export function SettingsView({ onClose }: SettingsViewProps) {
     const [isProviderOpen, setIsProviderOpen] = useState(false);
@@ -462,6 +475,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                 const config = cfg as Config;
                 // Ensure all providers are initialized, including custom
                 const initializedProviders = { ...config.providers };
+                // Only create custom provider if it doesn't exist AND is not preset
+                // If it exists (even with preset config), keep it as is
                 if (!initializedProviders['custom']) {
                     initializedProviders['custom'] = {
                         id: 'custom',
@@ -469,7 +484,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                         apiKey: '',
                         apiUrl: '',
                         model: '',
-                        isCustom: true
+                        isCustom: true,
+                        isPreset: false
                     };
                 }
                 setConfig({ ...config, providers: initializedProviders });
@@ -858,30 +874,56 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                 )}
                                             </div>
                                             <div className="relative">
-                                                <input
-                                                    type={showApiKey ? "text" : "password"}
-                                                    value={config.providers[config.activeProviderId].apiKey}
-                                                    onChange={(e) => {
-                                                        const newProviders = { ...config.providers };
-                                                        newProviders[config.activeProviderId] = {
-                                                            ...newProviders[config.activeProviderId],
-                                                            apiKey: e.target.value
-                                                        };
-                                                        setConfig({ ...config, providers: newProviders });
-                                                    }}
-                                                    placeholder={t('apiKeyPlaceholder')}
-                                                    onBlur={handleForceSave}
-                                                    className="w-full bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 pr-9"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowApiKey(!showApiKey)}
-                                                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
-                                                    title={showApiKey ? t('hide') : t('show')}
-                                                >
-                                                    {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
-                                                </button>
+                                                {(() => {
+                                                    const currentProvider = config.providers[config.activeProviderId];
+                                                    const isPreset = currentProvider?.isPreset === true;
+                                                    const displayValue = isPreset 
+                                                        ? maskApiKey(currentProvider.apiKey)
+                                                        : currentProvider?.apiKey || '';
+                                                    
+                                                    return (
+                                                        <>
+                                                            <input
+                                                                type={isPreset ? "text" : (showApiKey ? "text" : "password")}
+                                                                value={displayValue}
+                                                                onChange={(e) => {
+                                                                    if (isPreset) return; // 预设配置不允许修改
+                                                                    const newProviders = { ...config.providers };
+                                                                    newProviders[config.activeProviderId] = {
+                                                                        ...newProviders[config.activeProviderId],
+                                                                        apiKey: e.target.value
+                                                                    };
+                                                                    setConfig({ ...config, providers: newProviders });
+                                                                }}
+                                                                placeholder={isPreset ? '预设配置（不可修改）' : t('apiKeyPlaceholder')}
+                                                                onBlur={handleForceSave}
+                                                                disabled={isPreset}
+                                                                className={`w-full border border-stone-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 pr-9 ${
+                                                                    isPreset 
+                                                                        ? 'bg-stone-100 dark:bg-zinc-800 cursor-not-allowed' 
+                                                                        : 'bg-white dark:bg-zinc-900'
+                                                                }`}
+                                                            />
+                                                            {!isPreset && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setShowApiKey(!showApiKey)}
+                                                                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
+                                                                    title={showApiKey ? t('hide') : t('show')}
+                                                                >
+                                                                    {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                                                                </button>
+                                                            )}
+                                                        </>
+                                                    );
+                                                })()}
                                             </div>
+                                            {config.providers[config.activeProviderId]?.isPreset && (
+                                                <div className="text-xs text-orange-600 dark:text-orange-400 mt-1.5 flex items-center gap-1.5">
+                                                    <Shield size={12} />
+                                                    <span>此为预设配置，API 密钥已加密保护，不可修改</span>
+                                                </div>
+                                            )}
 
                                             <div className="mt-3">
                                                 <div className="flex items-center justify-between mb-1.5">
