@@ -290,26 +290,13 @@ app.whenReady().then(() => {
   createMainWindow()
   createFloatingBallWindow()
 
-  // 3. Ensure built-in MCP config exists (synchronous, fast)
+  // 3. Quick synchronous setup (non-blocking, fast)
   ensureBuiltinMcpConfig()
-
-  // 4. Sync official scripts to user directory (non-blocking)
   scriptStore.syncOfficialScripts()
-
-  // 4.5. Initialize permission service and check preset admin
-  // 这会自动检查当前用户是否为预设管理员，如果是则自动设置为管理员
   permissionService.getUserRole()
-
-  // 5. Built-in skills are now loaded async by SkillManager (inside initializeAgent)
-  // ensureBuiltinSkills() - Removed
-
-  // 6. Initialize agent AFTER windows are created
-  initializeAgent()
-
-  // 6.5 Clean up empty sessions on startup
   sessionStore.cleanupEmptySessions()
 
-  // 7. Initialize resource updater and start auto-check
+  // 4. Initialize resource updater (fast, just creates instance)
   resourceUpdater = new ResourceUpdater()
   
   // 开发环境也启用自动更新检查 (用于测试)
@@ -3119,7 +3106,84 @@ ipcMain.handle('terminal:destroy', (_, id: string) => {
   return { success: true };
 });
 
-function initializeAgent() {
+/** 发送初始化进度到渲染进程 */
+function sendInitProgress(stage: string, progress: number, detail?: string) {
+  mainWin?.webContents.send('app:init-progress', { stage, progress, detail })
+}
+
+/**
+ * 延迟初始化：在窗口渲染完成后再执行耗时操作
+ * 避免阻塞主进程导致白屏
+ */
+async function deferredInitialization() {
+  console.log('[Main] Starting deferred initialization...')
+  const startTime = Date.now()
+
+  try {
+    // Stage 1: 配置加载 (极快，已完成)
+    sendInitProgress('加载配置', 10)
+    
+    // 让渲染进程有时间展示 SplashScreen
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    // Stage 2: 初始化 Agent（包含 Skills + MCP 加载，最耗时）
+    sendInitProgress('初始化 AI 引擎', 20)
+    await initializeAgentAsync()
+
+    // Stage 3: 加载会话
+    sendInitProgress('加载工作区', 80)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    autoLoadLatestSession()
+
+    // Stage 4: 完成
+    sendInitProgress('启动完成', 100)
+    const elapsed = Date.now() - startTime
+    console.log(`[Main] Deferred initialization completed in ${elapsed}ms`)
+
+    // 短暂延迟后通知前端初始化完成
+    setTimeout(() => {
+      mainWin?.webContents.send('app:init-complete')
+    }, 200)
+  } catch (error) {
+    console.error('[Main] Deferred initialization failed:', error)
+    // 即使失败也通知前端完成，避免永远卡在加载界面
+    mainWin?.webContents.send('app:init-complete')
+  }
+}
+
+/** 自动加载最近一次会话 */
+function autoLoadLatestSession() {
+  try {
+    if (!mainAgent) {
+      console.log('[Main] Agent not ready, skip auto-load session')
+      return
+    }
+    
+    const sessions = sessionStore.getSessions()
+    if (sessions && sessions.length > 0) {
+      const sortedSessions = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+      const latestSession = sortedSessions[0]
+      
+      if (latestSession) {
+        console.log(`[Main] Auto-loading latest session: ${latestSession.id} (${latestSession.title})`)
+        sessionStore.setSessionId(latestSession.id, false)
+        const fullSession = sessionStore.getSession(latestSession.id)
+        if (fullSession && fullSession.messages.length > 0) {
+          mainAgent.loadHistory(fullSession.messages)
+          mainWin?.webContents.send('session:auto-loaded', latestSession.id)
+          console.log(`[Main] Successfully auto-loaded session: ${latestSession.title}`)
+        }
+      }
+    } else {
+      console.log('[Main] No sessions found, skipping auto-load')
+    }
+  } catch (error) {
+    console.error('[Main] Error auto-loading latest session:', error)
+  }
+}
+
+/** 异步初始化 Agent，发送中间进度 */
+async function initializeAgentAsync() {
   const apiKey = configStore.getApiKey() || process.env.ANTHROPIC_API_KEY
   const model = configStore.getModel()
   const apiUrl = configStore.getApiUrl()
@@ -3130,27 +3194,60 @@ function initializeAgent() {
       console.log('Disposing previous main agent instance...');
       mainAgent.dispose();
     }
-    // Note: Don't dispose floatingBallAgent here as it will be created independently in createFloatingBallWindow
 
-    // Create separate agent for main window only
+    // Create agent instance (fast, no IO)
     const maxTokens = configStore.getMaxTokens();
     mainAgent = new AgentRuntime(apiKey, mainWin, model, apiUrl, maxTokens);
 
-    // Initialize the agent asynchronously
-    mainAgent.initialize().then(() => {
-      console.log('Main agent initialized with model:', model);
-    }).catch(err => {
-      console.error('Main agent initialization failed:', err);
-    });
+    // Initialize Skills + MCP in parallel (the slow part)
+    sendInitProgress('加载 Skills', 30)
+    await mainAgent.initialize()
+    sendInitProgress('AI 引擎就绪', 70)
+    console.log('Main agent initialized with model:', model);
 
     // Set global references for backward compatibility
     (global as Record<string, unknown>).agent = mainAgent;
     (global as Record<string, unknown>).mainAgent = mainAgent;
 
     console.log('API URL:', apiUrl)
+    
+    // 主 agent 就绪后，立即初始化浮窗 agent（如果窗口已创建）
+    if (floatingBallWin && !floatingBallAgent) {
+      initializeFloatingBallAgent()
+    }
   } else {
     console.warn('No API Key found. Please configure in Settings.')
   }
+}
+
+/** 同步版本 - 仅供 IPC 重新初始化时使用 */
+function initializeAgent() {
+  initializeAgentAsync().catch(err => {
+    console.error('Agent initialization failed:', err)
+  })
+}
+
+/** 初始化浮窗 agent - 主 agent 就绪后调用，避免重复加载 skills */
+function initializeFloatingBallAgent() {
+  if (floatingBallAgent || !mainAgent) {
+    // 如果已创建或主 agent 未就绪，直接返回（不再循环等待）
+    return
+  }
+  
+  const apiKey = configStore.getApiKey() || process.env.ANTHROPIC_API_KEY
+  if (!apiKey || !floatingBallWin) return
+
+  console.log('[Main] Creating floating ball agent (main agent is ready)...')
+  floatingBallAgent = new AgentRuntime(apiKey, floatingBallWin, configStore.getModel(), configStore.getApiUrl(), configStore.getMaxTokens());
+
+  // Skills 和 MCP 已被主 agent 加载过，这里的 initialize 会命中 SkillManager 的 cooldown 缓存
+  floatingBallAgent.initialize().then(() => {
+    console.log('Floating ball agent created independently');
+  }).catch(err => {
+    console.error('Floating ball agent initialization failed:', err);
+  });
+
+  (global as Record<string, unknown>).floatingBallAgent = floatingBallAgent
 }
 
 function createTray() {
@@ -3267,7 +3364,7 @@ function createMainWindow() {
     icon: iconImage || iconPath,
     frame: false, // Custom frame for consistent look
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden', // Mac: inset buttons, others: hidden
-    backgroundColor: '#ffffff',
+    backgroundColor: '#18181b', // 与 index.html 极简 loading 一致，无白屏/黑屏闪变
     webPreferences: {
       preload: preloadPath,
       nodeIntegration: false,
@@ -3373,10 +3470,8 @@ function createMainWindow() {
   }
 
   mainWin.once('ready-to-show', () => {
-    console.log('Main window ready.')
-    // 确保窗口显示在最前面
-    mainWin?.show()
-    mainWin?.focus()
+    console.log('Main window ready (staying hidden until did-finish-load).')
+    // 不在首帧显示，等 did-finish-load 后再显示，避免白屏；期间仅 dock/任务栏跳动
   })
 
   // Handle external links：localhost 和部署域名用内置浏览器打开，其他用系统浏览器
@@ -3455,47 +3550,15 @@ function createMainWindow() {
 
   mainWin.webContents.on('did-finish-load', () => {
     console.log('[Browser:Diag] 主窗口加载完成 (did-finish-load)');
+    // loading 页已就绪，此时再显示窗口，用户看到即为 loading 效果，无白屏
+    if (!mainWin?.isVisible()) {
+      mainWin?.show();
+      mainWin?.focus();
+    }
     mainWin?.webContents.send('main-process-message', (new Date).toLocaleString())
     
-    // 自动加载最近一次会话
-    const tryLoadLatestSession = () => {
-      try {
-        // 确保 agent 已初始化
-        if (!mainAgent) {
-          console.log('[Main] Agent not ready yet, retrying in 500ms...')
-          setTimeout(tryLoadLatestSession, 500)
-          return
-        }
-        
-        const sessions = sessionStore.getSessions()
-        if (sessions && sessions.length > 0) {
-          // 按更新时间排序，获取最近一次会话
-          const sortedSessions = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
-          const latestSession = sortedSessions[0]
-          
-          if (latestSession) {
-            console.log(`[Main] Auto-loading latest session: ${latestSession.id} (${latestSession.title})`)
-            // 设置当前会话ID
-            sessionStore.setSessionId(latestSession.id, false)
-            // 加载会话历史
-            const fullSession = sessionStore.getSession(latestSession.id)
-            if (fullSession && fullSession.messages.length > 0) {
-              mainAgent.loadHistory(fullSession.messages)
-              // 通知渲染进程会话已加载
-              mainWin?.webContents.send('session:auto-loaded', latestSession.id)
-              console.log(`[Main] Successfully auto-loaded session: ${latestSession.title}`)
-            }
-          }
-        } else {
-          console.log('[Main] No sessions found, skipping auto-load')
-        }
-      } catch (error) {
-        console.error('[Main] Error auto-loading latest session:', error)
-      }
-    }
-    
-    // 延迟一下确保 agent 已初始化
-    setTimeout(tryLoadLatestSession, 500)
+    // === 延迟初始化：窗口已显示后再执行重操作，避免白屏 ===
+    deferredInitialization()
   })
 
   if (VITE_DEV_SERVER_URL) {
@@ -3559,22 +3622,12 @@ function createFloatingBallWindow() {
   })
 
   // Create independent agent for floating ball after window is created
+  // Note: Initialization is deferred until main agent is ready to avoid duplicate skill loading
   floatingBallWin.webContents.on('did-finish-load', () => {
-    if (!floatingBallAgent) {
-      // Create floating ball agent with same config as main agent
-      const apiKey = configStore.getApiKey() || process.env.ANTHROPIC_API_KEY
-      if (apiKey && floatingBallWin) {
-        floatingBallAgent = new AgentRuntime(apiKey, floatingBallWin, configStore.getModel(), configStore.getApiUrl(), configStore.getMaxTokens());
-
-        // Initialize the agent asynchronously
-        floatingBallAgent.initialize().then(() => {
-          console.log('Floating ball agent created independently');
-        }).catch(err => {
-          console.error('Floating ball agent initialization failed:', err);
-        });
-
-        (global as Record<string, unknown>).floatingBallAgent = floatingBallAgent
-      }
+    // 只有在主 agent 已就绪时才创建浮窗 agent
+    // 否则等待主 agent 初始化完成后主动调用
+    if (mainAgent) {
+      initializeFloatingBallAgent()
     }
   })
 }

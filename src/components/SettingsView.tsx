@@ -146,7 +146,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     const [isProviderOpen, setIsProviderOpen] = useState(false);
 
     const [config, setConfig] = useState<Config>({
-        activeProviderId: 'minimax_intl',
+        activeProviderId: 'custom',
         providers: {},
         authorizedFolders: [],
         networkAccess: false,
@@ -488,9 +488,10 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                         isPreset: false
                     };
                 }
-                setConfig({ ...config, providers: initializedProviders });
-                // Initialize baseline reference to avoid saving what we just loaded
-                prevConfigRef.current = JSON.stringify({ ...config, providers: initializedProviders });
+                const finalConfig = { ...config, providers: initializedProviders };
+                // CRITICAL: Set prevConfigRef BEFORE setConfig to prevent auto-save loop
+                prevConfigRef.current = JSON.stringify(finalConfig);
+                setConfig(finalConfig);
             }
         }).finally(() => {
             setIsLoading(false);
@@ -538,13 +539,6 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         window.ipcRenderer.invoke('skills:list').then(list => setSkills(list as SkillInfo[]));
     };
 
-    // Initialize prevConfigRef when config is first loaded
-    useEffect(() => {
-        if (config && prevConfigRef.current === '') {
-            prevConfigRef.current = JSON.stringify(config);
-        }
-    }, [config]);
-
     // Reusable save function with force option
     const saveConfig = async (cfg: Config, force: boolean = false) => {
         // Prevent saving if still loading or if config is empty/default
@@ -572,6 +566,12 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     useEffect(() => {
         if (isFirstRender.current) {
             isFirstRender.current = false;
+            return;
+        }
+
+        // Skip if config hasn't actually changed (prevent redundant saves)
+        const currentConfigStr = JSON.stringify(config);
+        if (currentConfigStr === prevConfigRef.current) {
             return;
         }
 

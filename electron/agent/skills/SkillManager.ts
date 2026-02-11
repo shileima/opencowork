@@ -12,6 +12,16 @@ export interface SkillDefinition {
 }
 
 export class SkillManager {
+    private static instance: SkillManager | null = null;
+
+    /** 获取单例实例，避免多个 agent 重复加载 skills */
+    static getInstance(): SkillManager {
+        if (!SkillManager.instance) {
+            SkillManager.instance = new SkillManager();
+        }
+        return SkillManager.instance;
+    }
+
     private skillsDir: string;
     private skills: Map<string, SkillDefinition> = new Map();
 
@@ -121,7 +131,7 @@ export class SkillManager {
                             // Check if skill already exists
                             try {
                                 await fs.access(targetSkillPath);
-                                console.log(`[SkillManager] ⊙ Skipped existing skill: ${item}`);
+                                // 静默跳过已存在的 skill（减少日志噪音）
                                 skippedCount++;
                             } catch {
                                 // Doesn't exist, proceed to copy
@@ -195,7 +205,10 @@ export class SkillManager {
 
             console.log(`[SkillManager] Reading skills directory: ${this.skillsDir}`);
             const files = await fs.readdir(this.skillsDir);
-            console.log(`[SkillManager] Found ${files.length} files/folders.`);
+            console.log(`[SkillManager] Found ${files.length} files/folders, loading...`);
+
+            let loadedCount = 0;
+            let failedCount = 0;
 
             for (const file of files) {
                 // console.log(`[SkillManager] Checking file: ${file}`); // Reduced verbosity
@@ -210,19 +223,25 @@ export class SkillManager {
                     const skillMdPath = path.join(filePath, 'SKILL.md');
                     try {
                         await fs.access(skillMdPath);
-                        console.log(`[SkillManager] Parsing skill (directory): ${file}`);
+                        // 静默加载（减少日志噪音）
                         await this.parseSkill(skillMdPath);
-                    } catch {
-                        // console.log(`[SkillManager] No SKILL.md found in ${file}`);
+                        loadedCount++;
+                    } catch (e: any) {
+                        // 静默跳过无效的 skill 目录
+                        failedCount++;
                     }
                 } else if (file.endsWith('.md')) {
                     // Support legacy single-file skills
-                    console.log(`[SkillManager] Parsing skill (file): ${file}`);
-                    await this.parseSkill(filePath);
+                    try {
+                        await this.parseSkill(filePath);
+                        loadedCount++;
+                    } catch (e: any) {
+                        failedCount++;
+                    }
                 }
             }
             this.lastLoaded = Date.now();
-            console.log(`[SkillManager] Loaded ${this.skills.size} skills total.`);
+            console.log(`[SkillManager] ✓ Loaded ${this.skills.size} skills (${loadedCount} processed, ${failedCount} skipped)`);
         } finally {
             this.isLoading = false;
         }
@@ -230,7 +249,7 @@ export class SkillManager {
 
     private async parseSkill(filePath: string) {
         try {
-            console.log(`[SkillManager] Reading content of ${filePath}`);
+            // 静默读取（减少日志噪音）
             const content = await fs.readFile(filePath, 'utf-8');
             const parts = content.split('---');
             if (parts.length < 3) {
@@ -250,7 +269,7 @@ export class SkillManager {
                     console.log(`[SkillManager] Sanitized skill name: "${originalName}" -> "${sanitizedName}"`);
                 }
 
-                console.log(`[SkillManager] Successfully loaded ${sanitizedName}`);
+                // 静默加载成功（减少日志噪音）
 
                 // Key map by sanitized name so the AgentRuntime can find it exactly as the model calls it
                 this.skills.set(sanitizedName, {

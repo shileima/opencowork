@@ -263,7 +263,7 @@ export class AgentRuntime {
         this.maxTokens = maxTokens;
         this.windows = [window];
         this.fsTools = new FileSystemTools();
-        this.skillManager = new SkillManager();
+        this.skillManager = SkillManager.getInstance();
         this.mcpService = MCPClientService.getInstance();
         // Note: IPC handlers are now registered in main.ts, not here
     }

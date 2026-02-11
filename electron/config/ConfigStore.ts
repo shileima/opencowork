@@ -152,27 +152,15 @@ class ConfigStore {
                     }
                 }
 
-                // Decrypt encrypted API keys
-                if (provider.apiKey && isEncrypted(provider.apiKey)) {
-                    try {
-                        const encryptedData = extractEncryptedData(provider.apiKey);
-                        const decryptedKey = decryptApiKey(encryptedData);
-                        provider.apiKey = decryptedKey;
-                        provider.isPreset = true; // Mark as preset after decryption
-                        hasChanges = true;
-                        console.log(`[ConfigStore] Decrypted API key for provider: ${id}`);
-                    } catch (error) {
-                        console.error(`[ConfigStore] Failed to decrypt API key for provider ${id}:`, error);
-                        // 保持加密状态，不影响其他功能
-                    }
-                }
+                // Note: We do NOT decrypt here anymore. Decryption happens on-demand in getAllProviders()
+                // This ensures the encrypted key stays in the config file and is never saved as plaintext
             }
 
             if (hasChanges) {
                 this.store.set('providers', providers);
             }
         } catch (error) {
-            console.error('[ConfigStore] Failed to decrypt preset keys:', error);
+            console.error('[ConfigStore] Failed to process preset keys:', error);
         }
     }
 
@@ -275,11 +263,23 @@ class ConfigStore {
             if (s && d && !s.isCustom) {
                 // For built-in providers, merge stored user data (apiKey) with default configs
                 // Only preserve user-modifiable fields, keep defaults for others
+                let apiKey = s.apiKey || d.apiKey;
+                
+                // Decrypt if encrypted
+                if (apiKey && isEncrypted(apiKey)) {
+                    try {
+                        const encryptedData = extractEncryptedData(apiKey);
+                        apiKey = decryptApiKey(encryptedData);
+                    } catch (error) {
+                        console.error(`[ConfigStore] Failed to decrypt API key for provider ${key}:`, error);
+                    }
+                }
+                
                 merged[key] = {
                     ...d,  // Start with defaults (url, model, readonlyUrl)
                     ...s,  // Overlay user data (apiKey should be preserved)
                     // Explicitly preserve these user-modifiable fields
-                    apiKey: s.apiKey || d.apiKey,
+                    apiKey: apiKey,
                     // Keep default values for these fields
                     apiUrl: d.apiUrl,
                     model: d.model,
@@ -288,14 +288,41 @@ class ConfigStore {
                 };
             } else {
                 // For custom providers, preserve all fields including isPreset
-                merged[key] = s;
+                let apiKey = s.apiKey;
+                
+                // Decrypt if encrypted
+                if (apiKey && isEncrypted(apiKey)) {
+                    try {
+                        const encryptedData = extractEncryptedData(apiKey);
+                        apiKey = decryptApiKey(encryptedData);
+                    } catch (error) {
+                        console.error(`[ConfigStore] Failed to decrypt API key for provider ${key}:`, error);
+                    }
+                }
+                
+                merged[key] = {
+                    ...s,
+                    apiKey: apiKey
+                };
             }
         }
 
         // Then add any missing default providers
         for (const key in defaultProviders) {
             if (!merged[key]) {
-                merged[key] = { ...defaultProviders[key] };
+                let provider = { ...defaultProviders[key] };
+                
+                // Decrypt if encrypted
+                if (provider.apiKey && isEncrypted(provider.apiKey)) {
+                    try {
+                        const encryptedData = extractEncryptedData(provider.apiKey);
+                        provider.apiKey = decryptApiKey(encryptedData);
+                    } catch (error) {
+                        console.error(`[ConfigStore] Failed to decrypt API key for default provider ${key}:`, error);
+                    }
+                }
+                
+                merged[key] = provider;
             }
         }
 
@@ -372,13 +399,21 @@ class ConfigStore {
             // Update each provider from the input
             for (const [id, provider] of Object.entries(cfg.providers)) {
                 if (mergedProviders[id]) {
+                    // Preserve isPreset flag from existing config (cannot be changed by user)
+                    const existingIsPreset = mergedProviders[id].isPreset;
+                    const existingApiKey = mergedProviders[id].apiKey;
+                    
                     // Merge with existing, preserving user data
                     mergedProviders[id] = {
                         ...mergedProviders[id],
                         ...provider,
                         // Ensure required fields exist
                         id: provider.id || id,
-                        name: provider.name || mergedProviders[id].name
+                        name: provider.name || mergedProviders[id].name,
+                        // Preserve isPreset flag (cannot be overwritten)
+                        isPreset: existingIsPreset,
+                        // For preset providers, preserve the existing API key (don't allow updates)
+                        apiKey: existingIsPreset ? existingApiKey : provider.apiKey
                     };
                 } else {
                     // New provider
