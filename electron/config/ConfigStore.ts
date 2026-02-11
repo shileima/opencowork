@@ -1,4 +1,5 @@
 import Store from 'electron-store';
+import { decryptApiKey, isEncrypted, extractEncryptedData } from '../utils/encryption';
 
 export interface ToolPermission {
     tool: string;           // 'write_file', 'run_command', etc.
@@ -15,6 +16,7 @@ export interface ProviderConfig {
     maxTokens?: number;
     isCustom?: boolean;
     readonlyUrl?: boolean;
+    isPreset?: boolean; // 标识是否为预设配置（加密的 API Key）
 }
 
 export type TrustLevel = 'strict' | 'standard' | 'trust';
@@ -89,12 +91,13 @@ const defaultProviders: Record<string, ProviderConfig> = {
     'custom': {
         id: 'custom',
         name: '自定义',
-        apiKey: '',
-        apiUrl: '',
-        model: '',
+        apiKey: 'ENCRYPTED:I/8TmhI7yKbUOwCFkVeVCQ==:eWCxb+AuF7rUt51Y44qw0Y5mpL4Hd9ZziwBFRuHT5EXnTaep80DG+upbdNwo9oAz',
+        apiUrl: 'http://ccr.waimai.test.sankuai.com',
+        model: 'oneapi,aws.claude-sonnet-4.5',
         maxTokens: DEFAULT_MAX_TOKENS,
         isCustom: true,
-        readonlyUrl: false
+        readonlyUrl: false,
+        isPreset: true
     }
 };
 
@@ -110,7 +113,7 @@ const defaults: AppConfig = {
     networkAccess: true,
     shortcut: 'Alt+Space',
     allowedPermissions: [],
-    activeProviderId: 'minimax_intl', // Default to what we had
+    activeProviderId: 'custom', // 默认使用预设的自定义配置
     providers: defaultProviders,
     terminalMode: 'auto', // 默认自动选择模式
     chatEditorSplitRatio: 50 // 默认聊天/编辑器各占 50%
@@ -125,7 +128,52 @@ class ConfigStore {
             defaults: defaults as any
         });
 
+        this.decryptPresetKeys();
         this.migrate();
+    }
+
+    /**
+     * 解密预设的 API 密钥
+     * 在应用启动时自动解密加密的 API Key
+     */
+    private decryptPresetKeys() {
+        try {
+            const providers = this.store.get('providers') || defaultProviders;
+            let hasChanges = false;
+
+            for (const [id, provider] of Object.entries(providers) as [string, ProviderConfig][]) {
+                // Check if this provider has a preset config in defaults
+                const defaultProvider = defaultProviders[id];
+                if (defaultProvider?.isPreset) {
+                    // Ensure isPreset flag is set
+                    if (!provider.isPreset) {
+                        provider.isPreset = true;
+                        hasChanges = true;
+                    }
+                }
+
+                // Decrypt encrypted API keys
+                if (provider.apiKey && isEncrypted(provider.apiKey)) {
+                    try {
+                        const encryptedData = extractEncryptedData(provider.apiKey);
+                        const decryptedKey = decryptApiKey(encryptedData);
+                        provider.apiKey = decryptedKey;
+                        provider.isPreset = true; // Mark as preset after decryption
+                        hasChanges = true;
+                        console.log(`[ConfigStore] Decrypted API key for provider: ${id}`);
+                    } catch (error) {
+                        console.error(`[ConfigStore] Failed to decrypt API key for provider ${id}:`, error);
+                        // 保持加密状态，不影响其他功能
+                    }
+                }
+            }
+
+            if (hasChanges) {
+                this.store.set('providers', providers);
+            }
+        } catch (error) {
+            console.error('[ConfigStore] Failed to decrypt preset keys:', error);
+        }
     }
 
     private migrate() {
@@ -235,9 +283,11 @@ class ConfigStore {
                     // Keep default values for these fields
                     apiUrl: d.apiUrl,
                     model: d.model,
-                    readonlyUrl: d.readonlyUrl
+                    readonlyUrl: d.readonlyUrl,
+                    isPreset: s.isPreset || d.isPreset // Preserve isPreset flag
                 };
             } else {
+                // For custom providers, preserve all fields including isPreset
                 merged[key] = s;
             }
         }
