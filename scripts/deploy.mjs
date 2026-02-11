@@ -77,6 +77,7 @@ function checkWebstatic() {
     return true;
   } catch (error) {
     log.error('webstatic 未安装');
+    log.info('请运行: pnpm config set registry http://r.npm.sankuai.com/');
     log.info('请运行: pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/');
     return false;
   }

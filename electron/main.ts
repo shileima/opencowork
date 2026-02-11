@@ -1786,7 +1786,8 @@ ipcMain.handle('project:task:switch', async (event, projectId: string, taskId: s
     if (!targetAgent) {
       return { success: false, error: 'Agent not initialized' };
     }
-    
+
+    const previousTaskId = currentTaskIdForSession;
     // 设置当前任务ID，用于后续 session 绑定
     currentTaskIdForSession = taskId;
     
@@ -1812,12 +1813,19 @@ ipcMain.handle('project:task:switch', async (event, projectId: string, taskId: s
         }
       }
     } else {
-      // 任务没有 sessionId，清空历史（新任务）
-      targetAgent.clearHistory();
-      sessionStore.setSessionId(null, isFloatingBall);
-      // clearHistory 会触发 notifyUpdate，但为了确保前端收到更新，我们再次发送
-      if (targetWindow && !targetWindow.isDestroyed()) {
-        targetWindow.webContents.send('agent:history-update', []);
+      // 任务没有 sessionId：若正在“切换”到当前任务（如 loadCurrentProject 重选同一任务），
+      // 且 session:save 尚未把 session 关联到任务，保留当前 agent 历史，避免聊天区域被清空
+      if (previousTaskId === taskId) {
+        const currentHistory = targetAgent.getHistory();
+        if (currentHistory.length > 0 && targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', currentHistory);
+        }
+      } else {
+        targetAgent.clearHistory();
+        sessionStore.setSessionId(null, isFloatingBall);
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', []);
+        }
       }
     }
     return { success: true };
@@ -1900,6 +1908,7 @@ BUILD_DIR="dist"
 # ── Step 1: Check webstatic ──
 if ! command -v webstatic &> /dev/null; then
   echo "✗ webstatic not installed"
+  echo "  Run: pnpm config set registry http://r.npm.sankuai.com/"
   echo "  Run: pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/"
   exit 1
 fi

@@ -360,6 +360,11 @@ export class AgentRuntime {
         this.notifyUpdate();
     }
 
+    /** 返回当前历史副本，供 main 在“切换到当前任务且尚未关联 session”时保留聊天内容 */
+    public getHistory(): Anthropic.MessageParam[] {
+        return this.history.slice();
+    }
+
     public async processUserMessage(input: string | { content: string, images: string[] }, taskId?: string, projectId?: string, isFloatingBall?: boolean) {
         // 如果提供了 taskId，使用任务级别的并发控制；否则使用全局控制（向后兼容）
         const useTaskLevelConcurrency = taskId !== undefined;
