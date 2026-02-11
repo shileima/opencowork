@@ -5,6 +5,7 @@ import { MultiTabEditor } from './project/MultiTabEditor';
 import { FileExplorer } from './project/FileExplorer';
 import { ProjectCreateDialog } from './project/ProjectCreateDialog';
 import { ResizableSplitPane } from './project/ResizableSplitPane';
+import { UpdateNotification } from './project/UpdateNotification';
 import Anthropic from '@anthropic-ai/sdk';
 import { useI18n } from '../i18n/I18nContext';
 import { useToast } from './Toast';
@@ -72,6 +73,11 @@ export function ProjectView({
     const [fileContents, setFileContents] = useState<Record<string, string>>({});
     const [splitRatio, setSplitRatio] = useState<number>(50);
     const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+    const [resourceUpdateAvailable, setResourceUpdateAvailable] = useState<{
+        currentVersion: string;
+        latestVersion: string;
+        updateSize?: number;
+    } | null>(null);
     const [multiTabEditorRef, setMultiTabEditorRef] = useState<{
         openEditorTab: (filePath: string, content: string) => void;
         openBrowserTab?: (url?: string) => void;
@@ -138,6 +144,7 @@ export function ProjectView({
     }, []);
 
     useEffect(() => {
+        console.log('[ProjectView] Component mounted, registering event listeners...');
         // 加载配置
         window.ipcRenderer.invoke('config:get-all').then((cfg) => {
             setConfig(cfg as any);
@@ -153,6 +160,30 @@ export function ProjectView({
         const removeStreamListener = window.ipcRenderer.on('agent:stream-token', (_event, ...args) => {
             const token = args[0] as string;
             setStreamingText(prev => prev + token);
+        });
+        // 监听资源更新通知
+        const removeUpdateListener = window.ipcRenderer.on('resource:update-available', (_event, ...args) => {
+            const updateInfo = args[0] as { currentVersion: string; latestVersion: string; updateSize?: number };
+            console.log('[ProjectView] Resource update available:', updateInfo);
+            setResourceUpdateAvailable({
+                currentVersion: updateInfo.currentVersion,
+                latestVersion: updateInfo.latestVersion,
+                updateSize: updateInfo.updateSize
+            });
+        });
+        // 组件挂载时主动检查一次更新
+        window.ipcRenderer.invoke('resource:check-update').then((result: unknown) => {
+            const updateInfo = result as { success: boolean; hasUpdate: boolean; currentVersion: string; latestVersion: string; updateSize?: number };
+            console.log('[ProjectView] Manual update check result:', updateInfo);
+            if (updateInfo && updateInfo.hasUpdate) {
+                setResourceUpdateAvailable({
+                    currentVersion: updateInfo.currentVersion,
+                    latestVersion: updateInfo.latestVersion,
+                    updateSize: updateInfo.updateSize
+                });
+            }
+        }).catch((err: unknown) => {
+            console.error('[ProjectView] Failed to check for updates:', err);
         });
         // 监听历史更新
         const removeHistoryListener = window.ipcRenderer.on('agent:history-update', async (_event, ...args) => {
@@ -255,6 +286,7 @@ export function ProjectView({
             removeProjectCreatedListener();
             removeBrowserPreviewListener();
             removeAgentDoneListener();
+            removeUpdateListener();
         };
     }, [showToast, t]);
 
@@ -451,6 +483,16 @@ export function ProjectView({
 
     return (
         <div className="h-full w-full flex flex-col bg-[#FAF8F5] dark:bg-zinc-950">
+            {/* Resource Update Notification */}
+            {resourceUpdateAvailable && (
+                <UpdateNotification
+                    currentVersion={resourceUpdateAvailable.currentVersion}
+                    latestVersion={resourceUpdateAvailable.latestVersion}
+                    updateSize={resourceUpdateAvailable.updateSize}
+                    onClose={() => setResourceUpdateAvailable(null)}
+                />
+            )}
+
             {showCreateDialog && (
                 <ProjectCreateDialog
                     onClose={() => {
