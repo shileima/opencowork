@@ -577,22 +577,22 @@ ${err}
           <div className="flex items-center gap-0.5 bg-stone-100 dark:bg-zinc-800 rounded-lg p-0.5 ml-4">
             <button
               onClick={() => setActiveView('cowork')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${activeView === 'cowork'
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'cowork'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
                 }`}
             >
-              <Zap size={14} />
+              <Zap size={12} />
               {t('cowork')}
             </button>
             <button
               onClick={() => setActiveView('project')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${activeView === 'project'
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'project'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
                 }`}
             >
-              <FolderKanban size={14} />
+              <FolderKanban size={12} />
               {t('project')}
             </button>
           </div>
