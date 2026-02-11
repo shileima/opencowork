@@ -122,65 +122,44 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
     }, [handleComplete]);
 
     return (
-        <div className="fixed inset-0 bg-gradient-to-br from-zinc-950 via-zinc-900 to-black flex items-center justify-center z-[9999]">
+        <div className="fixed inset-0 bg-gradient-to-br from-zinc-950 via-zinc-900 to-black flex flex-col items-center justify-between py-14 z-[9999]">
             {/* 背景动画效果 */}
-            <div className="absolute inset-0 overflow-hidden">
-                {/* 美团黄渐变光晕 - 主色调 */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
                 <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-[#FFC300]/8 rounded-full blur-[150px] animate-pulse" />
                 <div className="absolute bottom-1/3 right-1/3 w-[400px] h-[400px] bg-[#FFA500]/6 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '1s' }} />
-                
-                {/* 动态网格背景 */}
                 <div className="absolute inset-0 bg-[linear-gradient(to_right,#27272a_1px,transparent_1px),linear-gradient(to_bottom,#27272a_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_80%_50%_at_50%_50%,#000_70%,transparent_110%)] opacity-20" />
-                
-                {/* 扫描线效果 */}
                 <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[#FFC300]/5 to-transparent animate-scan" />
             </div>
 
-            {/* 主内容 */}
-            <div className="relative z-10 flex flex-col items-center">
-                {/* Logo 和动画 */}
-                <div className="relative mb-16">
-                    {/* 外圈旋转光环 - 美团黄主题 */}
+            {/* 顶部：Logo + 品牌 */}
+            <div className="relative z-10 flex flex-col items-center shrink-0">
+                <div className="relative mb-12">
                     <div className="absolute inset-0 -m-10">
                         <div className="w-36 h-36 border-[3px] border-transparent border-t-[#FFC300]/50 border-r-[#FFC300]/30 rounded-full animate-spin" style={{ animationDuration: '3s' }} />
                     </div>
                     <div className="absolute inset-0 -m-8">
                         <div className="w-32 h-32 border-[2px] border-transparent border-b-[#FFA500]/40 border-l-[#FFA500]/20 rounded-full animate-spin" style={{ animationDuration: '2s', animationDirection: 'reverse' }} />
                     </div>
-                    
-                    {/* 中圈呼吸光环 */}
                     <div className="absolute inset-0 -m-6">
                         <div className="w-28 h-28 rounded-full bg-gradient-to-br from-[#FFC300]/20 to-transparent animate-pulse" style={{ animationDuration: '2.5s' }} />
                     </div>
-
-                    {/* Logo 容器 */}
                     <div className="relative w-16 h-16 rounded-2xl bg-gradient-to-br from-zinc-800 via-zinc-900 to-black border border-zinc-700/50 shadow-2xl shadow-[#FFC300]/10 flex items-center justify-center overflow-hidden">
-                        {/* Logo 背景光效 - 美团黄 */}
                         <div className="absolute inset-0 bg-gradient-to-br from-[#FFC300]/15 via-[#FFA500]/10 to-transparent" />
-                        
-                        {/* Logo 图片 */}
-                        <img 
-                            src="./icon.png" 
-                            alt="QACowork" 
-                            className="w-12 h-12 rounded-lg object-cover relative z-10"
-                        />
-                        
-                        {/* 脉冲效果 - 美团黄 */}
+                        <img src="./icon.png" alt="QACowork" className="w-12 h-12 rounded-lg object-cover relative z-10" />
                         <div className="absolute inset-0 bg-[#FFC300]/25 rounded-2xl animate-ping" style={{ animationDuration: '2s' }} />
                     </div>
                 </div>
-
-                {/* 应用名称 */}
-                <h1 className="text-4xl font-bold bg-gradient-to-r from-white via-zinc-100 to-zinc-300 bg-clip-text text-transparent mb-3 tracking-tight">
+                <h1 className="text-4xl font-bold bg-gradient-to-r from-white via-zinc-100 to-zinc-300 bg-clip-text text-transparent mb-2 tracking-tight">
                     QACowork
                 </h1>
-                <p className="text-zinc-400 text-sm mb-16 tracking-wide">
+                <p className="text-zinc-400 text-sm tracking-wide">
                     智能协作开发平台
                 </p>
+            </div>
 
-                {/* 资源准备状态指示器 */}
-                <div className="mb-8 flex items-center gap-3">
-                    {/* 旋转加载图标 */}
+            {/* 中部：进度区域（独立一块，不混入底部文案） */}
+            <div className="relative z-10 flex flex-col items-center w-full max-w-md px-6">
+                <div className="mb-6 flex items-center gap-3">
                     <div className="relative w-5 h-5">
                         <div className="absolute inset-0 border-2 border-[#FFC300]/30 border-t-[#FFC300] rounded-full animate-spin" />
                         <div className="absolute inset-1 border-2 border-[#FFA500]/20 border-b-[#FFA500] rounded-full animate-spin" style={{ animationDuration: '1.5s', animationDirection: 'reverse' }} />
@@ -189,77 +168,54 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
                         资源准备中{dots}
                     </span>
                 </div>
-
-                {/* 加载进度区域 */}
-                <div className="w-96 space-y-5">
-                    {/* 进度条容器 */}
+                <div className="w-full space-y-4">
                     <div className="relative">
-                        {/* 进度条外框 */}
                         <div className="relative h-2 bg-zinc-800/80 rounded-full overflow-hidden border border-zinc-700/30 shadow-inner">
-                            {/* 背景轨道光效 */}
                             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-zinc-700/20 to-transparent" />
-                            
-                            {/* 进度条 - 美团黄渐变 */}
-                            <div 
+                            <div
                                 className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#FFA500] via-[#FFC300] to-[#FFD700] rounded-full transition-all duration-500 ease-out shadow-lg shadow-[#FFC300]/30"
                                 style={{ width: `${progress}%` }}
                             >
-                                {/* 进度条流动光效 */}
                                 <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent animate-shimmer" />
-                                
-                                {/* 进度条顶部高光 */}
                                 <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-white/60 to-transparent" />
                             </div>
-                            
-                            {/* 进度条末端光点 */}
                             {progress > 0 && (
-                                <div 
+                                <div
                                     className="absolute inset-y-0 w-1.5 bg-white rounded-full shadow-[0_0_12px_rgba(255,195,0,0.8)] transition-all duration-500 ease-out"
                                     style={{ left: `${Math.min(progress, 99)}%` }}
                                 />
                             )}
                         </div>
-                        
-                        {/* 进度条下方光晕 */}
-                        <div 
+                        <div
                             className="absolute -bottom-2 left-0 h-4 bg-gradient-to-r from-[#FFC300]/20 to-transparent blur-xl transition-all duration-500 ease-out rounded-full"
                             style={{ width: `${progress}%` }}
                         />
                     </div>
-
-                    {/* 加载文本和百分比 */}
-                    <div className="flex items-center justify-between text-sm px-1">
+                    <div className="flex items-center justify-between text-sm px-0.5">
                         <div className="flex items-center gap-2">
-                            {/* 状态指示点 */}
                             <div className="w-1.5 h-1.5 rounded-full bg-[#FFC300] animate-pulse shadow-[0_0_8px_rgba(255,195,0,0.6)]" />
                             <span className="text-zinc-300 font-medium tracking-wide">
                                 {loadingText}
                             </span>
                         </div>
-                        <span className="text-[#FFC300] font-mono font-semibold tabular-nums inline-block text-right min-w-[3rem] tracking-wider">
+                        <span className="text-[#FFC300] font-mono font-semibold tabular-nums min-w-[3rem] text-right tracking-wider">
                             {Math.round(progress)}%
                         </span>
                     </div>
-                    
-                    {/* 加载提示信息 */}
-                    <div className="text-center pt-2">
-                        <p className="text-xs text-zinc-500 tracking-wide">
-                            正在加载核心组件和配置文件
-                        </p>
-                    </div>
-                </div>
-
-                {/* 底部提示 */}
-                <div className="absolute bottom-12 text-center space-y-2">
-                    <div className="flex items-center justify-center gap-2 text-xs text-zinc-600">
-                        <div className="w-1 h-1 rounded-full bg-zinc-600" />
-                        <span>Powered by Claude AI</span>
-                        <div className="w-1 h-1 rounded-full bg-zinc-600" />
-                    </div>
-                    <p className="text-[10px] text-zinc-700 tracking-wider">
-                        让工具成为工具，让你成为你
+                    <p className="text-center text-xs text-zinc-500 tracking-wide">
+                        正在加载核心组件和配置文件
                     </p>
                 </div>
+            </div>
+
+            {/* 底部：Powered by Claude AI（独立区域，不叠在进度条上） */}
+            <div className="relative z-10 flex flex-col items-center gap-3 shrink-0 pt-4 border-t border-zinc-800/60 w-full max-w-md mx-auto px-6">
+                <p className="text-xs text-zinc-500 font-medium tracking-widest uppercase">
+                    Powered by Claude AI
+                </p>
+                <p className="text-[11px] text-zinc-600 tracking-wide">
+                    让工具成为工具，让你成为你
+                </p>
             </div>
 
             {/* 自定义动画 */}

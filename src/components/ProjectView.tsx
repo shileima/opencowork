@@ -221,9 +221,10 @@ export function ProjectView({
             loadCurrentProject(); // 内部会加载任务列表，再选中最近一条
         });
 
-        // 监听项目创建事件，自动加载项目并选中新任务
+        // 监听项目创建事件：先同步当前项目（保证路径正确），再延迟加载任务列表
         const removeProjectCreatedListener = window.ipcRenderer.on('project:created', async () => {
-            // 延迟加载，确保后端任务创建完成
+            const project = await window.ipcRenderer.invoke('project:get-current') as Project | null;
+            if (project?.path) setCurrentProject(project);
             setTimeout(async () => {
                 await loadCurrentProject();
             }, 300);
@@ -358,12 +359,11 @@ export function ProjectView({
         // 这个 effect 会在组件挂载时执行，loadCurrentProject 已经在上面处理了
     }, []);
 
-    const handleCreateProject = async (name: string, projectPath: string) => {
-        const result = await window.ipcRenderer.invoke('project:create', { name, path: projectPath }) as { success: boolean; project?: Project; error?: string };
+    const handleCreateProject = async (name: string) => {
+        const result = await window.ipcRenderer.invoke('project:create-new', name) as { success: boolean; project?: Project; error?: string };
         if (result.success && result.project) {
             setCurrentProject(result.project);
             setShowCreateDialog(false);
-            // 创建项目后，加载项目（这会检查任务）
             await loadCurrentProject();
         }
     };
@@ -509,7 +509,7 @@ export function ProjectView({
 
 
             {currentProject && (
-                <>
+                <div key={currentProject.id} className="contents">
                     <div className="flex-1 flex overflow-hidden relative">
                         {/* 左侧悬停检测区域（仅在侧栏收起时显示） */}
                         {isTaskPanelHidden && (
@@ -604,7 +604,7 @@ export function ProjectView({
                             />
                         </div>
                     </div>
-                </>
+                </div>
             )}
         </div>
     );
