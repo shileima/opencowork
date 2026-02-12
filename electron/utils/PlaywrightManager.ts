@@ -124,11 +124,11 @@ export class PlaywrightManager {
       }
       if (npmCliJsPath && nodePath && nodePath !== 'node') {
         const npmCommand = `"${nodePath}" "${npmCliJsPath}" install playwright --no-save --no-package-lock`
-        await execAsync(npmCommand, { cwd: this.playwrightPath, env })
+        await execAsync(npmCommand, { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
       } else {
         const npmPath = getBuiltinNpmPath()
         const npmCommand = `"${npmPath}" install playwright --no-save --no-package-lock`
-        await execAsync(npmCommand, { cwd: this.playwrightPath, env })
+        await execAsync(npmCommand, { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
       }
 
       onProgress?.('Playwright 包安装完成 ✓')
