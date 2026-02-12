@@ -83,6 +83,8 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
 
 
     useEffect(() => {
+        // Cowork 模式挂载时按需加载最近会话（不再在启动时全局加载，避免 Project 模式被 Cowork 历史覆盖）
+        window.ipcRenderer.invoke('session:auto-load').catch((err) => console.warn('[CoworkView] session:auto-load failed:', err));
         window.ipcRenderer.invoke('config:get-all').then((cfg) => {
             setConfig(cfg as any); // Use full config
         });
@@ -432,15 +434,42 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                         <div className="text-stone-600 dark:text-zinc-300 mb-6 whitespace-pre-wrap text-sm max-h-[60vh] overflow-y-auto">
                             {error}
                         </div>
+                        {/401|API Key 无效|API Key 已过期|api key.*invalid|api key.*expired/i.test(error) && (
+                            <p className="text-amber-600 dark:text-amber-400 text-xs mb-4">
+                                {t('apiKeyErrorHint')}
+                            </p>
+                        )}
 
                         <div className="flex gap-3">
-                            <button
-                                onClick={() => setError(null)}
-                                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-stone-800 hover:bg-stone-900 dark:bg-zinc-700 dark:hover:bg-zinc-600 rounded-xl transition-colors"
-                            >
-                                <X size={16} />
-                                {t('close') || 'Close'}
-                            </button>
+                            {/401|API Key 无效|API Key 已过期|api key.*invalid|api key.*expired/i.test(error) ? (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={() => { setError(null); onOpenSettings(); }}
+                                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 dark:bg-amber-600 dark:hover:bg-amber-700 rounded-xl transition-colors"
+                                    >
+                                        <Settings size={16} />
+                                        {t('goToSettings')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setError(null)}
+                                        className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-stone-600 dark:text-zinc-400 bg-stone-100 hover:bg-stone-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 rounded-xl transition-colors"
+                                    >
+                                        <X size={16} />
+                                        {t('close') || 'Close'}
+                                    </button>
+                                </>
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={() => setError(null)}
+                                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-stone-800 hover:bg-stone-900 dark:bg-zinc-700 dark:hover:bg-zinc-600 rounded-xl transition-colors"
+                                >
+                                    <X size={16} />
+                                    {t('close') || 'Close'}
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>

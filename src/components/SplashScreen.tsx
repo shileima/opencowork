@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 
 interface SplashScreenProps {
-    onComplete: () => void;
+    /** 初始化完成时调用，可选传入主进程下发的 payload（如 currentProject） */
+    onComplete: (payload?: unknown) => void;
 }
 
 interface InitProgress {
@@ -31,15 +32,15 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
         }
     }, []);
 
-    // 安全调用 onComplete，避免重复触发
-    const handleComplete = useCallback(() => {
+    // 安全调用 onComplete，避免重复触发；payload 为主进程 app:init-complete 附带的参数（如 currentProject）
+    const handleComplete = useCallback((payload?: unknown) => {
         if (completedRef.current) return;
         completedRef.current = true;
         // 让进度条到 100% 后短暂停留再消失
         setProgress(100);
         setLoadingText('启动完成');
         setTimeout(() => {
-            onCompleteRef.current();
+            onCompleteRef.current(payload);
         }, 300);
     }, []);
 
@@ -64,8 +65,8 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
             if (stage) setLoadingText(stage);
         });
 
-        const removeCompleteListener = window.ipcRenderer.on('app:init-complete', () => {
-            handleComplete();
+        const removeCompleteListener = window.ipcRenderer.on('app:init-complete', (_event: unknown, payload?: unknown) => {
+            handleComplete(payload);
         });
 
         // 超时保护：如果 15 秒内没有收到 init-complete，强制完成

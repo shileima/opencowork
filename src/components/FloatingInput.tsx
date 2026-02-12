@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useI18n } from '../i18n/I18nContext';
-import { ArrowUp, X, Square } from 'lucide-react';
+import { ArrowUp, X, Square, Image } from 'lucide-react';
 
 interface FloatingInputProps {
     onSendMessage: (content: string, images: string[]) => void;
@@ -146,7 +146,7 @@ export function FloatingInput({ onSendMessage, onAbort, onContentChange, isProce
                                 className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
                                 title={t('uploadImage')}
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a 2 0 0 0-2.828 0L6 21" /></svg>
+                                <Image size={16} strokeWidth={2} />
                             </button>
                             <input
                                 type="file"

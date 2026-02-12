@@ -55,6 +55,7 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
     /** 正在更新/保存中的文件路径，在该文件右侧显示 loader */
     const [savingFilePath, setSavingFilePath] = useState<string | null>(null);
     const newItemInputRef = useRef<HTMLInputElement>(null);
+    const authRetryRef = useRef<string | null>(null); // 权限错误重试：避免同一路径无限重试
 
     const loadDirectory = useCallback(async (dirPath: string, recursive: boolean = false) => {
         try {
@@ -92,9 +93,12 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
                 }
             } else if (result.error) {
                 console.error('Failed to load directory:', result.error);
-                // 如果是权限错误，尝试刷新项目路径的授权
-                if (result.error.includes('not authorized') && projectPath) {
-                    console.warn('Path not authorized, attempting to authorize:', dirPath);
+                // 权限错误时确保项目路径已授权并重试一次（刚打开页面时可能尚未完成 project:ensure-working-dir）
+                if (result.error.includes('not authorized') && projectPath && authRetryRef.current !== dirPath) {
+                    authRetryRef.current = dirPath;
+                    window.ipcRenderer.invoke('project:ensure-working-dir').then(() => {
+                        loadDirectory(dirPath, recursive);
+                    }).catch(() => { authRetryRef.current = null; });
                 }
             }
         } catch (error) {
@@ -112,10 +116,12 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
         }
     }, [projectPath, loadDirectory]);
 
+    // 切换/删除项目时：仅加载根目录（非递归），立即展示；子目录在用户展开时按需加载
     useEffect(() => {
+        authRetryRef.current = null; // 切换项目时重置重试标记
+        setExpandedDirs(new Set()); // 切换项目时重置展开状态
         if (projectPath) {
-            // 初始加载时递归加载所有文件
-            loadDirectory(projectPath, true);
+            loadDirectory(projectPath, false);
         } else {
             setFiles([]);
         }

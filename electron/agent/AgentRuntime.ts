@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { BrowserWindow } from 'electron';
 
-import { FileSystemTools, ReadFileSchema, WriteFileSchema, ListDirSchema, RunCommandSchema, OpenBrowserPreviewSchema, ValidatePageSchema } from './tools/FileSystemTools';
+import { FileSystemTools, ReadFileSchema, WriteFileSchema, ListDirSchema, RunCommandSchema, OpenBrowserPreviewSchema, ValidatePageSchema, KillProjectDevServerSchema } from './tools/FileSystemTools';
 import { ErrorDetector, DetectedError } from './tools/ErrorDetector';
 import { ErrorFixer } from './tools/ErrorFixer';
 import { SkillManager } from './skills/SkillManager';
@@ -249,7 +249,8 @@ export class AgentRuntime {
     private maxTokens: number;
     private lastProcessTime: number = 0;
     private userWantsCloseBrowser: boolean = false; // 用户是否要求关闭浏览器
-    
+    private runUsedKillProjectDevServer: boolean = false; // 本次 run 是否调用了 kill_project_dev_server，用于 agent:done 时跳过刷新内置浏览器
+
     // 支持并发任务：每个任务有独立的处理状态
     private activeTasks: Map<string, {
         abortController: AbortController;
@@ -422,7 +423,7 @@ export class AgentRuntime {
                 if (taskHistory.length > 0) {
                     this.notifyUpdate();
                 }
-                this.broadcast('agent:done', { timestamp: Date.now(), taskId: effectiveTaskIdForDone, projectId });
+                this.broadcast('agent:done', { timestamp: Date.now(), taskId: effectiveTaskIdForDone, projectId, skipBrowserRefresh: this.runUsedKillProjectDevServer });
             }
         } else {
             // 全局并发控制（向后兼容）：保持原有逻辑
@@ -446,7 +447,7 @@ export class AgentRuntime {
                 this.isProcessing = false;
                 this.abortController = null;
                 this.notifyUpdate();
-                this.broadcast('agent:done', { timestamp: Date.now() });
+                this.broadcast('agent:done', { timestamp: Date.now(), skipBrowserRefresh: this.runUsedKillProjectDevServer });
             }
         }
     }
@@ -464,6 +465,7 @@ export class AgentRuntime {
         
         // 重置浏览器关闭意图检测（每次新消息时重置）
         this.userWantsCloseBrowser = false;
+        this.runUsedKillProjectDevServer = false;
 
         try {
             await this.skillManager.loadSkills();
@@ -544,7 +546,7 @@ export class AgentRuntime {
                 };
                 this.history.push(friendlyMessage);
                 this.notifyUpdate();
-                this.broadcast('agent:done', { timestamp: Date.now(), taskId: taskId || undefined, projectId });
+                this.broadcast('agent:done', { timestamp: Date.now(), taskId: taskId || undefined, projectId, skipBrowserRefresh: this.runUsedKillProjectDevServer });
                 return;
             }
 
@@ -613,11 +615,36 @@ export class AgentRuntime {
             } else if (err.status === 503) {
                 this.broadcast('agent:error', errorPayload('服务不可用 (503): AI 服务暂时无法访问\n\n请稍后再试或检查服务状态。'));
             } else {
-                const errorMsg = err.message || err.error?.message || 'An unknown error occurred';
+                const baseMsg = err.message || err.error?.message || 'An unknown error occurred';
                 const statusInfo = err.status ? `[${err.status}] ` : '';
-                this.broadcast('agent:error', errorPayload(`${statusInfo}${errorMsg}`));
+                const causeDetail = this.extractNetworkErrorCause(error);
+                const errorMsg = causeDetail
+                    ? `${statusInfo}${baseMsg}\n\n${causeDetail}`
+                    : `${statusInfo}${baseMsg}`;
+                this.broadcast('agent:error', errorPayload(errorMsg));
             }
         }
+    }
+
+    /** 从错误 cause 链中提取网络/DNS 错误详情，用于生成更友好的提示 */
+    private extractNetworkErrorCause(rawError: unknown): string | null {
+        let cur: unknown = rawError;
+        while (cur && typeof cur === 'object') {
+            const obj = cur as { cause?: unknown; code?: string; hostname?: string; message?: string };
+            const code = obj.code;
+            const hostname = obj.hostname;
+            if (code === 'ENOTFOUND' && hostname) {
+                return `无法解析域名 ${hostname}。\n\n请检查：\n- 网络连接是否正常\n- 若为内网地址，请确认已连接 VPN 或内网`;
+            }
+            if (code === 'ECONNREFUSED') {
+                return `连接被拒绝。\n\n请检查：\n- API 服务是否已启动\n- API 地址与端口是否正确`;
+            }
+            if (code === 'ETIMEDOUT' || code === 'ENETUNREACH') {
+                return `网络超时或不可达。\n\n请检查网络连接或 API 地址是否正确。`;
+            }
+            cur = obj.cause;
+        }
+        return null;
     }
 
     private isRetryableContextError(err: { status?: number; statusCode?: number; message?: string; error?: { message?: string } }, rawError?: unknown): boolean {
@@ -692,6 +719,7 @@ export class AgentRuntime {
                 RunCommandSchema,
                 OpenBrowserPreviewSchema,
                 ValidatePageSchema,
+                KillProjectDevServerSchema,
                 ...(this.skillManager.getTools() as Anthropic.Tool[]),
                 ...(await this.mcpService.getTools() as Anthropic.Tool[])
             ];
@@ -827,9 +855,9 @@ The preview server runs on **port 4173** and serves the built output from dist/.
 
 ### Closing/Stopping Local Services (CRITICAL)
 When the user asks to close/stop a service **without specifying which one** (e.g. "关闭服务", "关闭本地服务", "stop the server"):
-- **Scope**: ONLY consider services running from the **current project** (Primary Working Directory above). That is the user's selected project.
-- **NEVER include** the OpenCowork application's own Vite dev server. Its app directory is: \`${process.env.APP_ROOT || process.cwd()}\`. Exclude any process whose cwd or command path is under this directory.
-- **Action**: When listing processes (e.g. \`lsof -i :PORT\`, \`ps aux | grep node\`), filter out processes belonging to the OpenCowork app. Then close/stop only the remaining processes (the user's project). Do NOT ask "which one?"—assume the user means the current project's service.
+- **MUST use** \`kill_project_dev_server\` tool with the Primary Working Directory (cwd). Do NOT use \`run_command\` to execute kill/lsof/pkill commands.
+- **Reason**: Using \`run_command\` with \`lsof -ti :5173 | xargs kill -9\` or \`pkill -f vite\` would kill the OpenCowork app's own Vite dev server (port 5173), causing the entire client to reload unexpectedly.
+- **Scope**: \`kill_project_dev_server\` only kills processes on port 3000 (user's project dev server) and explicitly excludes OpenCowork's processes. Do NOT ask "which one?"—assume the user means the current project's service.
 
 ### Browser Automation Guidelines (chrome-agent scripts)
 When executing Playwright automation scripts:
@@ -1098,6 +1126,11 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                 } else if (toolUse.name === 'validate_page') {
                                     const args = toolUse.input as { url: string; timeout?: number };
                                     result = await this.fsTools.validatePage(args);
+                                } else if (toolUse.name === 'kill_project_dev_server') {
+                                    const args = toolUse.input as { cwd: string };
+                                    const cwd = args?.cwd || authorizedFolders[0] || process.cwd();
+                                    result = await this.fsTools.killProjectDevServer({ cwd });
+                                    this.runUsedKillProjectDevServer = true;
                                 } else {
                                     const skillInfo = this.skillManager.getSkillInfo(toolUse.name);
                                     console.log(`[Runtime] Skill ${toolUse.name} info found? ${!!skillInfo} (len: ${skillInfo?.instructions?.length})`);

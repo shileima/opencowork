@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
-import { getBuiltinNodePath, getBuiltinNpmPath, getNpmEnvVars } from './NodePath'
+import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from './NodePath'
 
 const execAsync = promisify(exec)
 
@@ -100,13 +100,12 @@ export class PlaywrightManager {
         fs.mkdirSync(this.playwrightPath, { recursive: true })
       }
 
-      // 使用内置的 npm（复用 NodePath.ts 的逻辑）
-      const npmPath = getBuiltinNpmPath()
+      const nodePath = getBuiltinNodePath()
       const npmEnv = getNpmEnvVars()
+      const npmCliJsPath = getBuiltinNpmCliJsPath()
 
       onProgress?.('正在安装 Playwright 包...')
-      
-      // 创建 package.json（如果不存在）
+
       const packageJsonPath = path.join(this.playwrightPath, 'package.json')
       if (!fs.existsSync(packageJsonPath)) {
         fs.writeFileSync(packageJsonPath, JSON.stringify({
@@ -116,23 +115,21 @@ export class PlaywrightManager {
           private: true
         }, null, 2))
       }
-      
-      // 使用 npm 脚本（更可靠）
-      // npm 脚本会自动处理环境变量和路径
-      const npmCommand = `"${npmPath}" install playwright --no-save --no-package-lock`
-      
-      // 安装 playwright
-      await execAsync(
-        npmCommand,
-        {
-          cwd: this.playwrightPath,
-          env: {
-            ...process.env,
-            ...npmEnv,
-            PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' // 先不下载浏览器
-          }
-        }
-      )
+
+      // 使用 node + npm-cli.js 执行安装，避免直接调 npm 脚本时 “Could not determine Node.js install directory”
+      const env: Record<string, string> = {
+        ...process.env,
+        ...npmEnv,
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      }
+      if (npmCliJsPath && nodePath && nodePath !== 'node') {
+        const npmCommand = `"${nodePath}" "${npmCliJsPath}" install playwright --no-save --no-package-lock`
+        await execAsync(npmCommand, { cwd: this.playwrightPath, env })
+      } else {
+        const npmPath = getBuiltinNpmPath()
+        const npmCommand = `"${npmPath}" install playwright --no-save --no-package-lock`
+        await execAsync(npmCommand, { cwd: this.playwrightPath, env })
+      }
 
       onProgress?.('Playwright 包安装完成 ✓')
       return { success: true }

@@ -28,7 +28,13 @@ declare global {
   }
 }
 
-dotenv.config()
+// 打包后：dotenv 固定从可执行文件目录加载 .env，避免因 cwd 不同（双击 .app vs 直接运行 MacOS/QACowork）导致行为不一致
+if (app.isPackaged) {
+  const envPath = path.join(path.dirname(process.execPath), '.env');
+  dotenv.config({ path: envPath });
+} else {
+  dotenv.config();
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -282,6 +288,39 @@ app.whenReady().then(() => {
   const effectiveVersion = resourceUpdater?.getCurrentVersion() || appVersion
   console.log(`[Main] App started - appVersion: ${appVersion}, hotUpdateVersion: ${hotUpdateVersion}, effectiveVersion: ${effectiveVersion}`)
 
+  // #region agent log - launch mode debug (H1,H2,H5)
+  try {
+    const userDataPath = app.getPath('userData');
+    const cwd = process.cwd();
+    const appName = app.getName();
+    const execDir = path.dirname(process.execPath);
+    const envInCwd = path.join(cwd, '.env');
+    const envInExecDir = path.join(execDir, '.env');
+    const payload = {
+      location: 'main.ts:app.whenReady',
+      message: 'Launch context',
+      data: {
+        cwd,
+        userDataPath,
+        appName,
+        execDir,
+        isPackaged: app.isPackaged,
+        hasEnvKey: !!process.env.ANTHROPIC_API_KEY,
+        envExistsInCwd: fs.existsSync(envInCwd),
+        envExistsInExecDir: fs.existsSync(envInExecDir)
+      },
+      timestamp: Date.now(),
+      hypothesisId: 'H1,H2,H5'
+    };
+    fs.appendFileSync(path.join(userDataPath, 'debug-launch.log'), JSON.stringify(payload) + '\n');
+    fetch('http://127.0.0.1:7242/ingest/c9da8242-409a-4cac-8926-c6d816aecb2e', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).catch(() => {});
+  } catch (_e) {}
+  // #endregion
+
   // 1. Setup IPC handlers FIRST
   // 1. Setup IPC handlers FIRST
   // setupIPCHandlers() - handlers are defined at top level now
@@ -357,6 +396,14 @@ ipcMain.handle('agent:send-message', async (event, message: string | { content: 
   const currentProject = isFloatingBall ? null : projectStore.getCurrentProject()
   const taskId = isFloatingBall ? undefined : (currentProject && currentTaskIdForSession ? currentTaskIdForSession : undefined)
   const projectId = currentProject?.id
+  // 开始处理时立即将任务状态设为进行中，左侧任务卡片显示正确图标
+  if (projectId && taskId) {
+    projectStore.updateTask(projectId, taskId, { status: 'active' })
+    const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('project:task:updated', { projectId, taskId, updates: { status: 'active' } })
+    }
+  }
   return await targetAgent.processUserMessage(message, taskId, projectId, isFloatingBall)
 })
 
@@ -391,6 +438,12 @@ ipcMain.handle('agent:new-session', (event) => {
 // Session Management
 ipcMain.handle('session:list', () => {
   return sessionStore.getSessions()
+})
+
+/** Cowork 模式挂载时按需加载最近会话，避免 Project 模式被 Cowork 历史覆盖 */
+ipcMain.handle('session:auto-load', () => {
+  autoLoadLatestSession()
+  return { success: true }
 })
 
 ipcMain.handle('session:get', (_, id: string) => {
@@ -1507,21 +1560,27 @@ ipcMain.handle('project:list', () => {
   return projectStore.getProjects();
 });
 
+/** 将路径转为绝对路径并规范化（展开 ~），便于与 fs:list-dir 的解析规则一致 */
+const toAbsoluteFolderPath = (p: string): string => {
+  const expanded = p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
+  return path.normalize(path.resolve(expanded)).replace(/[/\\]$/, '');
+};
+
 // Project 模式：主工作目录优先使用当前已选项目的目录，其次 ~/.qa-cowork
 const applyProjectWorkingDirs = (project: { path: string }) => {
   const folders = configStore.getAll().authorizedFolders || [];
   const baseDir = directoryManager.getBaseDir();
-  const normalizedBase = path.normalize(baseDir).replace(/\/$/, '');
-  const normalizedProject = path.normalize(project.path).replace(/\/$/, '');
+  const normalizedBase = toAbsoluteFolderPath(baseDir);
+  const normalizedProject = toAbsoluteFolderPath(project.path);
   const ensureFolder = (p: string, trust: TrustLevel = 'standard') => {
-    const np = path.normalize(p).replace(/\/$/, '');
-    const existing = folders.find((f: { path: string }) => path.normalize(f.path).replace(/\/$/, '') === np);
+    const np = toAbsoluteFolderPath(p);
+    const existing = folders.find((f: { path: string }) => toAbsoluteFolderPath(f.path) === np);
     return existing || { path: np, trustLevel: trust, addedAt: Date.now() };
   };
   const baseFolder = ensureFolder(baseDir, 'strict');
   const projectFolder = ensureFolder(project.path, 'standard');
   const otherFolders = folders.filter((f: { path: string }) => {
-    const np = path.normalize(f.path).replace(/\/$/, '');
+    const np = toAbsoluteFolderPath(f.path);
     return np !== normalizedBase && np !== normalizedProject;
   });
   // 已选项目路径作为 Primary，确保启动/关闭服务、文件操作等优先作用于当前项目
@@ -1680,7 +1739,7 @@ ipcMain.handle('project:ensure-working-dir', () => {
   if (project) applyProjectWorkingDirs(project);
 });
 
-ipcMain.handle('project:delete', async (_, id: string, projectPath?: string) => {
+ipcMain.handle('project:delete', async (event, id: string, projectPath?: string) => {
   try {
     // 获取项目信息
     const project = projectStore.getProject(id);
@@ -1719,6 +1778,12 @@ ipcMain.handle('project:delete', async (_, id: string, projectPath?: string) => 
       }
     } else if (pathToDelete) {
       console.warn(`[Project] Project directory does not exist: ${pathToDelete}`);
+    }
+
+    // 通知渲染进程刷新：删除/切换项目后，资源管理器需同步清空或切换
+    const win = BrowserWindow.fromWebContents(event.sender as Electron.WebContents);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('project:switched');
     }
 
     return { 
@@ -1772,6 +1837,26 @@ let currentTaskIdForSession: string | null = null;
 
 registerContextSwitchHandler((taskId) => {
     currentTaskIdForSession = taskId;
+});
+
+/** 在项目无任务时清空聊天区域 */
+ipcMain.handle('project:clear-chat', async (event) => {
+  try {
+    const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
+    const isFloatingBall = event.sender === floatingBallWin?.webContents;
+    const targetWindow = isFloatingBall ? floatingBallWin : mainWin;
+    if (targetAgent) {
+      targetAgent.clearHistory();
+      sessionStore.setSessionId(null, isFloatingBall);
+      currentTaskIdForSession = null;
+      if (targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('agent:history-update', []);
+      }
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 ipcMain.handle('project:task:switch', async (event, projectId: string, taskId: string) => {
@@ -2233,17 +2318,20 @@ ipcMain.handle('fs:write-file', async (_, filePath: string, content: string) => 
 
 ipcMain.handle('fs:list-dir', async (_, dirPath: string) => {
   try {
-    // 权限检查
+    const resolvedPath = toAbsoluteFolderPath(dirPath);
     const folders = configStore.getAll().authorizedFolders || [];
-    const isAuthorized = folders.some(f => dirPath.startsWith(f.path));
+    const isAuthorized = folders.some((f: { path: string }) => {
+      const resolvedFolder = toAbsoluteFolderPath(f.path);
+      return resolvedPath === resolvedFolder || resolvedPath.startsWith(resolvedFolder + path.sep);
+    });
     if (!isAuthorized) {
       return { success: false, error: 'Path not authorized' };
     }
-    const items = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    const items = await fs.promises.readdir(resolvedPath, { withFileTypes: true });
     const result = items.map(item => ({
       name: item.name,
       isDirectory: item.isDirectory(),
-      path: path.join(dirPath, item.name)
+      path: path.join(resolvedPath, item.name)
     }));
     return { success: true, items: result };
   } catch (error) {
@@ -3121,8 +3209,8 @@ function sendInitProgress(stage: string, progress: number, detail?: string) {
 }
 
 /**
- * 延迟初始化：在窗口渲染完成后再执行耗时操作
- * 避免阻塞主进程导致白屏
+ * 延迟初始化：窗口渲染后先尽快展示 UI（含资源管理器），再在后台初始化 Agent
+ * 避免因 Agent 初始化耗时（Skills、MCP 等）导致用户长时间卡在启动页
  */
 async function deferredInitialization() {
   console.log('[Main] Starting deferred initialization...')
@@ -3131,31 +3219,32 @@ async function deferredInitialization() {
   try {
     // Stage 1: 配置加载 (极快，已完成)
     sendInitProgress('加载配置', 10)
-    
-    // 让渲染进程有时间展示 SplashScreen
     await new Promise(resolve => setTimeout(resolve, 50))
 
-    // Stage 2: 初始化 Agent（包含 Skills + MCP 加载，最耗时）
-    sendInitProgress('初始化 AI 引擎', 20)
-    await initializeAgentAsync()
+    // Stage 2: 提前设置项目工作目录，使资源管理器在 UI 展示后即可加载文件列表（fs:list-dir 依赖 authorizedFolders）
+    const currentProject = projectStore.getCurrentProject()
+    if (currentProject) {
+      applyProjectWorkingDirs(currentProject)
+      console.log('[Main] Project working dir applied for:', currentProject.name)
+    }
 
-    // Stage 3: 加载会话
-    sendInitProgress('加载工作区', 80)
-    await new Promise(resolve => setTimeout(resolve, 30))
-    autoLoadLatestSession()
-
-    // Stage 4: 完成
+    // Stage 3: 立即通知前端初始化完成，并附带当前项目，使首帧即可渲染资源管理器
     sendInitProgress('启动完成', 100)
-    const elapsed = Date.now() - startTime
-    console.log(`[Main] Deferred initialization completed in ${elapsed}ms`)
+    mainWin?.webContents.send('app:init-complete', currentProject ?? null)
+    const toFirstPaint = Date.now() - startTime
+    console.log(`[Main] App UI ready in ${toFirstPaint}ms (agent will init in background)`)
 
-    // 短暂延迟后通知前端初始化完成
-    setTimeout(() => {
-      mainWin?.webContents.send('app:init-complete')
-    }, 200)
+    // Stage 4: 后台初始化 Agent（不阻塞 UI）
+    initializeAgentAsync()
+      .then(() => {
+        const total = Date.now() - startTime
+        console.log(`[Main] Agent initialization completed in ${total}ms`)
+      })
+      .catch((err) => {
+        console.error('[Main] Agent initialization failed:', err)
+      })
   } catch (error) {
     console.error('[Main] Deferred initialization failed:', error)
-    // 即使失败也通知前端完成，避免永远卡在加载界面
     mainWin?.webContents.send('app:init-complete')
   }
 }
@@ -3193,7 +3282,34 @@ function autoLoadLatestSession() {
 
 /** 异步初始化 Agent，发送中间进度 */
 async function initializeAgentAsync() {
-  const apiKey = configStore.getApiKey() || process.env.ANTHROPIC_API_KEY
+  // #region agent log - API key source (H3,H4)
+  const fromConfig = configStore.getApiKey();
+  const fromEnv = process.env.ANTHROPIC_API_KEY || '';
+  const apiKey = fromConfig || fromEnv;
+  try {
+    const payload = {
+      location: 'main.ts:initializeAgentAsync',
+      message: 'API key source',
+      data: {
+        hasConfigKey: !!fromConfig,
+        configKeyLen: fromConfig ? fromConfig.length : 0,
+        hasEnvKey: !!fromEnv,
+        envKeyLen: fromEnv ? fromEnv.length : 0,
+        hasApiKey: !!apiKey,
+        activeProviderId: configStore.get('activeProviderId')
+      },
+      timestamp: Date.now(),
+      hypothesisId: 'H3,H4'
+    };
+    fs.appendFileSync(path.join(app.getPath('userData'), 'debug-launch.log'), JSON.stringify(payload) + '\n');
+    fetch('http://127.0.0.1:7242/ingest/c9da8242-409a-4cac-8926-c6d816aecb2e', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).catch(() => {});
+  } catch (_e) {}
+  // #endregion
+
   const model = configStore.getModel()
   const apiUrl = configStore.getApiUrl()
 

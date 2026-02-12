@@ -243,8 +243,11 @@ function App() {
   // Check if this is a terminal window
   const isTerminalWindow = window.location.hash.includes('terminal-window');
 
-  // 处理启动加载完成
-  const handleSplashComplete = () => {
+  // 处理启动加载完成；payload 为主进程下发的 currentProject，首帧即可渲染资源管理器
+  const handleSplashComplete = (payload?: unknown) => {
+    if (payload && typeof payload === 'object' && payload !== null && 'id' in payload && 'name' in payload) {
+      setCurrentProject(payload);
+    }
     setIsAppReady(true);
   };
 
@@ -700,6 +703,7 @@ ${err}
             onToggleTaskPanel={() => setIsTaskPanelHidden(!isTaskPanelHidden)}
             isExplorerPanelHidden={isExplorerPanelHidden}
             onToggleExplorerPanel={() => setIsExplorerPanelHidden(!isExplorerPanelHidden)}
+            appCurrentProject={currentProject}
           />
         )}
         {showSettings && (

@@ -22,6 +22,8 @@ interface ProjectViewProps {
     onToggleTaskPanel: () => void;
     isExplorerPanelHidden: boolean;
     onToggleExplorerPanel: () => void;
+    /** App 已加载的当前项目，用于尽早渲染资源管理器，不等 ProjectView 自身 loadCurrentProject 完成 */
+    appCurrentProject?: Project | null;
 }
 
 // 跟踪新任务的第一条消息，用于重命名
@@ -61,7 +63,8 @@ export function ProjectView({
     isTaskPanelHidden,
     onToggleTaskPanel,
     isExplorerPanelHidden,
-    onToggleExplorerPanel
+    onToggleExplorerPanel,
+    appCurrentProject
 }: ProjectViewProps) {
     const { t } = useI18n();
     const { showToast } = useToast();
@@ -95,6 +98,13 @@ export function ProjectView({
     currentTaskIdRef.current = currentTaskId;
     historyRef.current = history;
     multiTabEditorRefRef.current = multiTabEditorRef;
+
+    // 用 App 的 currentProject 尽早驱动渲染，使资源管理器在自身 loadCurrentProject 完成前即可展示
+    useEffect(() => {
+        if (appCurrentProject) {
+            setCurrentProject(appCurrentProject);
+        }
+    }, [appCurrentProject?.id, appCurrentProject?.path]);
 
     // 处理左侧悬停展开侧栏
     const handleLeftEdgeMouseEnter = useCallback(() => {
@@ -190,10 +200,8 @@ export function ProjectView({
             const newHistory = args[0] as Anthropic.MessageParam[];
             setStreamingText('');
             setIsLoadingHistory(false); // 历史加载完成
-            // 如果历史不为空，说明任务已经有消息了，清除待重命名标记
-            if (newHistory.length > 0 && pendingTaskRename) {
-                pendingTaskRename = null;
-            }
+            // 不在此处清除 pendingTaskRename：用户发送首条消息后 agent:history-update 会立即触发，
+            // 若此时清除则 agent:done 时无法根据首条消息重命名。清除逻辑已在 handleSelectTask（切换任务）和 agent:done（重命名完成）中处理。
             // 保存 session 并关联到当前任务（这样切换任务后能加载对应历史）
             if (newHistory && newHistory.length > 0) {
                 const hasRealContent = newHistory.some(msg => {
@@ -253,7 +261,7 @@ export function ProjectView({
 
         // 监听对话完成：Project 模式下自动打开内置浏览器并刷新；新任务根据首条用户消息重命名
         const removeAgentDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
-            const payload = args[0] as { taskId?: string } | undefined;
+            const payload = args[0] as { taskId?: string; skipBrowserRefresh?: boolean } | undefined;
             if (payload?.taskId && pendingTaskRename && pendingTaskRename.taskId === payload.taskId) {
                 const messages = historyRef.current || [];
                 const firstUser = messages.find((m) => m.role === 'user');
@@ -270,7 +278,9 @@ export function ProjectView({
             }
             const ref = multiTabEditorRefRef.current;
             ref?.openBrowserTab?.(); // 无参：新建用默认 URL，已有则保留当前 URL
-            ref?.refreshBrowserTab?.();
+            if (!payload?.skipBrowserRefresh) {
+                ref?.refreshBrowserTab?.();
+            }
         });
 
         // 加载当前项目（延迟执行，确保组件已挂载）
@@ -320,9 +330,11 @@ export function ProjectView({
         const projects = await window.ipcRenderer.invoke('project:list') as Project[];
         
         if (projects.length === 0) {
-            // 如果没有项目，显示创建项目对话框
-            setCurrentProject(null);
-            setShowCreateDialog(true);
+            // 仅当 App 未传入当前项目时才清空并弹出创建对话框，避免覆盖 app:init-complete 下发的 project
+            if (!appCurrentProject) {
+                setCurrentProject(null);
+                setShowCreateDialog(true);
+            }
             return;
         }
 
@@ -333,6 +345,11 @@ export function ProjectView({
         if (!project && projects.length > 0) {
             project = projects[0];
             await window.ipcRenderer.invoke('project:open', project.id);
+        }
+        
+        // 确保项目路径已加入授权列表，资源管理器才能加载文件（fs:list-dir 依赖 authorizedFolders）
+        if (project) {
+            await window.ipcRenderer.invoke('project:ensure-working-dir');
         }
         
         setCurrentProject(project);
@@ -348,8 +365,9 @@ export function ProjectView({
                 // 切换到最新任务的聊天
                 await handleSelectTask(latestTask.id);
             } else {
-                // 如果有项目但没有任务，不显示对话框，等待用户点击"新建任务"
+                // 如果有项目但没有任务，清空聊天区域并等待用户点击"新建任务"
                 setCurrentTaskId(null);
+                window.ipcRenderer.invoke('project:clear-chat').catch(() => {});
             }
         }
     };
@@ -399,8 +417,11 @@ export function ProjectView({
 
     // 发送消息；新任务在聊天完成后（agent:done）根据首条用户消息自动重命名
     const handleSendMessageWithRename = useCallback((message: string | { content: string, images: string[] }) => {
+        if (currentProject && currentTaskId && history.length === 0 && (!pendingTaskRename || pendingTaskRename.taskId !== currentTaskId)) {
+            pendingTaskRename = { taskId: currentTaskId, projectId: currentProject.id };
+        }
         onSendMessage(message);
-    }, [onSendMessage]);
+    }, [onSendMessage, currentProject, currentTaskId, history.length]);
 
     const handleSelectTask = async (taskId: string) => {
         if (!currentProject) return;
