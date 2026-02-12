@@ -99,11 +99,9 @@ export function ProjectView({
     historyRef.current = history;
     multiTabEditorRefRef.current = multiTabEditorRef;
 
-    // 用 App 的 currentProject 尽早驱动渲染，使资源管理器在自身 loadCurrentProject 完成前即可展示
+    // 用 App 的 currentProject 尽早驱动渲染；删除项目后 App 置为 null 时也同步清空，避免资源管理器仍显示已删项目
     useEffect(() => {
-        if (appCurrentProject) {
-            setCurrentProject(appCurrentProject);
-        }
+        setCurrentProject(appCurrentProject ?? null);
     }, [appCurrentProject?.id, appCurrentProject?.path]);
 
     // 处理左侧悬停展开侧栏
@@ -389,29 +387,21 @@ export function ProjectView({
     const handleCreateTask = async () => {
         if (!currentProject) return;
         
-        // 先清空当前显示的历史和流式文本
+        // 先清空当前显示的历史和流式文本，新任务不显示「历史会话加载中」
         setStreamingText('');
-        setIsLoadingHistory(false); // 新任务不需要加载历史
+        setIsLoadingHistory(false);
         
-        // 创建任务，使用默认名称"新任务"（会在第一条消息时重命名）
+        // 创建任务（主进程会清空历史并发送 agent:history-update []，无需再调用 handleSelectTask 避免出现加载中）
         const result = await window.ipcRenderer.invoke('project:task:create', currentProject.id, t('newTask')) as { success: boolean; task?: ProjectTask };
         if (result.success && result.task) {
-            // 设置当前任务ID
             setCurrentTaskId(result.task.id);
-            
-            // 确保清空流式文本
             setStreamingText('');
-            
-            // 标记这个任务等待第一条消息来重命名
             pendingTaskRename = {
                 taskId: result.task.id,
                 projectId: currentProject.id
             };
-            
-            // 切换到新任务（这会确保历史被清空，因为新任务没有 sessionId）
-            await handleSelectTask(result.task.id);
-            
-            // 任务列表会在 TaskListPanel 中自动刷新（通过 useEffect 监听 project:task:created 事件）
+            // 不调用 handleSelectTask：主进程已在 project:task:create 中设置 currentTaskIdForSession 并下发空历史，直接展示「开始一段对话」
+            // 任务列表会在 TaskListPanel 中通过 project:task:created 自动刷新
         }
     };
 

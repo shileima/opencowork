@@ -307,7 +307,8 @@ export const translations = {
         // Project View
         newProject: 'New Project',
         projectName: 'Project Name',
-        newProjectNamePlaceholder: 'Enter project name',
+        newProjectNamePlaceholder: 'e.g. my_project',
+        projectNameRule: 'Must start with a letter; only letters, numbers, underscores, and hyphens allowed.',
         projectPath: 'Project Path',
         createProject: 'Create Project',
         selectProjectPath: 'Select Project Path',
@@ -693,7 +694,8 @@ export const translations = {
         // Project View
         newProject: '新建项目',
         projectName: '项目名称',
-        newProjectNamePlaceholder: '输入项目名称',
+        newProjectNamePlaceholder: '如 my_project',
+        projectNameRule: '英文开头，仅可包含英文、数字、下划线、横杠',
         projectPath: '项目路径',
         createProject: '创建项目',
         selectProjectPath: '选择项目路径',

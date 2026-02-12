@@ -414,15 +414,15 @@ export class AgentRuntime {
                 console.error(`[AgentRuntime] Task ${taskId} error:`, error);
                 throw error; // 重新抛出，让外层处理
             } finally {
+                // 先广播本任务的历史，再恢复全局 history，否则 notifyUpdate() 会发出已恢复的空历史导致聊天区被清空
+                if (taskHistory.length > 0) {
+                    this.broadcast('agent:history-update', taskHistory.slice());
+                }
                 // 确保状态恢复和任务清理（无论成功还是失败）
                 this.history = restoreRef.originalHistory;
                 this.isProcessing = originalIsProcessing;
                 this.abortController = originalAbortController;
                 this.activeTasks.delete(taskId);
-                // 只有在有历史记录时才通知更新（避免空更新）
-                if (taskHistory.length > 0) {
-                    this.notifyUpdate();
-                }
                 this.broadcast('agent:done', { timestamp: Date.now(), taskId: effectiveTaskIdForDone, projectId, skipBrowserRefresh: this.runUsedKillProjectDevServer });
             }
         } else {

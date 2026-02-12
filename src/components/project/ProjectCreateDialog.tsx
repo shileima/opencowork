@@ -1,6 +1,16 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { X } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
+
+/** 项目名称：英文开头，仅可包含英文、数字、下划线、横杠 */
+const PROJECT_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+
+const sanitizeProjectName = (value: string): string => {
+    const allowed = value.replace(/[^a-zA-Z0-9_-]/g, '');
+    const firstLetterIndex = allowed.search(/[a-zA-Z]/);
+    if (firstLetterIndex === -1) return '';
+    return allowed.slice(firstLetterIndex);
+};
 
 interface ProjectCreateDialogProps {
     onClose: () => void;
@@ -11,9 +21,16 @@ export function ProjectCreateDialog({ onClose, onConfirm }: ProjectCreateDialogP
     const { t } = useI18n();
     const [name, setName] = useState('');
 
+    const handleNameChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        setName(sanitizeProjectName(e.target.value));
+    }, []);
+
+    const trimmedName = name.trim();
+    const isValid = trimmedName.length > 0 && PROJECT_NAME_REGEX.test(trimmedName);
+
     const handleConfirm = () => {
-        if (name.trim()) {
-            onConfirm(name.trim());
+        if (isValid) {
+            onConfirm(trimmedName);
             onClose();
         }
     };
@@ -41,13 +58,17 @@ export function ProjectCreateDialog({ onClose, onConfirm }: ProjectCreateDialogP
                         <input
                             type="text"
                             value={name}
-                            onChange={(e) => setName(e.target.value)}
+                            onChange={handleNameChange}
                             placeholder={t('newProjectNamePlaceholder')}
                             className="w-full px-3 py-2 bg-stone-50 dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-400 text-stone-900 dark:text-zinc-100"
                             autoFocus
                             onKeyDown={(e) => e.key === 'Enter' && handleConfirm()}
                             aria-label={t('projectName')}
+                            aria-describedby="project-name-rule"
                         />
+                        <p id="project-name-rule" className="mt-1.5 text-xs text-stone-500 dark:text-zinc-500">
+                            {t('projectNameRule')}
+                        </p>
                     </div>
 
                     <div>
@@ -74,7 +95,7 @@ export function ProjectCreateDialog({ onClose, onConfirm }: ProjectCreateDialogP
                     <button
                         type="button"
                         onClick={handleConfirm}
-                        disabled={!name.trim()}
+                        disabled={!isValid}
                         className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors"
                     >
                         {t('createProject')}
