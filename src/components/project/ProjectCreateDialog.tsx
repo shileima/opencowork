@@ -54,7 +54,7 @@ export function ProjectCreateDialog({ onClose, onConfirm }: ProjectCreateDialogP
                         <label className="block text-sm font-medium text-stone-700 dark:text-zinc-300 mb-2">
                             {t('projectPath')}
                         </label>
-                        <div className="px-3 py-2.5 bg-stone-50 dark:bg-zinc-800/80 border border-stone-200 dark:border-zinc-700 rounded-lg text-stone-600 dark:text-zinc-400 text-sm font-mono break-all">
+                        <div className="px-3 py-2.5 bg-stone-50 dark:bg-zinc-800/80 border border-stone-200 dark:border-zinc-700 rounded-lg text-stone-600 dark:text-zinc-400 text-xs font-mono break-all">
                             {t('projectCreatePathFixed')}
                         </div>
                         <p className="mt-1.5 text-xs text-stone-500 dark:text-zinc-500">

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import { Plus, Trash2, Pencil, MoreVertical, Loader2, CircleCheckBig, XCircle, Circle } from 'lucide-react';
+import { Plus, Loader2, CircleCheckBig, XCircle, Circle, X } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
 import type { Project, ProjectTask } from '../../../electron/config/ProjectStore';
 
@@ -28,12 +27,9 @@ export function TaskListPanel({
     const isBusy = isProcessing || isDeploying;
     const { t } = useI18n();
     const [tasks, setTasks] = useState<ProjectTask[]>([]);
-    const [contextMenuTaskId, setContextMenuTaskId] = useState<string | null>(null);
-    const [contextMenuPosition, setContextMenuPosition] = useState({ top: 0, left: 0 });
     /** 原地重命名：正在编辑的任务 id，不弹框 */
     const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
     const [editValue, setEditValue] = useState('');
-    const contextMenuRef = useRef<HTMLDivElement>(null);
     const renameInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -77,10 +73,9 @@ export function TaskListPanel({
         setTasks(sortedTasks);
     };
 
-    /** 进入原地重命名：在名称处显示输入框 */
+    /** 进入原地重命名：在名称处显示输入框（双击任务标题触发） */
     const handleRenameTask = (task: ProjectTask) => {
         if (!currentProject) return;
-        setContextMenuTaskId(null);
         setEditingTaskId(task.id);
         setEditValue(task.title);
     };
@@ -112,8 +107,6 @@ export function TaskListPanel({
             console.error('No current project');
             return;
         }
-        setContextMenuTaskId(null); // 关闭菜单
-        
         const confirmMessage = `${t('delete')} "${task.title}"?`;
         if (confirm(confirmMessage)) {
             try {
@@ -148,41 +141,6 @@ export function TaskListPanel({
             }
         }
     };
-
-    const handleContextMenu = (e: React.MouseEvent, taskId: string) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const target = e.currentTarget as HTMLElement;
-        const rect = target.getBoundingClientRect();
-        const menuWidth = 120;
-        setContextMenuPosition({
-            top: rect.bottom + 4,
-            left: Math.max(8, rect.right - menuWidth)
-        });
-        setContextMenuTaskId(taskId);
-    };
-
-    // 点击外部关闭菜单（延迟绑定，避免打开菜单的同一点击被当作“外部点击”）
-    useEffect(() => {
-        if (!contextMenuTaskId) return;
-
-        const handleClickOutside = (event: MouseEvent) => {
-            const target = event.target as Node;
-            if (contextMenuRef.current?.contains(target)) return;
-            const clickedButton = (event.target as HTMLElement).closest('button');
-            if (clickedButton?.querySelector('svg')) return;
-            setContextMenuTaskId(null);
-        };
-
-        const timer = setTimeout(() => {
-            document.addEventListener('mousedown', handleClickOutside);
-        }, 0);
-
-        return () => {
-            clearTimeout(timer);
-            document.removeEventListener('mousedown', handleClickOutside);
-        };
-    }, [contextMenuTaskId]);
 
     // 快捷键支持
     useEffect(() => {
@@ -292,7 +250,11 @@ export function TaskListPanel({
                                                 />
                                             ) : (
                                                 <div
-                                                    title={task.title}
+                                                    title={`${task.title}（双击重命名）`}
+                                                    onDoubleClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleRenameTask(task);
+                                                    }}
                                                     className={`text-xs font-medium truncate ${
                                                         task.status === 'completed'
                                                             ? 'text-stone-500 dark:text-zinc-400'
@@ -330,28 +292,22 @@ export function TaskListPanel({
                                         </div>
                                     </div>
                                 </button>
-                                {/* 三个点菜单按钮 */}
+                                {/* 删除按钮（与权限列表删除样式一致） */}
                                 <div className="absolute right-2 top-1/2 -translate-y-1/2 z-10">
                                     <button
                                         type="button"
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             e.preventDefault();
-                                            handleContextMenu(e, task.id);
+                                            handleDeleteTask(task);
                                         }}
-                                        className={`p-1.5 rounded transition-all ${
-                                            contextMenuTaskId === task.id
-                                                ? 'text-orange-500 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10 opacity-100'
-                                                : currentTaskId === task.id
-                                                ? 'text-stone-500 dark:text-zinc-400 opacity-100 hover:text-stone-700 dark:hover:text-zinc-200'
-                                                : 'text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 opacity-0 group-hover:opacity-100'
+                                        className={`p-1.5 text-stone-300 dark:text-zinc-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-all ${
+                                            currentTaskId === task.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
                                         }`}
-                                        title={t('moreActions')}
-                                        aria-label={t('moreActions')}
-                                        aria-haspopup="true"
-                                        aria-expanded={contextMenuTaskId === task.id}
+                                        title={t('deleteTask')}
+                                        aria-label={t('deleteTask')}
                                     >
-                                        <MoreVertical size={14} aria-hidden />
+                                        <X size={14} aria-hidden />
                                     </button>
                                 </div>
                             </div>
@@ -360,46 +316,6 @@ export function TaskListPanel({
                 )}
             </div>
         </div>
-        {/* 下拉菜单通过 Portal 挂到 body，避免被父级 overflow/堆叠裁剪 */}
-        {contextMenuTaskId && (() => {
-            const menuTask = tasks.find(t => t.id === contextMenuTaskId);
-            if (!menuTask) return null;
-            const menuContent = (
-                <div
-                    ref={contextMenuRef}
-                    className="fixed bg-white dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 rounded-lg shadow-lg py-1 z-[99999] min-w-[120px]"
-                    style={{ top: contextMenuPosition.top, left: contextMenuPosition.left }}
-                    role="menu"
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    <button
-                        type="button"
-                        role="menuitem"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            handleRenameTask(menuTask);
-                        }}
-                        className="w-full text-left px-3 py-1.5 text-xs text-stone-700 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-700 flex items-center gap-2"
-                    >
-                        <Pencil size={10} />
-                        {t('rename')}
-                    </button>
-                    <button
-                        type="button"
-                        role="menuitem"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteTask(menuTask);
-                        }}
-                        className="w-full text-left px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 flex items-center gap-2"
-                    >
-                        <Trash2 size={10} />
-                        {t('deleteTask')}
-                    </button>
-                </div>
-            );
-            return createPortal(menuContent, document.body);
-        })()}
         </>
     );
 }

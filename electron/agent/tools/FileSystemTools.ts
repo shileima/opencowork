@@ -87,6 +87,18 @@ export const ValidatePageSchema = {
     }
 };
 
+export const KillProjectDevServerSchema = {
+    name: "kill_project_dev_server",
+    description: "Stop the user's project development server running on port 3000. Use this when the user says '关闭服务', '关闭本地服务', 'stop the server', etc. NEVER use run_command to kill processes—use this tool instead to avoid accidentally killing the OpenCowork app's own Vite server (port 5173).",
+    input_schema: {
+        type: "object" as const,
+        properties: {
+            cwd: { type: "string", description: "Working directory of the current project (Primary). Used for validation." }
+        },
+        required: ["cwd"]
+    }
+};
+
 export class FileSystemTools {
     // 跟踪所有启动的子进程
     private static childProcesses: Set<import('child_process').ChildProcess> = new Set();
@@ -1074,6 +1086,69 @@ export class FileSystemTools {
             console.warn(`[FileSystemTools] Failed to kill process on port ${port}:`, (e as Error).message);
         }
         await new Promise((r) => setTimeout(r, 500));
+    }
+
+    /**
+     * 终止用户项目的 dev 服务（仅 port 3000），排除 OpenCowork 自身进程
+     * 避免误杀 OpenCowork 的 Vite 服务（5173）导致整客户端刷新
+     */
+    async killProjectDevServer(args: { cwd: string }): Promise<string> {
+        const PROJECT_DEV_PORT = 3000;
+        const appRoot = process.env.APP_ROOT ? path.resolve(process.env.APP_ROOT) : '';
+
+        const pids = await this.getPidsOnPort(PROJECT_DEV_PORT);
+        if (pids.length === 0) {
+            return `Port ${PROJECT_DEV_PORT} 上暂无进程，开发服务可能已关闭。`;
+        }
+
+        const toKill: number[] = [];
+        if (process.platform === 'darwin' || process.platform === 'linux') {
+            for (const pid of pids) {
+                try {
+                    const { stdout } = await execAsync(`ps -o cwd= -p ${pid}`, {
+                        timeout: 2000,
+                        maxBuffer: 2048,
+                        encoding: 'utf-8'
+                    });
+                    const cwd = (stdout || '').trim();
+                    const cwdNorm = cwd ? path.resolve(cwd) : '';
+                    if (appRoot && cwdNorm && (cwdNorm === appRoot || cwdNorm.startsWith(appRoot + path.sep))) {
+                        console.log(`[FileSystemTools] Skipping PID ${pid} (cwd under APP_ROOT: ${cwd})`);
+                        continue;
+                    }
+                    toKill.push(pid);
+                } catch {
+                    toKill.push(pid);
+                }
+            }
+        } else {
+            toKill.push(...pids);
+        }
+
+        if (toKill.length === 0) {
+            return `Port ${PROJECT_DEV_PORT} 上的进程属于 OpenCowork 应用，已跳过。`;
+        }
+
+        try {
+            if (process.platform === 'darwin' || process.platform === 'linux') {
+                for (const pid of toKill) {
+                    await execAsync(`kill -9 ${pid}`, { timeout: 3000 });
+                }
+                console.log(`[FileSystemTools] Killed project dev server PIDs: ${toKill.join(', ')}`);
+                return `已关闭开发服务，终止了 ${toKill.length} 个进程 (PIDs: ${toKill.join(', ')})。`;
+            } else if (process.platform === 'win32') {
+                for (const pid of toKill) {
+                    await execAsync(`taskkill /PID ${pid} /F`, { timeout: 3000, shell: 'cmd.exe' });
+                }
+                console.log(`[FileSystemTools] Killed project dev server PIDs: ${toKill.join(', ')}`);
+                return `已关闭开发服务，终止了 ${toKill.length} 个进程 (PIDs: ${toKill.join(', ')})。`;
+            }
+        } catch (e) {
+            const msg = (e as Error).message || String(e);
+            console.warn('[FileSystemTools] Failed to kill project dev server:', msg);
+            return `关闭开发服务时出错: ${msg}`;
+        }
+        return '当前平台不支持此操作。';
     }
 
     /**
