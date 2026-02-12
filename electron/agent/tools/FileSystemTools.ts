@@ -1092,7 +1092,7 @@ export class FileSystemTools {
      * 终止用户项目的 dev 服务（仅 port 3000），排除 OpenCowork 自身进程
      * 避免误杀 OpenCowork 的 Vite 服务（5173）导致整客户端刷新
      */
-    async killProjectDevServer(args: { cwd: string }): Promise<string> {
+    async killProjectDevServer(_args: { cwd: string }): Promise<string> {
         const PROJECT_DEV_PORT = 3000;
         const appRoot = process.env.APP_ROOT ? path.resolve(process.env.APP_ROOT) : '';
 

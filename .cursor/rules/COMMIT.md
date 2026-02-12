@@ -1,8 +1,9 @@
 # Commit Message 规范
 
-## 语言要求
+## 语言与长度
 - **所有 commit message 必须使用中文**
-- commit message 格式：`<类型>: <描述>`
+- **只保留简洁的一句话描述**，不要冗长、不要多行、不要展开细节
+- 格式：`<类型>: <简洁描述>` 或直接 `<简洁描述>`
 
 ## Commit 类型
 - `feat`: 新功能
@@ -15,12 +16,13 @@
 - `chore`: 构建/工具链相关
 - `ci`: CI/CD 配置
 
-## Commit 示例
+## Commit 示例（简洁）
 ```
-feat: 添加动态 Docker 实例管理功能
-fix: 修复代理服务器配置重载问题
+feat: 添加 Docker 实例管理
+fix: 修复代理配置重载
 docs: 更新快速启动指南
-refactor: 重构应用配置生成逻辑
+refactor: 重构配置生成逻辑
+调整 CoworkView 模式切换按钮样式
 ```
 
 ## 其他规则
