@@ -90,12 +90,14 @@ export function ProjectView({
     } | null>(null);
     const multiTabEditorRefRef = useRef<typeof multiTabEditorRef>(null);
     const currentTaskIdRef = useRef<string | null>(null);
+    const currentProjectRef = useRef<Project | null>(null);
     const historyRef = useRef<Anthropic.MessageParam[]>([]);
     const defaultTaskTitleRef = useRef(t('newTask'));
     defaultTaskTitleRef.current = t('newTask');
     const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const hoverRightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     currentTaskIdRef.current = currentTaskId;
+    currentProjectRef.current = currentProject;
     historyRef.current = history;
     multiTabEditorRefRef.current = multiTabEditorRef;
 
@@ -257,6 +259,11 @@ export function ProjectView({
             }
         });
 
+        // 监听 Agent 就绪：启动时若曾因 Agent 未就绪导致 project:task:switch 失败，此处重新执行加载以拉取最新任务历史
+        const removeAgentReadyListener = window.ipcRenderer.on('agent:ready', () => {
+            loadCurrentProject();
+        });
+
         // 监听对话完成：Project 模式下自动打开内置浏览器并刷新；新任务根据首条用户消息重命名
         const removeAgentDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
             const payload = args[0] as { taskId?: string; skipBrowserRefresh?: boolean } | undefined;
@@ -290,6 +297,7 @@ export function ProjectView({
             removeConfigListener();
             removeStreamListener();
             removeHistoryListener();
+            removeAgentReadyListener();
             removeContextSwitchedListener();
             removeProjectSwitchListener();
             removeProjectCreatedListener();
@@ -360,8 +368,10 @@ export function ProjectView({
                 const sortedTasks = [...tasks].sort((a, b) => b.updatedAt - a.updatedAt);
                 const latestTask = sortedTasks[0];
                 setCurrentTaskId(latestTask.id);
-                // 切换到最新任务的聊天
-                await handleSelectTask(latestTask.id);
+                // 用本地 project/latestTask 直接切换，不依赖 currentProject state，避免首屏或 agent:ready 时闭包中 currentProject 仍为 null 导致不加载历史
+                setIsLoadingHistory(true);
+                const result = await window.ipcRenderer.invoke('project:task:switch', project.id, latestTask.id) as { success?: boolean };
+                if (!result?.success) setIsLoadingHistory(false);
             } else {
                 // 如果有项目但没有任务，清空聊天区域并等待用户点击"新建任务"
                 setCurrentTaskId(null);

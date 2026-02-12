@@ -3239,6 +3239,7 @@ async function deferredInitialization() {
       .then(() => {
         const total = Date.now() - startTime
         console.log(`[Main] Agent initialization completed in ${total}ms`)
+        mainWin?.webContents.send('agent:ready')
       })
       .catch((err) => {
         console.error('[Main] Agent initialization failed:', err)
