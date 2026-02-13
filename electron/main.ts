@@ -47,27 +47,48 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
 /**
+ * 比较版本号，用于决定是否使用热更新目录
+ * 仅在此处使用，避免与后面的 compareVersions 重复
+ */
+function compareVersionsForDist(a: string, b: string): number {
+  const parts1 = a.split('.').map(Number)
+  const parts2 = b.split('.').map(Number)
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] ?? 0
+    const p2 = parts2[i] ?? 0
+    if (p1 > p2) return 1
+    if (p1 < p2) return -1
+  }
+  return 0
+}
+
+/**
  * 获取前端资源目录路径
- * 生产环境下优先使用热更新目录，否则使用内置资源
+ * 生产环境下：若热更新目录存在且版本不低于应用版本则用热更新，否则用内置资源。
+ * 这样在「整包更新」（如 GitHub Actions 安装新版本）后，会使用新内置前端，避免被旧热更新目录覆盖。
  */
 function getRendererDistPath(): string {
   if (VITE_DEV_SERVER_URL) {
-    // 开发模式直接返回默认路径
     return RENDERER_DIST
   }
 
-  // 生产模式：检查热更新目录
   const hotUpdateDistDir = directoryManager.getHotUpdateDistDir()
   const hotUpdateIndexPath = path.join(hotUpdateDistDir, 'index.html')
-  
-  if (fs.existsSync(hotUpdateIndexPath)) {
-    console.log('[Main] Using hot-update dist directory')
-    return hotUpdateDistDir
+  if (!fs.existsSync(hotUpdateIndexPath)) {
+    console.log('[Main] Using built-in dist directory (no hot-update index)')
+    return RENDERER_DIST
   }
 
-  // 回退到内置资源
-  console.log('[Main] Using built-in dist directory')
-  return RENDERER_DIST
+  const appVersion = app.getVersion()
+  const hotUpdateVersion = directoryManager.getHotUpdateVersion()
+  // 热更新无清单或版本落后于应用版本（例如用户刚做了整包更新）→ 用内置，避免旧热更新覆盖新前端
+  if (!hotUpdateVersion || compareVersionsForDist(hotUpdateVersion, appVersion) < 0) {
+    console.log(`[Main] Using built-in dist directory (app=${appVersion}, hot-update=${hotUpdateVersion ?? 'none'}, prefer built-in after full app update)`)
+    return RENDERER_DIST
+  }
+
+  console.log('[Main] Using hot-update dist directory')
+  return hotUpdateDistDir
 }
 
 // Helper to get icon path for both dev and prod
@@ -944,6 +965,21 @@ ipcMain.handle('resource:perform-update', async () => {
     const errorMessage = error?.message || '未知错误'
     console.error('[Main] Error details:', error)
     return { success: false, error: `更新失败: ${errorMessage}` }
+  }
+})
+
+// 清理热更新目录（回退到内置资源，解决整包更新后仍加载旧前端的问题）
+ipcMain.handle('resource:clear-hot-update', async () => {
+  try {
+    if (!resourceUpdater) {
+      return { success: false, error: 'Resource updater not initialized' }
+    }
+    await resourceUpdater.clearHotUpdate()
+    console.log('[Main] Hot update directory cleared by user')
+    return { success: true, message: '已清理热更新目录，重启后将使用内置资源版本。' }
+  } catch (error: any) {
+    console.error('[Main] Clear hot update failed:', error)
+    return { success: false, error: error?.message ?? '清理失败' }
   }
 })
 
