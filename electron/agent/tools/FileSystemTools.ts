@@ -2,6 +2,8 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
+import net from 'net';
+import http from 'http';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from '../../utils/NodePath';
@@ -10,6 +12,76 @@ import { nodeVersionManager } from '../../utils/NodeVersionManager';
 import { ErrorDetector, DetectedError } from './ErrorDetector';
 
 const execAsync = promisify(exec);
+
+/** 轮询直到端口可连接或超时，确保 dev 服务真正在监听后再打开浏览器，避免 ERR_CONNECTION_REFUSED */
+function isPortOpen(host: string, port: number, timeoutMs = 800): Promise<boolean> {
+    return new Promise((resolve) => {
+        const socket = new net.Socket();
+        const timer = setTimeout(() => {
+            socket.destroy();
+            resolve(false);
+        }, timeoutMs);
+        socket.connect(port, host, () => {
+            clearTimeout(timer);
+            socket.destroy();
+            resolve(true);
+        });
+        socket.on('error', () => {
+            clearTimeout(timer);
+            resolve(false);
+        });
+    });
+}
+
+/** 等待端口就绪：每 intervalMs 尝试连接，最多等待 maxWaitMs。同时尝试 IPv4 和 IPv6（macOS 上 Vite 可能绑定 ::1） */
+async function waitForPortReady(
+    host: string,
+    port: number,
+    options: { maxWaitMs?: number; intervalMs?: number } = {}
+): Promise<boolean> {
+    const { maxWaitMs = 20000, intervalMs = 300 } = options;
+    const hosts = host === '127.0.0.1' ? ['127.0.0.1', '::1'] : [host];
+    const start = Date.now();
+    while (Date.now() - start < maxWaitMs) {
+        for (const h of hosts) {
+            if (await isPortOpen(h, port)) return true;
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    return false;
+}
+
+/** 检查 HTTP 根路径是否可访问。尝试 127.0.0.1 和 localhost（后者在 macOS 可能解析为 ::1） */
+function checkHttpReady(port: number, timeoutMs = 5000): Promise<boolean> {
+    const tryHost = (host: string): Promise<boolean> =>
+        new Promise((resolve) => {
+            const url = `http://${host}:${port}/`;
+            const req = http.get(url, { timeout: timeoutMs }, (res) => {
+                const ok = res.statusCode !== undefined && res.statusCode < 500;
+                res.destroy();
+                resolve(ok);
+            });
+            req.on('error', () => resolve(false));
+            req.on('timeout', () => {
+                req.destroy();
+                resolve(false);
+            });
+        });
+    return tryHost('127.0.0.1').then((ok) => ok || tryHost('localhost'));
+}
+
+/** 等待 HTTP 就绪：端口已开后轮询 GET /，最多重试 maxRetries 次，每次间隔 intervalMs */
+async function waitForHttpReady(
+    port: number,
+    options: { maxRetries?: number; intervalMs?: number; timeoutPerRequest?: number } = {}
+): Promise<boolean> {
+    const { maxRetries = 10, intervalMs = 800, timeoutPerRequest = 5000 } = options;
+    for (let i = 0; i < maxRetries; i++) {
+        if (await checkHttpReady(port, timeoutPerRequest)) return true;
+        if (i < maxRetries - 1) await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    return false;
+}
 
 export const ReadFileSchema = {
     name: "read_file",
@@ -668,6 +740,45 @@ export class FileSystemTools {
         }
     }
 
+    /**
+     * 返回常见的 pnpm/包管理器可执行路径目录，仅包含当前平台存在且可用的目录。
+     * 用于在 run_command 的 PATH 中插入这些路径，使从 Dock/Finder 启动时子进程也能找到 pnpm。
+     */
+    private getCommonPackageManagerPaths(): string[] {
+        const platform = process.platform;
+        const home = os.homedir();
+
+        const candidates: string[] = [];
+        if (platform === 'darwin') {
+            candidates.push(
+                path.join(home, 'Library', 'pnpm'),
+                path.join(home, '.local', 'share', 'pnpm'),
+                '/opt/homebrew/bin',
+                '/usr/local/bin'
+            );
+        } else if (platform === 'linux') {
+            candidates.push(
+                path.join(home, '.local', 'share', 'pnpm'),
+                '/usr/local/bin'
+            );
+        } else if (platform === 'win32') {
+            const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+            const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+            candidates.push(
+                path.join(appData, 'pnpm'),
+                path.join(localAppData, 'pnpm')
+            );
+        }
+
+        return candidates.filter((dir) => {
+            try {
+                return fsSync.existsSync(dir);
+            } catch {
+                return false;
+            }
+        });
+    }
+
     async runCommand(args: { command: string, cwd?: string }, defaultCwd: string) {
         const workingDir = args.cwd || defaultCwd;
         const timeout = 60000; // 60 second timeout
@@ -761,16 +872,24 @@ export class FileSystemTools {
             const npmEnv = Object.keys(projectEnv).length > 0 ? projectEnv : getNpmEnvVars();
             
             // 确保 Node.js 路径在 PATH 的最前面，这样 pnpm/yarn 会使用正确的 Node.js
+            // 在 nodeBinDir 之后插入常见 pnpm/包管理器路径，使从 Dock 启动时子进程也能找到 pnpm
             let finalPath = process.env.PATH || '';
+            const pathSeparator = process.platform === 'win32' ? ';' : ':';
+            const commonPkgPaths = this.getCommonPackageManagerPaths();
+
             if (nodePath && nodePath !== 'node') {
                 const nodeBinDir = path.dirname(nodePath);
-                const pathSeparator = process.platform === 'win32' ? ';' : ':';
                 // 如果项目环境变量中有 PATH，使用它作为基础；否则使用系统 PATH
                 const basePath = projectEnv.PATH || finalPath;
-                // 将 Node.js 目录放在 PATH 最前面
-                finalPath = `${nodeBinDir}${pathSeparator}${basePath}`;
+                const pathParts = [nodeBinDir, ...commonPkgPaths].filter(Boolean);
+                const prefix = pathParts.join(pathSeparator);
+                finalPath = prefix ? `${prefix}${pathSeparator}${basePath}` : basePath;
             } else if (projectEnv.PATH) {
-                finalPath = projectEnv.PATH;
+                const basePath = projectEnv.PATH;
+                const prefix = commonPkgPaths.join(pathSeparator);
+                finalPath = prefix ? `${prefix}${pathSeparator}${basePath}` : basePath;
+            } else if (commonPkgPaths.length > 0) {
+                finalPath = `${commonPkgPaths.join(pathSeparator)}${pathSeparator}${finalPath}`;
             }
             
             let env: NodeJS.ProcessEnv = {
@@ -802,9 +921,11 @@ export class FileSystemTools {
                 let runCommand = command;
                 if (parsedPort === 5173 && !/--port\s+\d+|\b5173\b/.test(command)) {
                     const isRunScript = /(?:npm|pnpm|yarn)\s+(?:run\s+)?(dev|start)\b/i.test(command);
+                    // --host 127.0.0.1 显式绑定 IPv4，确保 127.0.0.1 可访问；localhost 解析时通常会尝试 127.0.0.1 故也可用
+                    const portHostArg = ` --port ${PROJECT_DEV_PORT} --host 127.0.0.1`;
                     runCommand = isRunScript
-                        ? command.trimEnd() + ' -- --port ' + PROJECT_DEV_PORT
-                        : command.trimEnd() + ' --port ' + PROJECT_DEV_PORT;
+                        ? command.trimEnd() + ' --' + portHostArg
+                        : command.trimEnd() + portHostArg;
                 }
                 await this.killProcessOnPort(PROJECT_DEV_PORT);
                 const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
@@ -865,9 +986,20 @@ export class FileSystemTools {
                 
                 child.unref();
                 
-                // 等待服务器启动
+                // 先等 TCP 端口可连接，再等 HTTP 根路径可访问，确保内置浏览器打开时页面已可加载
                 console.log(`[FileSystemTools] Waiting for dev server to start on port ${PROJECT_DEV_PORT}...`);
-                await new Promise(resolve => setTimeout(resolve, 4000));
+                const portReady = await waitForPortReady('127.0.0.1', PROJECT_DEV_PORT, { maxWaitMs: 20000, intervalMs: 300 });
+                if (!portReady) {
+                    console.warn(`[FileSystemTools] Dev server port ${PROJECT_DEV_PORT} did not become ready within 20s, opening browser anyway.`);
+                } else {
+                    console.log(`[FileSystemTools] Dev server port ${PROJECT_DEV_PORT} TCP ready, waiting for HTTP...`);
+                    const httpReady = await waitForHttpReady(PROJECT_DEV_PORT, { maxRetries: 10, intervalMs: 800 });
+                    if (httpReady) {
+                        console.log(`[FileSystemTools] Dev server HTTP ready on port ${PROJECT_DEV_PORT}.`);
+                    } else {
+                        console.warn(`[FileSystemTools] Dev server port ${PROJECT_DEV_PORT} HTTP did not respond in time, opening browser anyway.`);
+                    }
+                }
                 
                 // 检测收集到的错误
                 const allErrors = ErrorDetector.detectFromOutput(stdoutBuffer + stderrBuffer, workingDir);
@@ -918,7 +1050,7 @@ export class FileSystemTools {
                 child.unref();
 
                 console.log(`[FileSystemTools] Waiting for preview server to start on port ${PROJECT_PREVIEW_PORT}...`);
-                await new Promise((resolve) => setTimeout(resolve, 3000));
+                await waitForPortReady('127.0.0.1', PROJECT_PREVIEW_PORT, { maxWaitMs: 15000, intervalMs: 300 });
 
                 const url = `http://localhost:${PROJECT_PREVIEW_PORT}`;
                 return `[Preview server started in background]\n\nCommand: ${command}\nWorking directory: ${workingDir}\n\nPreview URL: ${url}\n\nThe preview server is running on port ${PROJECT_PREVIEW_PORT}. Use open_browser_preview to display it in the built-in browser.`;

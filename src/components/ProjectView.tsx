@@ -88,6 +88,7 @@ export function ProjectView({
         closeAllTabs?: () => void;
         closeTabByFilePath?: (filePath: string) => void;
     } | null>(null);
+    const [pendingOpenFile, setPendingOpenFile] = useState<{ filePath: string; content: string } | null>(null);
     const multiTabEditorRefRef = useRef<typeof multiTabEditorRef>(null);
     const currentTaskIdRef = useRef<string | null>(null);
     const currentProjectRef = useRef<Project | null>(null);
@@ -371,7 +372,20 @@ export function ProjectView({
                 // 用本地 project/latestTask 直接切换，不依赖 currentProject state，避免首屏或 agent:ready 时闭包中 currentProject 仍为 null 导致不加载历史
                 setIsLoadingHistory(true);
                 const result = await window.ipcRenderer.invoke('project:task:switch', project.id, latestTask.id) as { success?: boolean };
-                if (!result?.success) setIsLoadingHistory(false);
+                if (!result?.success) {
+                    setIsLoadingHistory(false);
+                } else {
+                    // 兜底：若 agent:history-update 延迟或未触发，短延迟后关闭「历史加载中」，避免新任务/空历史一直显示「历史会话加载中...」
+                    const fallbackTimer = setTimeout(() => {
+                        setIsLoadingHistory(false);
+                    }, 400);
+                    const removeFallback = () => clearTimeout(fallbackTimer);
+                    const removeHistoryListener = window.ipcRenderer.on('agent:history-update', () => {
+                        removeFallback();
+                        removeHistoryListener();
+                    });
+                    setTimeout(removeFallback, 500);
+                }
             } else {
                 // 如果有项目但没有任务，清空聊天区域并等待用户点击"新建任务"
                 setCurrentTaskId(null);
@@ -471,6 +485,9 @@ export function ProjectView({
             const refAfterLoad = multiTabEditorRefRef.current;
             if (refAfterLoad) {
                 refAfterLoad.openEditorTab(filePath, result.content);
+            } else {
+                // ref 未就绪（如 MultiTabEditor 尚未挂载），暂存待打开，由 MultiTabEditor 挂载后消费
+                setPendingOpenFile({ filePath, content: result.content });
             }
         }
     };
@@ -586,6 +603,8 @@ export function ProjectView({
                                         onFileChange={handleFileChange}
                                         onFileSave={handleFileSave}
                                         onRef={setMultiTabEditorRef}
+                                        pendingOpenFile={pendingOpenFile}
+                                        onConsumePendingOpenFile={() => setPendingOpenFile(null)}
                                     />
                                 }
                                 initialRatio={splitRatio}
@@ -617,7 +636,7 @@ export function ProjectView({
                         )}
 
                         {/* 区域四：资源管理器 */}
-                        <div className={`transition-all duration-300 ${isExplorerPanelHidden ? 'w-0 overflow-hidden' : 'w-64'}`}>
+                        <div className={`transition-all duration-300 flex flex-col h-full ${isExplorerPanelHidden ? 'w-0 overflow-hidden' : 'w-64'} bg-white dark:bg-zinc-900`}>
                             <FileExplorer
                                 projectPath={currentProject.path}
                                 onOpenFile={handleOpenFile}

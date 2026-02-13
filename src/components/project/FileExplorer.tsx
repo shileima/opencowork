@@ -530,7 +530,7 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
 
     if (!projectPath) {
         return (
-            <div className="w-64 bg-white dark:bg-zinc-900 border-l border-stone-200 dark:border-zinc-800 flex flex-col">
+            <div className="w-full h-full min-h-0 bg-white dark:bg-zinc-900 border-l border-stone-200 dark:border-zinc-800 flex flex-col">
                 <div className="p-4 text-center text-sm text-stone-400 dark:text-zinc-500">
                     {t('noProjectSelected')}
                 </div>
@@ -539,7 +539,7 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
     }
 
     return (
-        <div className="w-64 bg-white dark:bg-zinc-900 border-l border-stone-200 dark:border-zinc-800 flex flex-col">
+        <div className="w-full h-full min-h-0 bg-white dark:bg-zinc-900 border-l border-stone-200 dark:border-zinc-800 flex flex-col">
             {/* Header：与主 Tab 栏同高（h-10） */}
             <div className="h-10 shrink-0 px-2 border-b border-stone-200 dark:border-zinc-800 flex items-center justify-between">
                 <h3 className="text-sm font-normal text-stone-700 dark:text-zinc-200">{t('fileExplorer')}</h3>

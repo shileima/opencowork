@@ -3,21 +3,11 @@ import { ExternalLink, RotateCw, Globe, AlertCircle } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
 
 const DEFAULT_URL = ''; // 默认为空，避免启动时立即尝试连接
-const LOAD_TIMEOUT_MS = 15000; // 15 秒加载超时
-
-/** 注入到预览页的 CSS：将 Vite 错误 overlay 字号小 1 号 */
-const VITE_ERROR_OVERLAY_CSS = `
-  [data-vite-error-overlay], .vite-error-overlay, [class*="vite-error-overlay"] {
-    font-size: 87.5% !important;
-  }
-  [data-vite-error-overlay] *, .vite-error-overlay * {
-    font-size: inherit !important;
-  }
-`;
+const LOAD_TIMEOUT_MS = 10000; // 10 秒加载超时（主进程检测到 ERR_CONNECTION_REFUSED 时会提前通知）
 
 interface BrowserTabProps {
     initialUrl?: string;
-    /** 外部刷新触发器：数值变化时强制刷新 webview */
+    /** 外部刷新触发器：数值变化时强制刷新 iframe */
     refreshTrigger?: number;
 }
 
@@ -30,10 +20,19 @@ const ensureProtocol = (url: string): string => {
     return trimmed;
 };
 
-/** 将 localhost 转为 127.0.0.1，避免 webview 解析到 IPv6 ::1 导致连接被拒（系统 Chrome 可打开、内置打不开的常见原因） */
-const normalizeLocalhostToIPv4 = (url: string): string => {
+/** 用于 URL 比较：localhost 与 127.0.0.1 视为等价 */
+const urlHostEquivalent = (a: string, b: string): boolean => {
+    const norm = (u: string) =>
+        ensureProtocol(u || '')
+            .replace(/\/$/, '')
+            .replace(/(https?:\/\/)localhost(?=[:/]|$)/gi, '$1127.0.0.1');
+    return norm(a) === norm(b);
+};
+
+/** macOS 上 Vite 可能只绑定 ::1，127.0.0.1 无法访问。将 127.0.0.1 转为 localhost 以兼容 */
+const toLoadableUrl = (url: string): string => {
     if (!url) return url;
-    return url.replace(/(https?:\/\/)localhost(?=[:/]|$)/gi, '$1127.0.0.1');
+    return url.replace(/(https?:\/\/)127\.0\.0\.1(?=[:/]|$)/gi, '$1localhost');
 };
 
 export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: BrowserTabProps) {
@@ -41,30 +40,17 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     const [url, setUrl] = useState(initialUrl || '');
     const [currentUrl, setCurrentUrl] = useState(initialUrl || '');
     const [isLoading, setIsLoading] = useState(!!(initialUrl || '').trim());
-    const [refreshKey, setRefreshKey] = useState(0); // 用于强制刷新 webview
-    const [loadError, setLoadError] = useState<string | null>(null); // 加载错误信息
-    const webviewRef = useRef<HTMLElement | null>(null);
-    /** 主帧加载失败标记：did-fail-load 后 webview 可能仍会加载内置错误页并触发 did-finish-load，需避免清除 loadError */
-    const loadFailedRef = useRef(false);
-
-    // 组件挂载时打印诊断信息
-    useEffect(() => {
-        console.log('[BrowserTab] 组件已挂载', {
-            initialUrl,
-            refreshTrigger,
-            userAgent: navigator.userAgent,
-            isElectron: !!(window as any).ipcRenderer,
-            webviewTagSupported: typeof document.createElement('webview') !== 'undefined',
-        });
-    }, []);
+    const [refreshKey, setRefreshKey] = useState(0);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
     const handleNavigate = useCallback(() => {
         const fullUrl = ensureProtocol(url);
         if (fullUrl) {
-            const normalized = normalizeLocalhostToIPv4(fullUrl);
-            setUrl(normalized);
-            setCurrentUrl(normalized);
+            setUrl(fullUrl);
+            setCurrentUrl(fullUrl);
             setIsLoading(true);
+            setLoadError(null);
         }
     }, [url]);
 
@@ -76,14 +62,14 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
         }
     }, [currentUrl]);
 
-    // 当父组件更新 URL（如 Agent 调用 open_browser_preview）时同步
+    // 当父组件更新 URL（如 Agent 调用 open_browser_preview）时同步，保持 localhost / 127.0.0.1 原样
     useEffect(() => {
         const fullUrl = initialUrl ? ensureProtocol(initialUrl) : '';
         if (fullUrl) {
-            const normalized = normalizeLocalhostToIPv4(fullUrl);
-            setUrl(normalized);
-            setCurrentUrl(normalized);
+            setUrl(fullUrl);
+            setCurrentUrl(fullUrl);
             setIsLoading(true);
+            setLoadError(null);
         }
     }, [initialUrl]);
 
@@ -91,20 +77,42 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     useEffect(() => {
         if (refreshTrigger > 0 && currentUrl) {
             setIsLoading(true);
+            setLoadError(null);
             setRefreshKey(prev => prev + 1);
         }
-    }, [refreshTrigger]);
+    }, [refreshTrigger, currentUrl]);
 
-    // 加载超时：长时间加载失败时显示友好提示
+    // 加载超时：长时间未 onload 时显示友好提示
     useEffect(() => {
         if (!isLoading || !currentUrl) return;
         const timer = setTimeout(() => {
-            loadFailedRef.current = true;
             setIsLoading(false);
             setLoadError('timeout');
         }, LOAD_TIMEOUT_MS);
         return () => clearTimeout(timer);
     }, [isLoading, currentUrl, refreshKey]);
+
+    // 主进程检测到 iframe ERR_CONNECTION_REFUSED 时立即显示错误，无需等待超时
+    useEffect(() => {
+        const remove = window.ipcRenderer.on('agent:iframe-load-failed', (_event, ...args) => {
+            const failedUrl = args[0] as string;
+            if (urlHostEquivalent(failedUrl, currentUrl)) {
+                setIsLoading(false);
+                setLoadError(`无法连接到 ${currentUrl}。请确保开发服务器正在运行。`);
+            }
+        });
+        return remove;
+    }, [currentUrl]);
+
+    const handleIframeLoad = useCallback(() => {
+        setIsLoading(false);
+        setLoadError(null);
+    }, []);
+
+    const handleIframeError = useCallback(() => {
+        setIsLoading(false);
+        setLoadError(`无法连接到 ${currentUrl}。请确保开发服务器正在运行。`);
+    }, [currentUrl]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter') {
@@ -112,130 +120,10 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
         }
     };
 
-    // webview 加载完成后隐藏 loading 并注入 CSS（缩小 Vite 报错 overlay 字号）
-    useEffect(() => {
-        const el = webviewRef.current;
-        if (!currentUrl || !el) {
-            console.log('[BrowserTab] webview 未就绪', { currentUrl, hasEl: !!el });
-            return;
-        }
-
-        console.log('[BrowserTab] 开始监听 webview 事件', { currentUrl, refreshKey });
-
-        // 监听 webview 各生命周期事件以排查加载问题
-        const onDidStartLoading = () => {
-            console.log('[BrowserTab] webview did-start-loading', { url: currentUrl });
-            loadFailedRef.current = false;
-            setLoadError(null);
-        };
-        const onDidStopLoading = () => {
-            console.log('[BrowserTab] webview did-stop-loading', { url: currentUrl });
-        };
-        const onDidFinishLoad = () => {
-            console.log('[BrowserTab] webview did-finish-load (成功)', { url: currentUrl });
-            setIsLoading(false);
-            // 若主帧加载失败，webview 可能仍会加载内置错误页并触发 did-finish-load，此时不清除 loadError，避免闪烁后黑屏
-            if (!loadFailedRef.current) {
-                setLoadError(null);
-            }
-            try {
-                (el as unknown as { insertCSS: (css: string) => void }).insertCSS(VITE_ERROR_OVERLAY_CSS);
-            } catch (e) {
-                console.warn('[BrowserTab] 注入 CSS 失败:', e);
-            }
-        };
-        const onDidFailLoad = (event: any) => {
-            const errorCode = event?.errorCode ?? 'unknown';
-            const errorDescription = event?.errorDescription ?? 'unknown';
-            const validatedURL = event?.validatedURL ?? currentUrl;
-            console.error('[BrowserTab] webview did-fail-load (加载失败)', {
-                errorCode,
-                errorDescription,
-                validatedURL,
-                currentUrl,
-                isMainFrame: event?.isMainFrame,
-            });
-            setIsLoading(false);
-            
-            // 优化错误提示：针对常见错误提供友好的提示
-            let friendlyError = '';
-            if (errorCode === -102 || errorDescription === 'ERR_CONNECTION_REFUSED') {
-                friendlyError = `无法连接到 ${validatedURL}。请确保开发服务器正在运行。`;
-            } else if (errorCode === -3 || errorDescription === 'ERR_ABORTED') {
-                // 页面加载被中断，通常是用户主动操作，不显示错误
-                setIsLoading(false);
-                return;
-            } else {
-                friendlyError = `加载失败 (${errorCode}): ${errorDescription}`;
-            }
-            loadFailedRef.current = true;
-            setLoadError(friendlyError);
-        };
-        const onCrashed = () => {
-            console.error('[BrowserTab] webview crashed! (webview 进程崩溃)');
-            loadFailedRef.current = true;
-            setIsLoading(false);
-            setLoadError('webview 进程崩溃');
-        };
-        const onDestroyed = () => {
-            console.warn('[BrowserTab] webview destroyed');
-        };
-        const onConsoleMessage = (event: any) => {
-            // 打印 webview 内部的 console 信息，帮助排查页面内部错误
-            const level = event?.level ?? 0;
-            const message = event?.message ?? '';
-            const levelStr = ['LOG', 'WARN', 'ERROR', 'DEBUG'][level] || 'LOG';
-            console.log(`[BrowserTab] webview console [${levelStr}]:`, message);
-        };
-        const onDomReady = () => {
-            console.log('[BrowserTab] webview dom-ready', { url: currentUrl });
-            // 打印 webview 内部页面信息
-            try {
-                const wv = el as any;
-                if (typeof wv.getURL === 'function') {
-                    console.log('[BrowserTab] webview 当前 URL:', wv.getURL());
-                }
-                if (typeof wv.getTitle === 'function') {
-                    console.log('[BrowserTab] webview 页面标题:', wv.getTitle());
-                }
-            } catch (e) {
-                console.warn('[BrowserTab] 获取 webview 信息失败:', e);
-            }
-        };
-
-        el.addEventListener('did-start-loading', onDidStartLoading);
-        el.addEventListener('did-stop-loading', onDidStopLoading);
-        el.addEventListener('did-finish-load', onDidFinishLoad);
-        el.addEventListener('did-fail-load', onDidFailLoad);
-        el.addEventListener('crashed', onCrashed);
-        el.addEventListener('destroyed', onDestroyed);
-        el.addEventListener('console-message', onConsoleMessage);
-        el.addEventListener('dom-ready', onDomReady);
-
-        return () => {
-            el.removeEventListener('did-start-loading', onDidStartLoading);
-            el.removeEventListener('did-stop-loading', onDidStopLoading);
-            el.removeEventListener('did-finish-load', onDidFinishLoad);
-            el.removeEventListener('did-fail-load', onDidFailLoad);
-            el.removeEventListener('crashed', onCrashed);
-            el.removeEventListener('destroyed', onDestroyed);
-            el.removeEventListener('console-message', onConsoleMessage);
-            el.removeEventListener('dom-ready', onDomReady);
-        };
-    }, [currentUrl, refreshKey]);
-
-    const handleWebviewError = () => {
-        loadFailedRef.current = true;
-        setIsLoading(false);
-        const errorMsg = `webview onError 触发, URL: ${currentUrl}`;
-        console.error('[BrowserTab]', errorMsg);
-        setLoadError(errorMsg);
-    };
-
     const handleOpenExternal = useCallback(async () => {
         if (!currentUrl) return;
         try {
-            const fullUrl = ensureProtocol(currentUrl);
+            const fullUrl = toLoadableUrl(ensureProtocol(currentUrl));
             await window.ipcRenderer.invoke('app:open-external-url', fullUrl);
         } catch (error) {
             console.error('Failed to open external URL:', error);
@@ -243,9 +131,10 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     }, [currentUrl]);
 
     return (
-        <div className="flex flex-col h-full min-w-[390px] bg-stone-100 dark:bg-zinc-950">
-            {/* URL Bar */}
-            <div className="flex items-center gap-2 px-3 py-2 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shrink-0">
+        <div className="flex flex-col h-full min-w-[390px] bg-stone-100 dark:bg-zinc-900">
+            {/* URL Bar：底边 border 右侧留 pr-2 间距 */}
+            <div className="shrink-0 flex">
+                <div className="flex-1 flex items-center gap-2 py-2 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mr-2">
                 <div className="flex items-center gap-0 shrink-0">
                     <button
                         type="button"
@@ -277,10 +166,11 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                     className="flex-1 px-3 py-2 text-sm bg-stone-50 dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 rounded-lg text-stone-800 dark:text-zinc-200 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500"
                     aria-label={t('browserUrlPlaceholder') || 'URL 地址'}
                 />
+                </div>
             </div>
 
-            {/* Content Area */}
-            <div className="flex-1 min-h-0 relative overflow-hidden">
+            {/* Content Area：右侧留出间距，与资源管理器分隔更美观；背景与 URL 栏/资源管理器统一 */}
+            <div className="flex-1 min-h-0 relative overflow-hidden pr-2 bg-stone-100 dark:bg-zinc-900">
                 {currentUrl ? (
                     <>
                         {isLoading && !loadError && (
@@ -288,7 +178,6 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                                 <RotateCw size={24} className="animate-spin text-orange-500" />
                             </div>
                         )}
-                        {/* 加载失败时显示友好提示页，替代黑屏 */}
                         {loadError ? (
                             <div
                                 className="absolute inset-0 flex flex-col items-center justify-center bg-stone-50 dark:bg-zinc-900 p-8 z-20"
@@ -311,11 +200,20 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                                         {loadError}
                                     </p>
                                 )}
-                                <div className="flex gap-3">
+                                <div className="flex flex-wrap gap-3 justify-center">
+                                    <button
+                                        type="button"
+                                        onClick={handleOpenExternal}
+                                        className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors"
+                                        aria-label="在系统浏览器中打开"
+                                    >
+                                        <ExternalLink size={16} />
+                                        {t('browserOpenInSystem') || '在系统浏览器中打开'}
+                                    </button>
                                     <button
                                         type="button"
                                         onClick={handleRefresh}
-                                        className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors"
+                                        className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-stone-600 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 border border-stone-300 dark:border-zinc-600 rounded-lg transition-colors"
                                         aria-label={t('browserRetry') || '重试'}
                                     >
                                         <RotateCw size={16} />
@@ -340,15 +238,17 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                                 </div>
                             </div>
                         ) : null}
-                        {/* 使用 webview 以便注入 CSS 缩小 Vite 报错 overlay 字号 */}
-                        <webview
-                            ref={webviewRef}
+                        <iframe
+                            ref={iframeRef}
                             key={`${currentUrl}-${refreshKey}`}
-                            src={currentUrl}
+                            src={toLoadableUrl(currentUrl)}
                             className="w-full h-full border-0 min-h-0"
-                            style={{ display: loadError ? 'none' : 'flex' }}
-                            allowpopups
-                            onError={handleWebviewError}
+                            style={{ display: loadError ? 'none' : 'block' }}
+                            sandbox="allow-scripts allow-same-origin"
+                            referrerPolicy="no-referrer"
+                            title={t('browserPreview') || '浏览器预览'}
+                            onLoad={handleIframeLoad}
+                            onError={handleIframeError}
                         />
                     </>
                 ) : (
