@@ -52,9 +52,12 @@ interface MultiTabEditorProps {
         /** 根据文件路径关闭对应的编辑器 tab（如资源管理器中删除文件时调用） */
         closeTabByFilePath: (filePath: string) => void;
     }) => void;
+    /** 待打开文件（ref 未就绪时由父组件暂存，挂载后由此处消费） */
+    pendingOpenFile?: { filePath: string; content: string } | null;
+    onConsumePendingOpenFile?: () => void;
 }
 
-export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFileSave, onRef }: MultiTabEditorProps) {
+export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFileSave, onRef, pendingOpenFile, onConsumePendingOpenFile }: MultiTabEditorProps) {
     const { t } = useI18n();
     const [tabs, setTabs] = useState<Tab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -279,12 +282,16 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
         };
     }, [projectPath, onFileChange]);
 
-    // 暴露 openEditorTab、openBrowserTab、refreshBrowserTab、closeAllTabs、closeTabByFilePath 给父组件
+    // 暴露 openEditorTab、openBrowserTab、refreshBrowserTab、closeAllTabs、closeTabByFilePath 给父组件；若有待打开文件则打开并消费
     useEffect(() => {
         if (onRef) {
             onRef({ openEditorTab, openBrowserTab, refreshBrowserTab, closeAllTabs, closeTabByFilePath });
         }
-    }, [onRef, closeAllTabs, closeTabByFilePath]);
+        if (pendingOpenFile) {
+            openEditorTab(pendingOpenFile.filePath, pendingOpenFile.content);
+            onConsumePendingOpenFile?.();
+        }
+    }, [onRef, closeAllTabs, closeTabByFilePath, pendingOpenFile, onConsumePendingOpenFile]);
 
     // 激活 tab 时滚动到可视区域最右侧（参考 Cursor）
     useEffect(() => {

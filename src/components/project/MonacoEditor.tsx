@@ -1,6 +1,8 @@
 import { useRef } from 'react';
 import Editor from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
+import { useI18n } from '../../i18n/I18nContext';
+import { Loader2 } from 'lucide-react';
 
 interface MonacoEditorProps {
     filePath: string | null;
@@ -11,7 +13,15 @@ interface MonacoEditorProps {
 }
 
 export function MonacoEditor({ filePath, content, onChange, onSave }: MonacoEditorProps) {
+    const { t } = useI18n();
     const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+
+    const loadingPlaceholder = (
+        <div className="h-full w-full flex flex-col items-center justify-center bg-[#1e1e1e] text-zinc-400 gap-3" role="status" aria-label={t('loading')}>
+            <Loader2 size={28} className="animate-spin shrink-0" aria-hidden />
+            <span className="text-sm">{t('loading')}</span>
+        </div>
+    );
 
     const getLanguage = (path: string | null): string => {
         if (!path) return 'plaintext';
@@ -66,6 +76,7 @@ export function MonacoEditor({ filePath, content, onChange, onSave }: MonacoEdit
                 onChange={(value) => onChange(value || '')}
                 onMount={handleEditorDidMount}
                 theme="vs-dark"
+                loading={loadingPlaceholder}
                 options={{
                     fontSize: 12,
                     minimap: { enabled: true },

@@ -16,8 +16,3 @@ declare global {
     }
 }
 
-declare namespace JSX {
-    interface IntrinsicElements {
-        webview: Record<string, unknown>;
-    }
-}

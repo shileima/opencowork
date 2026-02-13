@@ -3532,7 +3532,6 @@ function createMainWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
-      webviewTag: true, // 用于浏览器预览中注入 CSS（如缩小 Vite 报错 overlay 字号）
     },
     show: false,
   })
@@ -3664,8 +3663,16 @@ function createMainWindow() {
     }
   })
 
-  // 监听主窗口加载状态，排查客户端打包后页面无法加载的问题
-  mainWin.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+  // 监听主窗口加载状态，排查客户端打包后页面无法加载的问题（仅主 frame，iframe 失败不误报）
+  mainWin.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) {
+      // 内置预览 iframe 加载失败（如 ERR_CONNECTION_REFUSED），通知渲染进程立即显示错误，无需等待超时
+      console.warn('[Browser:Diag] 内置预览 iframe 加载失败:', { errorCode, errorDescription, validatedURL });
+      if (errorCode === -102) {
+        mainWin?.webContents.send('agent:iframe-load-failed', validatedURL);
+      }
+      return;
+    }
     console.error('[Browser:Diag] 主窗口加载失败!', { errorCode, errorDescription, validatedURL });
   });
   mainWin.webContents.on('did-start-loading', () => {
@@ -3679,35 +3686,6 @@ function createMainWindow() {
   });
   mainWin.webContents.on('unresponsive', () => {
     console.error('[Browser:Diag] 渲染进程无响应!');
-  });
-
-  // 监听 webview 相关事件（webview 创建时）
-  mainWin.webContents.on('will-attach-webview', (_event, webPreferences, _params) => {
-    console.log('[Browser:Diag] will-attach-webview 触发, webPreferences:', JSON.stringify({
-      preload: webPreferences.preload,
-      nodeIntegration: webPreferences.nodeIntegration,
-      contextIsolation: webPreferences.contextIsolation,
-    }));
-  });
-  mainWin.webContents.on('did-attach-webview', (_event, webContents) => {
-    console.log('[Browser:Diag] did-attach-webview 触发, webContents ID:', webContents.id);
-    
-    // 监听 webview 内部的加载事件
-    webContents.on('did-start-loading', () => {
-      console.log('[Browser:Diag] webview did-start-loading, URL:', webContents.getURL());
-    });
-    webContents.on('did-finish-load', () => {
-      console.log('[Browser:Diag] webview did-finish-load (成功), URL:', webContents.getURL());
-    });
-    webContents.on('did-fail-load', (_ev: any, errorCode: number, errorDescription: string, validatedURL: string) => {
-      console.error('[Browser:Diag] webview did-fail-load (失败)!', { errorCode, errorDescription, validatedURL });
-    });
-    webContents.on('render-process-gone', (_ev: any, details: any) => {
-      console.error('[Browser:Diag] webview 渲染进程退出!', details);
-    });
-    webContents.on('crashed' as any, () => {
-      console.error('[Browser:Diag] webview crashed!');
-    });
   });
 
   mainWin.webContents.on('did-finish-load', () => {
