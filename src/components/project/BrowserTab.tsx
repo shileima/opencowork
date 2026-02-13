@@ -30,6 +30,12 @@ const ensureProtocol = (url: string): string => {
     return trimmed;
 };
 
+/** 将 localhost 转为 127.0.0.1，避免 webview 解析到 IPv6 ::1 导致连接被拒（系统 Chrome 可打开、内置打不开的常见原因） */
+const normalizeLocalhostToIPv4 = (url: string): string => {
+    if (!url) return url;
+    return url.replace(/(https?:\/\/)localhost(?=[:/]|$)/gi, '$1127.0.0.1');
+};
+
 export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: BrowserTabProps) {
     const { t } = useI18n();
     const [url, setUrl] = useState(initialUrl || '');
@@ -55,7 +61,9 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     const handleNavigate = useCallback(() => {
         const fullUrl = ensureProtocol(url);
         if (fullUrl) {
-            setCurrentUrl(fullUrl);
+            const normalized = normalizeLocalhostToIPv4(fullUrl);
+            setUrl(normalized);
+            setCurrentUrl(normalized);
             setIsLoading(true);
         }
     }, [url]);
@@ -72,8 +80,9 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     useEffect(() => {
         const fullUrl = initialUrl ? ensureProtocol(initialUrl) : '';
         if (fullUrl) {
-            setUrl(fullUrl);
-            setCurrentUrl(fullUrl);
+            const normalized = normalizeLocalhostToIPv4(fullUrl);
+            setUrl(normalized);
+            setCurrentUrl(normalized);
             setIsLoading(true);
         }
     }, [initialUrl]);

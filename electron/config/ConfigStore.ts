@@ -240,16 +240,32 @@ class ConfigStore {
         const stored = providers[id];
         const def = defaultProviders[id];
 
+        const resolveApiKey = (raw: string | undefined): string => {
+            if (!raw || !isEncrypted(raw)) return raw || '';
+            try {
+                return decryptApiKey(extractEncryptedData(raw));
+            } catch (error) {
+                console.error(`[ConfigStore] Failed to decrypt API key for provider ${id}:`, error);
+                return '';
+            }
+        };
+
         if (stored && def && !stored.isCustom) {
-            // Force update built-in fields that shouldn't change
             return {
                 ...stored,
                 apiUrl: def.apiUrl,
                 model: def.model,
-                readonlyUrl: def.readonlyUrl
+                readonlyUrl: def.readonlyUrl,
+                apiKey: resolveApiKey(stored.apiKey || def.apiKey),
             };
         }
-        return stored;
+        if (stored) {
+            return {
+                ...stored,
+                apiKey: resolveApiKey(stored.apiKey),
+            };
+        }
+        return undefined;
     }
 
     getAllProviders(): Record<string, ProviderConfig> {
@@ -272,9 +288,10 @@ class ConfigStore {
                         apiKey = decryptApiKey(encryptedData);
                     } catch (error) {
                         console.error(`[ConfigStore] Failed to decrypt API key for provider ${key}:`, error);
+                        apiKey = '';
                     }
                 }
-                
+
                 merged[key] = {
                     ...d,  // Start with defaults (url, model, readonlyUrl)
                     ...s,  // Overlay user data (apiKey should be preserved)
@@ -297,9 +314,10 @@ class ConfigStore {
                         apiKey = decryptApiKey(encryptedData);
                     } catch (error) {
                         console.error(`[ConfigStore] Failed to decrypt API key for provider ${key}:`, error);
+                        apiKey = '';
                     }
                 }
-                
+
                 merged[key] = {
                     ...s,
                     apiKey: apiKey
@@ -319,9 +337,10 @@ class ConfigStore {
                         provider.apiKey = decryptApiKey(encryptedData);
                     } catch (error) {
                         console.error(`[ConfigStore] Failed to decrypt API key for default provider ${key}:`, error);
+                        provider.apiKey = '';
                     }
                 }
-                
+
                 merged[key] = provider;
             }
         }
