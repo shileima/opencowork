@@ -199,6 +199,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         changelog?: string;
     } | null>(null);
     const [updatingResources, setUpdatingResources] = useState(false);
+    const [clearingHotUpdate, setClearingHotUpdate] = useState(false);
     const [updateProgress, setUpdateProgress] = useState<{ 
         stage?: 'checking' | 'downloading' | 'extracting' | 'applying' | 'completed';
         total: number; 
@@ -322,6 +323,29 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         } finally {
             setUpdatingResources(false);
             setUpdateProgress(null);
+        }
+    };
+
+    // 清理热更新目录（整包更新后仍显示旧界面时使用，重启后将使用内置资源）
+    const handleClearHotUpdate = async () => {
+        if (!confirm('确定要清理热更新目录吗？重启后将使用应用内置的前端资源版本。')) return;
+        setClearingHotUpdate(true);
+        try {
+            const result = await window.ipcRenderer?.invoke('resource:clear-hot-update') as { success: boolean; error?: string; message?: string };
+            if (result?.success) {
+                const info = await window.ipcRenderer?.invoke('app:info') as any;
+                setAppInfo(info);
+                if (confirm(result.message ?? '已清理。是否立即重启应用？')) {
+                    await window.ipcRenderer?.invoke('resource:restart-app');
+                }
+            } else {
+                alert(result?.error ?? '清理失败');
+            }
+        } catch (error: any) {
+            console.error('Clear hot update failed', error);
+            alert(error?.message ?? '清理失败');
+        } finally {
+            setClearingHotUpdate(false);
         }
     };
 
@@ -1754,14 +1778,27 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                         <p className="text-xs text-stone-500 dark:text-zinc-400 mb-2 text-center">
                                             支持资源热更新
                                         </p>
-                                        <button
-                                            onClick={handleCheckResourceUpdate}
-                                            disabled={checkingResourceUpdate || updatingResources}
-                                            className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 flex items-center gap-2 mx-auto"
-                                        >
-                                            {checkingResourceUpdate && <Loader2 size={14} className="animate-spin" />}
-                                            {checkingResourceUpdate ? '检查中...' : '检查资源更新'}
-                                        </button>
+                                        <div className="flex flex-col items-center gap-2">
+                                            <button
+                                                onClick={handleCheckResourceUpdate}
+                                                disabled={checkingResourceUpdate || updatingResources}
+                                                className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 flex items-center gap-2"
+                                                aria-label="检查资源更新"
+                                            >
+                                                {checkingResourceUpdate && <Loader2 size={14} className="animate-spin" />}
+                                                {checkingResourceUpdate ? '检查中...' : '检查资源更新'}
+                                            </button>
+                                            <button
+                                                onClick={handleClearHotUpdate}
+                                                disabled={clearingHotUpdate || updatingResources}
+                                                className="px-3 py-1.5 text-xs text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200 border border-stone-300 dark:border-zinc-600 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                                                aria-label="清理热更新目录，重启后使用内置资源"
+                                                title="整包更新后仍显示旧界面时可用"
+                                            >
+                                                {clearingHotUpdate && <Loader2 size={12} className="animate-spin" />}
+                                                {clearingHotUpdate ? '清理中...' : '清理热更新'}
+                                            </button>
+                                        </div>
 
                                         {resourceUpdateInfo && (
                                             <div className="mt-3 text-sm animate-in fade-in slide-in-from-top-2">
