@@ -2026,12 +2026,15 @@ PROJECT_NAME="${projectName}"
 VERSION="${version}"
 BUILD_DIR="dist"
 
-# ── Step 1: Check webstatic ──
+# ── Step 1: Check webstatic，未安装时尝试自动安装 ──
 if ! command -v webstatic &> /dev/null; then
-  echo "✗ webstatic not installed"
-  echo "  Run: pnpm config set registry http://r.npm.sankuai.com/"
-  echo "  Run: pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/"
-  exit 1
+  echo "webstatic 未安装，正在自动安装..."
+  pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/ || {
+    echo "✗ webstatic 自动安装失败"
+    echo "  请手动执行: pnpm config set registry http://r.npm.sankuai.com/"
+    echo "  请手动执行: pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/"
+    exit 1
+  }
 fi
 echo "✓ webstatic ready"
 
@@ -2040,7 +2043,7 @@ echo ""
 echo "── CDN Deploy: \${PROJECT_NAME} v\${VERSION} ──"
 echo ""
 
-webstatic publish \\
+npx webstatic publish \\
   --appkey=com.sankuai.waimaiqafc.aie \\
   --env=prod \\
   --artifact=dist \\

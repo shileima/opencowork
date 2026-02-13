@@ -68,7 +68,7 @@ const log = {
 };
 
 /**
- * 检查 webstatic 是否安装
+ * 检查 webstatic 是否安装，未安装时可尝试自动安装
  */
 function checkWebstatic() {
   try {
@@ -76,9 +76,24 @@ function checkWebstatic() {
     log.success(`webstatic 已安装: ${version}`);
     return true;
   } catch (error) {
-    log.error('webstatic 未安装');
-    log.info('请运行: pnpm config set registry http://r.npm.sankuai.com/');
-    log.info('请运行: pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/');
+    log.warning('webstatic 未安装');
+    const args = process.argv.slice(2);
+    const skipInstall = args.includes('--no-install-webstatic');
+    if (!skipInstall) {
+      log.info('正在自动安装 webstatic...');
+      try {
+        execSync('pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/', {
+          stdio: 'inherit',
+        });
+        log.success('webstatic 安装完成');
+        return true;
+      } catch (installError) {
+        log.error('自动安装失败');
+      }
+    }
+    log.error('请手动执行：');
+    log.info('  pnpm config set registry http://r.npm.sankuai.com/');
+    log.info('  pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/');
     return false;
   }
 }
@@ -190,7 +205,7 @@ function deployToCDN(projectName, version) {
   try {
     // 使用 webstatic 上传
     // 上传 dist 目录下的所有文件
-    const command = `webstatic upload "**/*" --cwd="${distDir}" --appkey="${config.appkey}" --token="${config.token}" --env="${config.env}" --skip-duplicate`;
+    const command = `npx webstatic upload "**/*" --cwd="${distDir}" --appkey="${config.appkey}" --token="${config.token}" --env="${config.env}" --skip-duplicate`;
     
     log.info(`上传环境: ${config.env}`);
     log.info(`项目标识: ${config.appkey}`);
