@@ -13,7 +13,8 @@ import { scriptStore } from './config/ScriptStore'
 import { projectStore } from './config/ProjectStore'
 import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
-import { getBuiltinNodePath } from './utils/NodePath'
+
+import { getBuiltinNodePath, getBuiltinNodeDir, getNpmEnvVars } from './utils/NodePath'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { registerContextSwitchHandler } from './contextSwitchCoordinator'
@@ -2019,6 +2020,16 @@ ipcMain.handle('deploy:start', async (event, projectPath: string) => {
       fs.mkdirSync(scriptDir, { recursive: true });
     }
 
+    const nodeDir = getBuiltinNodeDir();
+    const nodeDirStr = nodeDir ? nodeDir.replace(/\\/g, '/') : '';
+    const nodeDirExport = nodeDir && fs.existsSync(nodeDir)
+      ? `# 显式设置 Node.js 目录，避免 "Could not determine Node.js install directory"
+export PATH="${nodeDirStr}:$PATH"
+export NPM_CONFIG_PREFIX="${nodeDirStr}"
+export NODE_PATH="${path.join(nodeDir, 'lib', 'node_modules').replace(/\\/g, '/')}"
+`
+      : '';
+
     const deployScript = `#!/bin/bash
 set -e
 
@@ -2026,24 +2037,36 @@ PROJECT_NAME="${projectName}"
 VERSION="${version}"
 BUILD_DIR="dist"
 
-# ── Step 1: Check webstatic，未安装时尝试自动安装 ──
-if ! command -v webstatic &> /dev/null; then
-  echo "webstatic 未安装，正在自动安装..."
-  pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/ || {
-    echo "✗ webstatic 自动安装失败"
-    echo "  请手动执行: pnpm config set registry http://r.npm.sankuai.com/"
-    echo "  请手动执行: pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/"
-    exit 1
-  }
+${nodeDirExport}
+# ── Step -1: 加载 nvm/fnm 环境（nvm 与 NPM_CONFIG_PREFIX 不兼容，需先 unset） ──
+if [ -s "$HOME/.nvm/nvm.sh" ]; then
+  unset NPM_CONFIG_PREFIX
+  . "$HOME/.nvm/nvm.sh"
+  nvm use default 2>/dev/null || true
+elif command -v fnm &> /dev/null; then
+  unset NPM_CONFIG_PREFIX
+  eval "$(fnm env)" 2>/dev/null || true
 fi
-echo "✓ webstatic ready"
+# 若仍无 npx，补充常见路径
+if ! command -v npx &> /dev/null; then
+  for p in "$HOME/.nvm/versions/node"/*/bin "$HOME/.fnm/node-versions"/*/installation/bin "$HOME/.local/share/pnpm" "/usr/local/bin" "/opt/homebrew/bin"; do
+    [ -d "$p" ] 2>/dev/null && export PATH="$p:$PATH"
+  done
+fi
+
+# ── Step 0: 设置内部 registry（npx 需从此源拉取 @bfe/webstatic） ──
+export npm_config_registry=http://r.npm.sankuai.com/
+pnpm config set registry http://r.npm.sankuai.com/ 2>/dev/null || true
+
+# ── Step 1: 使用 npx 直接运行 @bfe/webstatic，无需全局安装 ──
+echo "✓ webstatic (via npx @bfe/webstatic)"
 
 # ── Step 2: Build & Publish ──
 echo ""
 echo "── CDN Deploy: \${PROJECT_NAME} v\${VERSION} ──"
 echo ""
 
-npx webstatic publish \\
+npx @bfe/webstatic publish \\
   --appkey=com.sankuai.waimaiqafc.aie \\
   --env=prod \\
   --artifact=dist \\
@@ -2052,19 +2075,30 @@ npx webstatic publish \\
 
 # ── Step 3: Verify build output ──
 EXPECTED_BUILD_PATH="\${BUILD_DIR}/code/\${PROJECT_NAME}/vite/\${VERSION}"
+BUILD_PATH=""
 
-if [ ! -d "\$EXPECTED_BUILD_PATH" ]; then
+if [ -d "\$EXPECTED_BUILD_PATH" ] && [ -f "\${EXPECTED_BUILD_PATH}/index.html" ]; then
+  BUILD_PATH="\$EXPECTED_BUILD_PATH"
+elif [ -f "\${BUILD_DIR}/index.html" ]; then
+  BUILD_PATH="\${BUILD_DIR}"
+  echo "⚠ 构建产物在 \${BUILD_DIR}/，预期为 \${EXPECTED_BUILD_PATH}"
+  echo "  请检查 vite.config 的 outDir 是否为 dist/code/\${PROJECT_NAME}/vite/\${VERSION}"
+else
+  FOUND=\$(find "\${BUILD_DIR}" -name "index.html" -type f 2>/dev/null | head -1)
+  if [ -n "\$FOUND" ]; then
+    BUILD_PATH=\$(dirname "\$FOUND")
+    echo "⚠ 构建产物在 \$BUILD_PATH，与预期路径 \${EXPECTED_BUILD_PATH} 不一致"
+  fi
+fi
+
+if [ -z "\$BUILD_PATH" ] || [ ! -f "\${BUILD_PATH}/index.html" ]; then
   echo "✗ Build output missing: \${EXPECTED_BUILD_PATH}"
+  echo "  请检查 vite.config.ts 中 outDir 是否为: dist/code/\${PROJECT_NAME}/vite/\${VERSION}"
   exit 1
 fi
 
-if [ ! -f "\${EXPECTED_BUILD_PATH}/index.html" ]; then
-  echo "✗ index.html missing"
-  exit 1
-fi
-
-FILE_COUNT=\$(find "\${EXPECTED_BUILD_PATH}" -type f | wc -l | tr -d ' ')
-TOTAL_SIZE=\$(du -sh "\${EXPECTED_BUILD_PATH}" | cut -f1)
+FILE_COUNT=\$(find "\$BUILD_PATH" -type f | wc -l | tr -d ' ')
+TOTAL_SIZE=\$(du -sh "\$BUILD_PATH" | cut -f1)
 echo "✓ Build verified: \${FILE_COUNT} files, \${TOTAL_SIZE}"
 
 # ── Step 4: Register proxy ──
@@ -2267,9 +2301,11 @@ export default defineConfig({
       }
     };
 
+    // 注入 Node/npm/npx 路径，Electron 子进程可能无完整 PATH
+    const npmEnv = getNpmEnvVars();
     const child = cpSpawn('bash', ['script/deploy.sh'], {
       cwd: projectPath,
-      env: { ...process.env, FORCE_COLOR: '0' },
+      env: { ...process.env, ...npmEnv, FORCE_COLOR: '0' },
     });
 
     child.stdout?.on('data', (data: Buffer) => {

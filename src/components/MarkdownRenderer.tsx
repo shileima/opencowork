@@ -45,12 +45,12 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
                                 return <MermaidDiagram code={codeContent} isDark={isDark} />;
                             }
 
-                            // Deploy log: compact terminal-style block
+                            // Deploy log: compact terminal-style block，换行显示，右侧留边距
                             if (match[1] === 'deploy-log') {
                                 return (
                                     <div className="my-2 rounded-lg border border-stone-200 dark:border-zinc-700 overflow-hidden">
                                         <pre
-                                            className="m-0 pl-2.5 pr-1.5 py-2 overflow-x-auto max-h-[360px] overflow-y-auto"
+                                            className="m-0 pl-2.5 pr-3 py-2 max-h-[360px] overflow-y-auto overflow-x-hidden"
                                             style={{
                                                 fontSize: '10px',
                                                 lineHeight: '1.4',
@@ -58,7 +58,8 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
                                                 background: isDark ? '#18181b' : '#f5f5f4',
                                                 color: isDark ? '#a1a1aa' : '#57534e',
                                                 whiteSpace: 'pre-wrap',
-                                                wordBreak: 'break-all',
+                                                wordBreak: 'break-word',
+                                                overflowWrap: 'break-word',
                                             }}
                                         >
                                             {codeContent}

@@ -56,6 +56,7 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
     const [savingFilePath, setSavingFilePath] = useState<string | null>(null);
     const newItemInputRef = useRef<HTMLInputElement>(null);
     const authRetryRef = useRef<string | null>(null); // 权限错误重试：避免同一路径无限重试
+    const deletedPathsRef = useRef<Set<string>>(new Set()); // 刚删除的路径，用于跳过 fs:file-changed 触发的重复刷新
 
     const loadDirectory = useCallback(async (dirPath: string, recursive: boolean = false) => {
         try {
@@ -159,14 +160,18 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
         // 监听文件系统文件变化事件（包括预览服务修改、手动保存等）
         const removeFileChangedListener = window.ipcRenderer.on('fs:file-changed', (_event, ...args) => {
             const filePath = args[0] as string;
-            if (filePath && filePath.startsWith(projectPath)) {
-                setSavingFilePath(filePath);
-                setTimeout(() => {
-                    handleRefresh().then(() => {
-                        setTimeout(() => setSavingFilePath(null), 1200);
-                    });
-                }, 300);
-            }
+            if (!filePath || !filePath.startsWith(projectPath)) return;
+            // 跳过刚删除的路径，避免重复刷新（删除已做乐观更新）
+            const isRecentlyDeleted = [...deletedPathsRef.current].some(
+                d => filePath === d || filePath.startsWith(d + '/')
+            );
+            if (isRecentlyDeleted) return;
+            setSavingFilePath(filePath);
+            setTimeout(() => {
+                handleRefresh().then(() => {
+                    setTimeout(() => setSavingFilePath(null), 1200);
+                });
+            }, 300);
         });
 
         return () => {
@@ -305,7 +310,15 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
             try {
                 await window.ipcRenderer.invoke('fs:delete', filePath);
                 onFileDeleted?.(filePath);
-                handleRefresh();
+                // 乐观更新：直接从 state 移除，避免全量递归刷新（3-5s）
+                setFiles(prev => prev.filter(f => f.path !== filePath && !f.path.startsWith(filePath + '/')));
+                setExpandedDirs(prev => {
+                    const next = new Set(prev);
+                    next.delete(filePath);
+                    return next;
+                });
+                deletedPathsRef.current.add(filePath);
+                setTimeout(() => deletedPathsRef.current.delete(filePath), 800);
             } catch (error) {
                 console.error('Failed to delete:', error);
             }
