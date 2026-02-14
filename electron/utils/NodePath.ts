@@ -3,9 +3,9 @@ import { app } from 'electron';
 import * as fs from 'fs';
 
 /**
- * 获取内置 Node.js 目录路径
+ * 获取内置 Node.js 目录路径（供 deploy 等子进程使用）
  */
-function getBuiltinNodeDir(): string | null {
+export function getBuiltinNodeDir(): string | null {
   const platform = process.platform;
   const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
   

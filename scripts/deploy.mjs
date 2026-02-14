@@ -4,7 +4,7 @@
  * 部署脚本 - 用于将项目部署到美团 CDN
  * 
  * 功能：
- * 1. 检查 webstatic 是否安装
+ * 1. 检查 webstatic 可用性（npx @bfe/webstatic，无需全局安装）
  * 2. 构建项目
  * 3. 上传到 CDN
  * 4. 生成部署报告
@@ -68,32 +68,20 @@ const log = {
 };
 
 /**
- * 检查 webstatic 是否安装，未安装时可尝试自动安装
+ * 检查 webstatic 可用性（通过 npx @bfe/webstatic，无需全局安装）
  */
 function checkWebstatic() {
   try {
-    const version = execSync('webstatic --version', { encoding: 'utf-8' }).trim();
-    log.success(`webstatic 已安装: ${version}`);
+    execSync('pnpm config set registry http://r.npm.sankuai.com/', { stdio: 'pipe' });
+  } catch (_) { /* ignore */ }
+  const env = { ...process.env, npm_config_registry: 'http://r.npm.sankuai.com/' };
+  try {
+    execSync('npx @bfe/webstatic --version', { encoding: 'utf-8', env });
+    log.success('webstatic 可用 (npx @bfe/webstatic)');
     return true;
   } catch (error) {
-    log.warning('webstatic 未安装');
-    const args = process.argv.slice(2);
-    const skipInstall = args.includes('--no-install-webstatic');
-    if (!skipInstall) {
-      log.info('正在自动安装 webstatic...');
-      try {
-        execSync('pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/', {
-          stdio: 'inherit',
-        });
-        log.success('webstatic 安装完成');
-        return true;
-      } catch (installError) {
-        log.error('自动安装失败');
-      }
-    }
-    log.error('请手动执行：');
+    log.error('无法运行 @bfe/webstatic，请确保 registry 正确：');
     log.info('  pnpm config set registry http://r.npm.sankuai.com/');
-    log.info('  pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/');
     return false;
   }
 }
@@ -205,7 +193,8 @@ function deployToCDN(projectName, version) {
   try {
     // 使用 webstatic 上传
     // 上传 dist 目录下的所有文件
-    const command = `npx webstatic upload "**/*" --cwd="${distDir}" --appkey="${config.appkey}" --token="${config.token}" --env="${config.env}" --skip-duplicate`;
+    const env = { ...process.env, npm_config_registry: 'http://r.npm.sankuai.com/' };
+    const command = `npx @bfe/webstatic upload "**/*" --cwd="${distDir}" --appkey="${config.appkey}" --token="${config.token}" --env="${config.env}" --skip-duplicate`;
     
     log.info(`上传环境: ${config.env}`);
     log.info(`项目标识: ${config.appkey}`);
@@ -214,6 +203,7 @@ function deployToCDN(projectName, version) {
     execSync(command, {
       cwd: rootDir,
       stdio: 'inherit',
+      env,
     });
     
     // 构建 CDN URL
