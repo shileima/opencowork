@@ -2,17 +2,14 @@
 
 本文档提供快速部署指南，让你在 5 分钟内完成首次部署。
 
-## 步骤 1：安装 webstatic
+## 步骤 1：环境准备
+
+**应用内部署**：无需预装 nvm 或 webstatic，应用会自动解析 Node 环境（兼容 nvm/fnm/内置 Node）并通过 `npx @bfe/webstatic` 执行部署。
+
+**命令行部署**（`pnpm run deploy`）：需确保 Node.js 和 pnpm 可用。可选安装 webstatic：
 
 ```bash
 pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/
-```
-
-验证安装：
-
-```bash
-webstatic --version
-# 应该输出类似：@bfe/webstatic/0.2.8 darwin-arm64 node-v18.19.1
 ```
 
 ## 步骤 2：配置环境变量
@@ -118,11 +115,13 @@ pnpm run deploy -- --skip-bump
 
 ## 故障排查
 
-### 问题 1：webstatic 未安装
+### 问题 1：webstatic 未安装（仅命令行部署）
 
 ```
 ✗ webstatic not installed
 ```
+
+**说明：** 应用内部署通过 `npx @bfe/webstatic` 执行，无需预装。此问题仅出现在 `pnpm run deploy` 等命令行场景。
 
 **解决：** 运行安装命令
 
