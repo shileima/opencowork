@@ -7,6 +7,7 @@ import http from 'http';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from '../../utils/NodePath';
+import { getCommonPackageManagerPaths } from '../../utils/PathUtils';
 import { getPlaywrightEnvVars } from '../../utils/PlaywrightPath';
 import { nodeVersionManager } from '../../utils/NodeVersionManager';
 import { ErrorDetector, DetectedError } from './ErrorDetector';
@@ -740,45 +741,6 @@ export class FileSystemTools {
         }
     }
 
-    /**
-     * 返回常见的 pnpm/包管理器可执行路径目录，仅包含当前平台存在且可用的目录。
-     * 用于在 run_command 的 PATH 中插入这些路径，使从 Dock/Finder 启动时子进程也能找到 pnpm。
-     */
-    private getCommonPackageManagerPaths(): string[] {
-        const platform = process.platform;
-        const home = os.homedir();
-
-        const candidates: string[] = [];
-        if (platform === 'darwin') {
-            candidates.push(
-                path.join(home, 'Library', 'pnpm'),
-                path.join(home, '.local', 'share', 'pnpm'),
-                '/opt/homebrew/bin',
-                '/usr/local/bin'
-            );
-        } else if (platform === 'linux') {
-            candidates.push(
-                path.join(home, '.local', 'share', 'pnpm'),
-                '/usr/local/bin'
-            );
-        } else if (platform === 'win32') {
-            const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
-            const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
-            candidates.push(
-                path.join(appData, 'pnpm'),
-                path.join(localAppData, 'pnpm')
-            );
-        }
-
-        return candidates.filter((dir) => {
-            try {
-                return fsSync.existsSync(dir);
-            } catch {
-                return false;
-            }
-        });
-    }
-
     async runCommand(args: { command: string, cwd?: string }, defaultCwd: string) {
         const workingDir = args.cwd || defaultCwd;
         const timeout = 60000; // 60 second timeout
@@ -875,7 +837,7 @@ export class FileSystemTools {
             // 在 nodeBinDir 之后插入常见 pnpm/包管理器路径，使从 Dock 启动时子进程也能找到 pnpm
             let finalPath = process.env.PATH || '';
             const pathSeparator = process.platform === 'win32' ? ';' : ':';
-            const commonPkgPaths = this.getCommonPackageManagerPaths();
+            const commonPkgPaths = getCommonPackageManagerPaths();
 
             if (nodePath && nodePath !== 'node') {
                 const nodeBinDir = path.dirname(nodePath);

@@ -14,7 +14,9 @@ import { projectStore } from './config/ProjectStore'
 import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
 
-import { getBuiltinNodePath, getBuiltinNodeDir, getNpmEnvVars } from './utils/NodePath'
+import { getBuiltinNodePath } from './utils/NodePath'
+import { resolveDeployEnv } from './utils/DeployEnvResolver'
+import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { registerContextSwitchHandler } from './contextSwitchCoordinator'
@@ -2014,120 +2016,11 @@ ipcMain.handle('deploy:start', async (event, projectPath: string) => {
     fs.writeFileSync(pkgPath, JSON.stringify(pkgJson, null, 2) + '\n', 'utf-8');
     sender.send('deploy:log', `Version bumped: ${currentVersion} -> ${version}\n`);
 
-    // Step 2: Generate script/deploy.sh
-    const scriptDir = path.join(projectPath, 'script');
-    if (!fs.existsSync(scriptDir)) {
-      fs.mkdirSync(scriptDir, { recursive: true });
-    }
-
-    const nodeDir = getBuiltinNodeDir();
-    const nodeDirStr = nodeDir ? nodeDir.replace(/\\/g, '/') : '';
-    const nodeDirExport = nodeDir && fs.existsSync(nodeDir)
-      ? `# 显式设置 Node.js 目录，避免 "Could not determine Node.js install directory"
-export PATH="${nodeDirStr}:$PATH"
-export NPM_CONFIG_PREFIX="${nodeDirStr}"
-export NODE_PATH="${path.join(nodeDir, 'lib', 'node_modules').replace(/\\/g, '/')}"
-`
-      : '';
-
-    const deployScript = `#!/bin/bash
-set -e
-
-PROJECT_NAME="${projectName}"
-VERSION="${version}"
-BUILD_DIR="dist"
-
-${nodeDirExport}
-# ── Step -1: 加载 nvm/fnm 环境（nvm 与 NPM_CONFIG_PREFIX 不兼容，需先 unset） ──
-if [ -s "$HOME/.nvm/nvm.sh" ]; then
-  unset NPM_CONFIG_PREFIX
-  . "$HOME/.nvm/nvm.sh"
-  nvm use default 2>/dev/null || true
-elif command -v fnm &> /dev/null; then
-  unset NPM_CONFIG_PREFIX
-  eval "$(fnm env)" 2>/dev/null || true
-fi
-# 若仍无 npx，补充常见路径
-if ! command -v npx &> /dev/null; then
-  for p in "$HOME/.nvm/versions/node"/*/bin "$HOME/.fnm/node-versions"/*/installation/bin "$HOME/.local/share/pnpm" "/usr/local/bin" "/opt/homebrew/bin"; do
-    [ -d "$p" ] 2>/dev/null && export PATH="$p:$PATH"
-  done
-fi
-
-# ── Step 0: 设置内部 registry（npx 需从此源拉取 @bfe/webstatic） ──
-export npm_config_registry=http://r.npm.sankuai.com/
-pnpm config set registry http://r.npm.sankuai.com/ 2>/dev/null || true
-
-# ── Step 1: 使用 npx 直接运行 @bfe/webstatic，无需全局安装 ──
-echo "✓ webstatic (via npx @bfe/webstatic)"
-
-# ── Step 2: Build & Publish ──
-echo ""
-echo "── CDN Deploy: \${PROJECT_NAME} v\${VERSION} ──"
-echo ""
-
-npx @bfe/webstatic publish \\
-  --appkey=com.sankuai.waimaiqafc.aie \\
-  --env=prod \\
-  --artifact=dist \\
-  --build-command='pnpm run build' \\
-  --token=269883ad-b7b0-4431-b5e7-5886cd1d590f
-
-# ── Step 3: Verify build output ──
-EXPECTED_BUILD_PATH="\${BUILD_DIR}/code/\${PROJECT_NAME}/vite/\${VERSION}"
-BUILD_PATH=""
-
-if [ -d "\$EXPECTED_BUILD_PATH" ] && [ -f "\${EXPECTED_BUILD_PATH}/index.html" ]; then
-  BUILD_PATH="\$EXPECTED_BUILD_PATH"
-elif [ -f "\${BUILD_DIR}/index.html" ]; then
-  BUILD_PATH="\${BUILD_DIR}"
-  echo "⚠ 构建产物在 \${BUILD_DIR}/，预期为 \${EXPECTED_BUILD_PATH}"
-  echo "  请检查 vite.config 的 outDir 是否为 dist/code/\${PROJECT_NAME}/vite/\${VERSION}"
-else
-  FOUND=\$(find "\${BUILD_DIR}" -name "index.html" -type f 2>/dev/null | head -1)
-  if [ -n "\$FOUND" ]; then
-    BUILD_PATH=\$(dirname "\$FOUND")
-    echo "⚠ 构建产物在 \$BUILD_PATH，与预期路径 \${EXPECTED_BUILD_PATH} 不一致"
-  fi
-fi
-
-if [ -z "\$BUILD_PATH" ] || [ ! -f "\${BUILD_PATH}/index.html" ]; then
-  echo "✗ Build output missing: \${EXPECTED_BUILD_PATH}"
-  echo "  请检查 vite.config.ts 中 outDir 是否为: dist/code/\${PROJECT_NAME}/vite/\${VERSION}"
-  exit 1
-fi
-
-FILE_COUNT=\$(find "\$BUILD_PATH" -type f | wc -l | tr -d ' ')
-TOTAL_SIZE=\$(du -sh "\$BUILD_PATH" | cut -f1)
-echo "✓ Build verified: \${FILE_COUNT} files, \${TOTAL_SIZE}"
-
-# ── Step 4: Register proxy ──
-DEPLOY_BASE_URL="https://aie.sankuai.com/rdc_host/code/\${PROJECT_NAME}/vite/\${VERSION}"
-EXPECTED_DEPLOY_URL="https://\${PROJECT_NAME}.autocode.test.sankuai.com/"
-
-HTTP_RESPONSE=\$(curl -s -o /dev/null -w "%{http_code}" \\
-  --location --request POST \\
-  "https://digitalgateway.waimai.test.sankuai.com/testgenius/open/agent/claudeProject/updateProjectProxyTarget?projectId=\${PROJECT_NAME}&proxyType=publish&targetUrl=\${DEPLOY_BASE_URL}" \\
-  --header 'Content-Type: application/json' \\
-  --data-raw '{}')
-
-if [ "\$HTTP_RESPONSE" -eq 200 ]; then
-  echo "✓ Proxy registered"
-else
-  echo "✗ Proxy registration failed (HTTP \${HTTP_RESPONSE})"
-  exit 1
-fi
-
-# ── Done ──
-echo ""
-echo "✓ Deploy successful!"
-echo "  URL: \${EXPECTED_DEPLOY_URL}"
-`;
-
-    const deployScriptPath = path.join(scriptDir, 'deploy.sh');
-    fs.writeFileSync(deployScriptPath, deployScript, { mode: 0o755 });
-
-    sender.send('deploy:log', `Generated deploy.sh for ${projectName} v${version}\n`);
+    // Step 2: Resolve deploy env (Node/npm/pnpm, compatible with nvm/fnm/builtin)
+    const deployEnvResult = await resolveDeployEnv(projectPath);
+    sender.send('deploy:log', `Using ${deployEnvResult.packageManager}, Node: ${deployEnvResult.nodePath}\n`);
+    sender.send('deploy:log', `✓ webstatic (via npx @bfe/webstatic)\n\n`);
+    sender.send('deploy:log', `── CDN Deploy: ${projectName} v${version} ──\n\n`);
 
     // Step 2.5: Generate complete vite.config for CDN deployment
     // According to SKILL.md requirements, vite.config must include:
@@ -2285,11 +2178,11 @@ export default defineConfig({
       return { success: false, error: 'No vite.config found' };
     }
 
-    // Step 3: Execute the script
+    // Step 3: Execute webstatic publish (env from DeployEnvResolver)
     const expectedDeployUrl = `https://${projectName}.autocode.test.sankuai.com/`;
+    const expectedBuildPath = path.join(projectPath, 'dist', 'code', projectName, 'vite', version);
     let allOutput = '';
 
-    // Helper: restore vite config backup after deploy
     const restoreViteConfig = () => {
       if (viteConfigPath) {
         const backupPath = viteConfigPath + '.deploy-backup';
@@ -2301,11 +2194,16 @@ export default defineConfig({
       }
     };
 
-    // 注入 Node/npm/npx 路径，Electron 子进程可能无完整 PATH
-    const npmEnv = getNpmEnvVars();
-    const child = cpSpawn('bash', ['script/deploy.sh'], {
+    const child = cpSpawn('npx', [
+      '@bfe/webstatic', 'publish',
+      '--appkey=com.sankuai.waimaiqafc.aie',
+      '--env=prod',
+      '--artifact=dist',
+      `--build-command=${deployEnvResult.buildCommand}`,
+      '--token=269883ad-b7b0-4431-b5e7-5886cd1d590f',
+    ], {
       cwd: projectPath,
-      env: { ...process.env, ...npmEnv, FORCE_COLOR: '0' },
+      env: deployEnvResult.env,
     });
 
     child.stdout?.on('data', (data: Buffer) => {
@@ -2320,25 +2218,71 @@ export default defineConfig({
       sender.send('deploy:log', text);
     });
 
-    child.on('close', (code: number | null) => {
-      // Always restore vite config after deploy
+    child.on('close', async (code: number | null) => {
       restoreViteConfig();
 
-      if (code === 0) {
-        // Send deploy:done with the expected URL
-        sender.send('deploy:done', expectedDeployUrl);
-        // Also open in built-in browser
-        if (mainWin && !mainWin.isDestroyed()) {
-          mainWin.webContents.send('agent:open-browser-preview', expectedDeployUrl);
-        }
-      } else {
+      if (code !== 0) {
         sender.send('deploy:error', `Deploy script exited with code ${code}\n\n${allOutput.slice(-500)}`);
+        return;
+      }
+
+      // Verify build output
+      const indexPath = path.join(expectedBuildPath, 'index.html');
+      const altIndexPath = path.join(projectPath, 'dist', 'index.html');
+      let buildPath: string | null = null;
+      if (fs.existsSync(indexPath)) {
+        buildPath = expectedBuildPath;
+      } else if (fs.existsSync(altIndexPath)) {
+        buildPath = path.join(projectPath, 'dist');
+        sender.send('deploy:log', `⚠ 构建产物在 dist/，预期为 dist/code/${projectName}/vite/${version}\n`);
+      }
+      if (!buildPath || !fs.existsSync(path.join(buildPath, 'index.html'))) {
+        sender.send('deploy:error', `Build output missing: ${expectedBuildPath}\n请检查 vite.config.ts 中 outDir 配置`);
+        return;
+      }
+      const countFiles = (dir: string): number => {
+        let n = 0;
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (e.isFile()) n += 1;
+          else if (e.isDirectory()) n += countFiles(path.join(dir, e.name));
+        }
+        return n;
+      };
+      const fileCount = countFiles(buildPath);
+      sender.send('deploy:log', `✓ Build verified: ${fileCount} files\n`);
+
+      // Register proxy
+      const deployBaseUrl = `https://aie.sankuai.com/rdc_host/code/${projectName}/vite/${version}`;
+      const proxyUrl = `https://digitalgateway.waimai.test.sankuai.com/testgenius/open/agent/claudeProject/updateProjectProxyTarget?projectId=${projectName}&proxyType=publish&targetUrl=${encodeURIComponent(deployBaseUrl)}`;
+      try {
+        const proxyRes = await new Promise<number>((resolve) => {
+          const req = https.request(proxyUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          }, (res) => resolve(res.statusCode ?? 0));
+          req.write('{}');
+          req.end();
+        });
+        if (proxyRes === 200) {
+          sender.send('deploy:log', `✓ Proxy registered\n\n✓ Deploy successful!\n  URL: ${expectedDeployUrl}\n`);
+        } else {
+          sender.send('deploy:error', `Proxy registration failed (HTTP ${proxyRes})`);
+          return;
+        }
+      } catch (err) {
+        sender.send('deploy:error', `Proxy registration failed: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      sender.send('deploy:done', expectedDeployUrl);
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.send('agent:open-browser-preview', expectedDeployUrl);
       }
     });
 
     child.on('error', (err: Error) => {
       restoreViteConfig();
-      sender.send('deploy:error', `Failed to execute deploy script: ${err.message}`);
+      sender.send('deploy:error', `Failed to execute deploy: ${err.message}`);
     });
 
     return { success: true };

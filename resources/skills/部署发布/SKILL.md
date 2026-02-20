@@ -9,20 +9,20 @@
 当用户请求以下操作时使用本技能：
 - 构建前端项目并发布到 CDN
 - 部署 Module Federation 远程模块
-- 执行 `deploy.sh` 部署脚本
+- 执行应用内部署或 `deploy.sh` 部署脚本
 
 ---
 
 ## 阶段一：环境准备
 
-### 1.1 全局工具安装
+### 1.1 环境说明（应用内部署）
 
-确保以下工具已全局安装（如已安装则跳过）：
+应用内部署时，环境由 **DeployEnvResolver** 自动解析，兼容：
+- nvm / fnm / 系统 Node
+- 内置 Node（resources/node）
+- pnpm / npm / yarn（根据 package.json 或 lockfile 自动检测）
 
-```bash
-npm install pnpm -g
-pnpm add -g @bfe/webstatic --registry=http://r.npm.sankuai.com/
-```
+无需预装 webstatic，应用通过 `npx @bfe/webstatic` 直接运行。如需手动部署，可参考下方步骤。
 
 ### 1.2 读取项目信息
 
@@ -88,9 +88,11 @@ export default defineConfig({
 
 ## 阶段四：构建与部署
 
-### 4.1 部署脚本 deploy.sh
+### 4.1 部署方式
 
-以下是完整的 `deploy.sh` 脚本模板，请根据项目实际信息替换变量值后使用：
+**应用内部署**：在 QACowork 中点击「部署」即可，环境自动解析，无需预装 nvm 或 webstatic。
+
+**手动部署**：以下为 `deploy.sh` 脚本模板，用于在终端中手动执行：
 
 ```bash
 #!/bin/bash
