@@ -2,7 +2,7 @@
 
 /**
  * 下载并准备 Node.js 运行时
- * 支持 macOS (darwin-arm64, darwin-x64) 和 Windows (win32-x64)
+ * 支持 macOS (darwin-arm64, darwin-x64)、Windows (win32-x64)、Linux (linux-x64)
  * 
  * 使用方法：
  *   node scripts/download-node.mjs
@@ -29,7 +29,8 @@ console.log(`Node.js 版本: ${NODE_VERSION}`);
 const platforms = [
   { platform: 'darwin', arch: 'arm64', ext: 'tar.gz', distName: 'darwin-arm64' },
   { platform: 'darwin', arch: 'x64', ext: 'tar.gz', distName: 'darwin-x64' },
-  { platform: 'win32', arch: 'x64', ext: 'zip', distName: 'win-x64' }
+  { platform: 'win32', arch: 'x64', ext: 'zip', distName: 'win-x64' },
+  { platform: 'linux', arch: 'x64', ext: 'tar.gz', distName: 'linux-x64' }
 ];
 
 async function downloadFile(url, dest) {
@@ -151,7 +152,6 @@ async function prepareNodeForPlatform(platform, arch, ext, distName) {
       await extractZip(downloadPath, tempDir);
     }
 
-    // 复制 node 二进制文件
     const extractedNodeDir = path.join(tempDir, nodeDistName);
     const extractedBinDir = path.join(extractedNodeDir, 'bin');
     const extractedNode = path.join(
@@ -163,16 +163,40 @@ async function prepareNodeForPlatform(platform, arch, ext, distName) {
       throw new Error(`无法找到解压后的 node 二进制文件: ${extractedNode}`);
     }
 
-    fs.copyFileSync(extractedNode, nodePath);
-    
-    // 设置执行权限 (Unix-like 系统)
-    if (platform !== 'win32') {
-      fs.chmodSync(nodePath, 0o755);
+    if (ext === 'tar.gz') {
+      // darwin/linux: 复制完整 bin 和 lib/node_modules，包含 npm/npx
+      const binEntries = fs.readdirSync(extractedBinDir, { withFileTypes: true });
+      for (const entry of binEntries) {
+        const src = path.join(extractedBinDir, entry.name);
+        const dest = path.join(targetDir, entry.name);
+        if (entry.isFile()) {
+          fs.copyFileSync(src, dest);
+          fs.chmodSync(dest, 0o755);
+        }
+      }
+      const extractedLib = path.join(extractedNodeDir, 'lib', 'node_modules');
+      const targetLib = path.join(targetDir, 'lib', 'node_modules');
+      if (fs.existsSync(extractedLib)) {
+        fs.mkdirSync(path.dirname(targetLib), { recursive: true });
+        fs.cpSync(extractedLib, targetLib, { recursive: true });
+        // npm 脚本可能查找 node_modules/npm，创建符号链接
+        const targetNodeModules = path.join(targetDir, 'node_modules');
+        const targetNpmLink = path.join(targetNodeModules, 'npm');
+        if (!fs.existsSync(targetNodeModules)) {
+          fs.mkdirSync(targetNodeModules, { recursive: true });
+        }
+        if (!fs.existsSync(targetNpmLink) && fs.existsSync(path.join(targetLib, 'npm'))) {
+          const rel = path.relative(targetNodeModules, path.join(targetLib, 'npm'));
+          fs.symlinkSync(rel, targetNpmLink, 'dir');
+        }
+      }
+    } else {
+      // win32: 仅复制 node.exe（Windows zip 结构不同，npm 需 prepare-node-npm 或后续处理）
+      fs.copyFileSync(extractedNode, nodePath);
     }
 
     console.log(`✅ ${platformKey} 准备完成`);
 
-    // 验证文件大小
     const stats = fs.statSync(nodePath);
     console.log(`   文件大小: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 
