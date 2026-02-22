@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
-import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from './NodePath'
+import { getBuiltinNodePath, getBuiltinNodeDir, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars, getBuiltinPnpmPath } from './NodePath'
 
 const execAsync = promisify(exec)
 
@@ -101,8 +101,7 @@ export class PlaywrightManager {
       }
 
       const nodePath = getBuiltinNodePath()
-      const npmEnv = getNpmEnvVars()
-      const npmCliJsPath = getBuiltinNpmCliJsPath()
+      const pnpmPath = getBuiltinPnpmPath()
 
       onProgress?.('正在安装 Playwright 包...')
 
@@ -116,25 +115,42 @@ export class PlaywrightManager {
         }, null, 2))
       }
 
-      // 使用 node + npm-cli.js 执行安装，避免直接调 npm 脚本时 “Could not determine Node.js install directory”
       const env: Record<string, string> = {
         ...process.env,
-        ...npmEnv,
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       }
-      if (npmCliJsPath && nodePath && nodePath !== 'node') {
-        const npmCommand = `"${nodePath}" "${npmCliJsPath}" install playwright --no-save --no-package-lock`
-        await execAsync(npmCommand, { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
+
+      // 优先使用内置 pnpm（与部署一致，打包后 npm 易出现 Class extends value undefined）
+      if (pnpmPath && nodePath && nodePath !== 'node') {
+        const nodeDir = getBuiltinNodeDir()
+        if (nodeDir) {
+          const pathSep = process.platform === 'win32' ? ';' : ':'
+          env.PATH = `${nodeDir}${pathSep}${process.env.PATH || ''}`
+        }
+        const pnpmCommand = `"${nodePath}" "${pnpmPath}" add playwright`
+        await execAsync(pnpmCommand, { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
       } else {
-        const npmPath = getBuiltinNpmPath()
-        const npmCommand = `"${npmPath}" install playwright --no-save --no-package-lock`
-        await execAsync(npmCommand, { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
+        const npmEnv = getNpmEnvVars()
+        const npmCliJsPath = getBuiltinNpmCliJsPath()
+        Object.assign(env, npmEnv)
+        if (npmCliJsPath && nodePath && nodePath !== 'node') {
+          const npmCommand = `"${nodePath}" "${npmCliJsPath}" install playwright --no-save --no-package-lock`
+          await execAsync(npmCommand, { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
+        } else {
+          const npmPath = getBuiltinNpmPath()
+          const npmCommand = `"${npmPath}" install playwright --no-save --no-package-lock`
+          await execAsync(npmCommand, { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
+        }
       }
 
       onProgress?.('Playwright 包安装完成 ✓')
       return { success: true }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
+      const baseMessage = error instanceof Error ? error.message : String(error)
+      const execErr = error as { stderr?: string; stdout?: string }
+      const stderr = execErr.stderr?.trim()
+      const stdout = execErr.stdout?.trim()
+      const errorMessage = [baseMessage, stderr, stdout].filter(Boolean).join('\n')
       console.error('安装 Playwright 失败:', errorMessage)
       return { success: false, error: errorMessage }
     }
@@ -194,7 +210,11 @@ export class PlaywrightManager {
       onProgress?.('Chromium 安装完成 ✓')
       return { success: true }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
+      const baseMessage = error instanceof Error ? error.message : String(error)
+      const execErr = error as { stderr?: string; stdout?: string }
+      const stderr = execErr.stderr?.trim()
+      const stdout = execErr.stdout?.trim()
+      const errorMessage = [baseMessage, stderr, stdout].filter(Boolean).join('\n')
       console.error('安装浏览器失败:', errorMessage)
       return { success: false, error: errorMessage }
     }
