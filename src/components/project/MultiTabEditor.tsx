@@ -64,6 +64,8 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
     const [browserRefreshTrigger, setBrowserRefreshTrigger] = useState(0);
     const tabsRef = useRef<Tab[]>([]);
     const tabScrollContainerRef = useRef<HTMLDivElement>(null);
+    const onConsumePendingOpenFileRef = useRef(onConsumePendingOpenFile);
+    onConsumePendingOpenFileRef.current = onConsumePendingOpenFile;
 
     // 保持 tabsRef 与 tabs 同步
     useEffect(() => {
@@ -193,9 +195,13 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
 
     /** 根据文件路径关闭对应的编辑器 tab，用于资源管理器删除文件时同步关闭已打开的 tab */
     const closeTabByFilePath = useCallback((filePath: string) => {
-        const tab = tabs.find(t => t.type === 'editor' && t.filePath === filePath);
-        if (tab) closeTab(tab.id);
-    }, [tabs]);
+        const currentTabs = tabsRef.current;
+        const tab = currentTabs.find(t => t.type === 'editor' && t.filePath === filePath);
+        if (!tab) return;
+        const nextTabs = currentTabs.filter(t => t.id !== tab.id);
+        setTabs(nextTabs);
+        setActiveTabId(prev => (prev === tab.id ? (nextTabs.length > 0 ? nextTabs[nextTabs.length - 1].id : null) : prev));
+    }, []);
 
     const handleEditorChange = (tabId: string, content: string) => {
         setTabs(tabs.map(tab => {
@@ -283,15 +289,16 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
     }, [projectPath, onFileChange]);
 
     // 暴露 openEditorTab、openBrowserTab、refreshBrowserTab、closeAllTabs、closeTabByFilePath 给父组件；若有待打开文件则打开并消费
+    // 依赖仅保留 onRef 与 pendingOpenFile，避免 closeAllTabs/closeTabByFilePath/onConsumePendingOpenFile 每次渲染新引用导致无限循环
     useEffect(() => {
         if (onRef) {
             onRef({ openEditorTab, openBrowserTab, refreshBrowserTab, closeAllTabs, closeTabByFilePath });
         }
         if (pendingOpenFile) {
             openEditorTab(pendingOpenFile.filePath, pendingOpenFile.content);
-            onConsumePendingOpenFile?.();
+            onConsumePendingOpenFileRef.current?.();
         }
-    }, [onRef, closeAllTabs, closeTabByFilePath, pendingOpenFile, onConsumePendingOpenFile]);
+    }, [onRef, closeAllTabs, closeTabByFilePath, pendingOpenFile]);
 
     // 激活 tab 时滚动到可视区域最右侧（参考 Cursor）
     useEffect(() => {

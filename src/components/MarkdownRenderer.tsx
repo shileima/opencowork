@@ -31,12 +31,12 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
     }
     
     return (
-        <div className={`prose ${isDark ? 'prose-invert' : 'prose-stone'} max-w-none ${className}`}>
+        <div className={`prose ${isDark ? 'prose-invert' : 'prose-stone'} max-w-none min-w-0 ${className}`}>
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
                     code({ node: _node, inline, className, children, ...props }: { node?: unknown; inline?: boolean; className?: string; children?: React.ReactNode }) {
-                        const match = /language-(\w+)/.exec(className || '');
+                        const match = /language-([\w-]+)/.exec(className || '');
                         const codeContent = String(children).replace(/\n$/, '');
 
                         if (!inline && match) {
@@ -45,12 +45,12 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
                                 return <MermaidDiagram code={codeContent} isDark={isDark} />;
                             }
 
-                            // Deploy log: compact terminal-style block，换行显示，右侧留边距
+                            // Deploy log: 换行显示，右侧留边距，长行不截断（pre 需显式宽度约束才能换行）
                             if (match[1] === 'deploy-log') {
                                 return (
-                                    <div className="my-2 rounded-lg border border-stone-200 dark:border-zinc-700 overflow-hidden">
+                                    <div className="my-2 mr-2 min-w-0 w-full max-w-full rounded-lg border border-stone-200 dark:border-zinc-700 overflow-hidden">
                                         <pre
-                                            className="m-0 pl-2.5 pr-3 py-2 max-h-[360px] overflow-y-auto overflow-x-hidden"
+                                            className="m-0 pl-3 pr-4 py-2.5 max-h-[360px] overflow-y-auto overflow-x-hidden w-full min-w-0"
                                             style={{
                                                 fontSize: '10px',
                                                 lineHeight: '1.4',
@@ -58,8 +58,11 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
                                                 background: isDark ? '#18181b' : '#f5f5f4',
                                                 color: isDark ? '#a1a1aa' : '#57534e',
                                                 whiteSpace: 'pre-wrap',
-                                                wordBreak: 'break-word',
-                                                overflowWrap: 'break-word',
+                                                wordBreak: 'break-all',
+                                                overflowWrap: 'anywhere',
+                                                width: '100%',
+                                                minWidth: 0,
+                                                boxSizing: 'border-box',
                                             }}
                                         >
                                             {codeContent}

@@ -1,7 +1,7 @@
 {
   "name": "qacowork",
   "private": true,
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "QACowork - 你的数字测试同事",
   "author": {
     "name": "shileima",
@@ -21,10 +21,12 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives",
     "preview": "vite preview",
     "verify:resources": "node scripts/verify-builtin-resources.cjs",
+    "check:builtin": "node scripts/verify-builtin-resources.cjs",
     "verify:mac": "node scripts/check-mac-compatibility.cjs",
     "verify:all": "node scripts/verify-builtin-resources.cjs && node scripts/check-mac-compatibility.cjs",
     "prepare:playwright": "node scripts/prepare-playwright.mjs",
     "prepare:node-npm": "node scripts/prepare-node-npm.mjs",
+    "prepare:pnpm": "node scripts/prepare-pnpm.mjs",
     "prepare:awesome-skills": "node scripts/prepare-awesome-skills.mjs",
     "postinstall": "npx @electron/rebuild -f -w node-pty || echo 'electron-rebuild not available, skipping node-pty rebuild'"
   },

@@ -141,6 +141,29 @@ export function getBuiltinNpmCliJsPath(): string | null {
 }
 
 /**
+ * 获取 npx-cli.js 路径（用于直接使用 node 执行，绕过 npx 脚本）
+ * 避免 "Class extends value undefined is not a constructor or null" 等 npm 内部错误
+ */
+export function getBuiltinNpxCliJsPath(): string | null {
+  const nodeDir = getBuiltinNodeDir();
+  if (!nodeDir) {
+    return null;
+  }
+  const npxCliPath = path.join(nodeDir, 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js');
+  return fs.existsSync(npxCliPath) ? npxCliPath : null;
+}
+
+/**
+ * 根据 node 路径获取同目录下的 npx-cli.js（用于 NodeVersionManager 缓存的 Node）
+ */
+export function getNpxCliPathForNode(nodePath: string): string | null {
+  if (!nodePath || nodePath === 'node') return null;
+  const nodeDir = path.dirname(nodePath);
+  const npxCliPath = path.join(nodeDir, 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js');
+  return fs.existsSync(npxCliPath) ? npxCliPath : null;
+}
+
+/**
  * 获取 npm 环境变量配置
  * 
  * npm 需要特定的环境变量才能正常工作：
@@ -197,4 +220,117 @@ export function getNpmEnvVars(): Record<string, string> {
   // npm 脚本应该能找到它，因为它是相对于 node 的位置查找的
   
   return env;
+}
+
+/** 内置 pnpm 入口：nodeDir/pnpm/bin/pnpm.cjs（依赖同级的 ../dist，需整包复制） */
+const BUILTIN_PNPM_BIN = path.join('pnpm', 'bin', 'pnpm.cjs');
+
+/**
+ * 获取内置 pnpm 入口路径（需先执行 scripts/prepare-pnpm.mjs 放入各 platform 的 pnpm/ 目录）
+ * 直接运行 .app 或 DMG 安装后均通过 getBuiltinNodeDir() 解析到正确 resources 路径
+ * 使用方式：spawn(getBuiltinNodePath(), [getBuiltinPnpmPath(), 'exec', '@bfe/webstatic', ...])
+ */
+export function getBuiltinPnpmPath(): string | null {
+  const nodeDir = getBuiltinNodeDir();
+  if (!nodeDir) return null;
+  const pnpmBinPath = path.join(nodeDir, BUILTIN_PNPM_BIN);
+  const pnpmDistDir = path.join(nodeDir, 'pnpm', 'dist');
+  if (!fs.existsSync(pnpmBinPath)) return null;
+  if (!fs.existsSync(pnpmDistDir)) return null;
+  return pnpmBinPath;
+}
+
+const NPX_NAME = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+
+/**
+ * 解析系统 npx 的完整路径（用于 DMG 安装后部署上传：GUI 启动时 PATH 常不包含 Node）
+ * 依次检查：当前 PATH、/usr/local/bin、/opt/homebrew/bin、nvm、fnm、volta
+ */
+export function getSystemNpxPath(): string | null {
+  const pathSeparator = process.platform === 'win32' ? ';' : ':';
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+
+  const check = (dir: string): string | null => {
+    if (!dir) return null;
+    const full = path.join(dir, NPX_NAME);
+    try {
+      if (fs.existsSync(full)) return full;
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+
+  // 1. 当前进程 PATH
+  const pathEnv = process.env.PATH || '';
+  for (const dir of pathEnv.split(pathSeparator)) {
+    const found = check(dir.trim());
+    if (found) return found;
+  }
+
+  // 2. 常见安装位置（macOS/Linux）
+  const commonDirs = [
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    path.join(home, '.local', 'bin'),
+  ].filter(Boolean);
+  for (const dir of commonDirs) {
+    const found = check(dir);
+    if (found) return found;
+  }
+
+  // 3. nvm
+  const nvmDir = process.env.NVM_DIR || path.join(home, '.nvm');
+  if (fs.existsSync(nvmDir)) {
+    const defaultVer = path.join(nvmDir, 'alias', 'default');
+    let nodeVer: string | null = null;
+    try {
+      if (fs.existsSync(defaultVer)) {
+        nodeVer = fs.readFileSync(defaultVer, 'utf-8').trim();
+      }
+    } catch {
+      // ignore
+    }
+    const versionsDir = path.join(nvmDir, 'versions', 'node');
+    if (fs.existsSync(versionsDir)) {
+      const versions = fs.readdirSync(versionsDir);
+      const toTry = nodeVer ? [nodeVer, ...versions.filter((v) => v !== nodeVer)] : versions;
+      for (const v of toTry) {
+        const npxPath = check(path.join(versionsDir, v, 'bin'));
+        if (npxPath) return npxPath;
+      }
+    }
+  }
+
+  // 4. fnm
+  const fnmDir = process.env.FNM_DIR || path.join(home, '.fnm');
+  if (fs.existsSync(fnmDir)) {
+    const multiversions = path.join(fnmDir, 'node-versions');
+    const aliasDir = path.join(fnmDir, 'aliases', 'default');
+    try {
+      if (fs.existsSync(aliasDir)) {
+        const alias = fs.readFileSync(aliasDir, 'utf-8').trim();
+        const npxPath = check(path.join(multiversions, alias, 'installation', 'bin'));
+        if (npxPath) return npxPath;
+      }
+      if (fs.existsSync(multiversions)) {
+        const entries = fs.readdirSync(multiversions, { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isDirectory()) {
+            const npxPath = check(path.join(multiversions, e.name, 'installation', 'bin'));
+            if (npxPath) return npxPath;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 5. volta
+  const voltaBin = path.join(home, '.volta', 'bin');
+  const found = check(voltaBin);
+  if (found) return found;
+
+  return null;
 }

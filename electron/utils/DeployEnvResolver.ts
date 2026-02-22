@@ -13,10 +13,11 @@ export interface DeployEnvResult {
 
 /**
  * 为 deploy 子进程解析 Node 环境
- * 优先级：项目 Node 版本 > 内置 Node > 用户 PATH
- * nvm 存在时不设置 NPM_CONFIG_PREFIX，避免冲突
+ * @param projectPath 项目根目录
+ * @param forceBuiltinNode 为 true 时始终使用内置 Node 20，避免缓存 Node 或项目 Node 触发 npm 内部错误（如 "Class extends value undefined"）
+ * 默认 true：部署场景统一用内置 Node，保证环境一致
  */
-export async function resolveDeployEnv(projectPath: string): Promise<DeployEnvResult> {
+export async function resolveDeployEnv(projectPath: string, forceBuiltinNode: boolean = true): Promise<DeployEnvResult> {
   const pathSeparator = process.platform === 'win32' ? ';' : ':';
   const commonPaths = getCommonPackageManagerPaths();
   const packageManager = detectPackageManager(projectPath);
@@ -28,17 +29,21 @@ export async function resolveDeployEnv(projectPath: string): Promise<DeployEnvRe
   let nodePath: string;
   let env: Record<string, string> = {};
 
-  try {
-    // waitForDownload=true：部署必须使用可控 Node（内置或缓存），避免回退到系统 node
-    // 系统 node（如 Homebrew 25）的 npm 路径可能异常，导致 "Could not determine Node.js install directory"
-    const projectNodeInfo = await nodeVersionManager.getNodePathForProject(projectPath, true);
-    nodePath = projectNodeInfo.nodePath;
-    env = projectNodeInfo.env && Object.keys(projectNodeInfo.env).length > 0
-      ? projectNodeInfo.env
-      : getNpmEnvVars();
-  } catch {
+  if (forceBuiltinNode) {
     nodePath = getBuiltinNodePath();
     env = getNpmEnvVars();
+  } else {
+    try {
+      // waitForDownload=true：部署必须使用可控 Node（内置或缓存），避免回退到系统 node
+      const projectNodeInfo = await nodeVersionManager.getNodePathForProject(projectPath, true);
+      nodePath = projectNodeInfo.nodePath;
+      env = projectNodeInfo.env && Object.keys(projectNodeInfo.env).length > 0
+        ? projectNodeInfo.env
+        : getNpmEnvVars();
+    } catch {
+      nodePath = getBuiltinNodePath();
+      env = getNpmEnvVars();
+    }
   }
 
   // 仅当使用系统 node 时清除 NPM_CONFIG_PREFIX（避免与 nvm 冲突）
