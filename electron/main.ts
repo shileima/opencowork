@@ -2222,7 +2222,12 @@ export default defineConfig({
       restoreViteConfig();
 
       if (code !== 0) {
-        sender.send('deploy:error', `Deploy script exited with code ${code}\n\n${allOutput.slice(-500)}`);
+        const errSnippet = allOutput.slice(-500);
+        const isNodeInstallDirError = /Could not determine Node\.js install directory/i.test(allOutput);
+        const hint = isNodeInstallDirError
+          ? '\n\n💡 提示：Node 环境解析失败。请确保项目已执行 pnpm install 安装依赖。'
+          : '';
+        sender.send('deploy:error', `Deploy script exited with code ${code}\n\n${errSnippet}${hint}`);
         return;
       }
 

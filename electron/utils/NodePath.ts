@@ -20,6 +20,10 @@ export function getBuiltinNodeDir(): string | null {
     nodeDir = app.isPackaged
       ? path.join(process.resourcesPath, 'node', 'win32-x64')
       : path.join(app.getAppPath(), 'resources', 'node', 'win32-x64');
+  } else if (platform === 'linux') {
+    nodeDir = app.isPackaged
+      ? path.join(process.resourcesPath, 'node', `linux-${arch}`)
+      : path.join(app.getAppPath(), 'resources', 'node', `linux-${arch}`);
   } else {
     return null;
   }
@@ -46,8 +50,8 @@ export function getBuiltinNodePath(): string {
   const nodePath = path.join(nodeDir, nodeExecutable);
   
   if (fs.existsSync(nodePath)) {
-    // 确保文件有执行权限（macOS）
-    if (platform === 'darwin') {
+    // 确保文件有执行权限（macOS/Linux）
+    if (platform !== 'win32') {
       try {
         fs.chmodSync(nodePath, 0o755);
       } catch (error) {

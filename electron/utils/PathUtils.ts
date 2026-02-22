@@ -69,3 +69,32 @@ export function detectPackageManager(projectPath: string): PackageManager {
 
   return 'pnpm';
 }
+
+/**
+ * 获取项目本地 build 命令，优先使用 node_modules/.bin 下的包管理器
+ * 避免依赖全局 pnpm/npm，减少 "Could not determine Node.js install directory" 错误
+ */
+export function getLocalBuildCommand(projectPath: string, packageManager: PackageManager): string | null {
+  const binDir = path.join(projectPath, 'node_modules', '.bin');
+
+  if (packageManager === 'pnpm') {
+    const pnpmPath = path.join(binDir, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
+    if (fs.existsSync(pnpmPath)) {
+      return `./node_modules/.bin/pnpm run build`;
+    }
+  }
+  if (packageManager === 'npm') {
+    const npmPath = path.join(binDir, process.platform === 'win32' ? 'npm.cmd' : 'npm');
+    if (fs.existsSync(npmPath)) {
+      return `./node_modules/.bin/npm run build`;
+    }
+  }
+  if (packageManager === 'yarn') {
+    const yarnPath = path.join(binDir, process.platform === 'win32' ? 'yarn.cmd' : 'yarn');
+    if (fs.existsSync(yarnPath)) {
+      return `./node_modules/.bin/yarn build`;
+    }
+  }
+
+  return null;
+}

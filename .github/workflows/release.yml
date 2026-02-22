@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release 版本号（如 v1.0.7），用于手动触发时创建 Release'
+        description: 'Release 版本号（如 v1.0.8），用于手动触发时创建 Release'
         required: true
-        default: 'v1.0.7'
+        default: 'v1.0.8'
 
 jobs:
   create-release:

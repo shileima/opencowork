@@ -319,6 +319,9 @@ export class NodeVersionManager {
             }
         }
 
+        // 修复：npm 查找 node_modules/npm/bin/npm-cli.js，需确保符号链接存在
+        this.ensureNpmSymlink(versionDir);
+
         // 查找 npm
         const npmPath = this.findNpmPath(versionDir, platform);
 
@@ -330,6 +333,25 @@ export class NodeVersionManager {
             npmPath,
             env
         };
+    }
+
+    /**
+     * 确保 node_modules/npm 符号链接存在（npm 脚本据此查找 npm-cli.js）
+     */
+    private ensureNpmSymlink(versionDir: string): void {
+        const npmModuleDir = path.join(versionDir, 'lib', 'node_modules', 'npm');
+        const targetNodeModules = path.join(versionDir, 'node_modules');
+        const targetNpmLink = path.join(targetNodeModules, 'npm');
+        if (fs.existsSync(npmModuleDir) && !fs.existsSync(targetNpmLink)) {
+            try {
+                fs.mkdirSync(targetNodeModules, { recursive: true });
+                const rel = path.relative(targetNodeModules, npmModuleDir);
+                fs.symlinkSync(rel, targetNpmLink, 'dir');
+                console.debug(`[NodeVersionManager] Created node_modules/npm symlink for existing cache`);
+            } catch (error) {
+                console.warn(`[NodeVersionManager] Failed to create npm symlink: ${error}`);
+            }
+        }
     }
 
     /**
@@ -609,10 +631,9 @@ export class NodeVersionManager {
         const versionDir = path.join(this.versionsDir, version, platformKey);
         const npmModuleDir = path.join(versionDir, 'lib', 'node_modules', 'npm');
 
-            // 如果下载的包中已经有 npm，直接使用
-            if (fs.existsSync(npmModuleDir)) {
-                console.debug(`[NodeVersionManager] npm already exists in downloaded package`);
-            // 创建 npm 可执行文件的符号链接或复制
+        // 如果下载的包中已经有 npm，复制可执行文件并创建 node_modules 符号链接
+        if (fs.existsSync(npmModuleDir)) {
+            console.debug(`[NodeVersionManager] npm already exists in downloaded package`);
             const npmBinDir = path.join(npmModuleDir, 'bin');
             const npmScript = path.join(npmBinDir, process.platform === 'win32' ? 'npm.cmd' : 'npm');
             if (fs.existsSync(npmScript)) {
@@ -624,6 +645,14 @@ export class NodeVersionManager {
                     }
                 }
             }
+            // npm 脚本查找 node_modules/npm/bin/npm-cli.js，需创建符号链接
+            const targetNodeModules = path.join(versionDir, 'node_modules');
+            const targetNpmLink = path.join(targetNodeModules, 'npm');
+            if (!fs.existsSync(targetNpmLink)) {
+                fs.mkdirSync(targetNodeModules, { recursive: true });
+                const rel = path.relative(targetNodeModules, npmModuleDir);
+                fs.symlinkSync(rel, targetNpmLink, 'dir');
+            }
             return;
         }
 
@@ -631,11 +660,22 @@ export class NodeVersionManager {
         if (process.platform === 'darwin') {
             try {
                 const builtinNodeDir = path.dirname(getBuiltinNodePath());
-                const builtinNpmModuleDir = path.join(builtinNodeDir, 'lib', 'node_modules', 'npm');
+                let builtinNpmModuleDir = path.join(builtinNodeDir, 'lib', 'node_modules', 'npm');
+                if (!fs.existsSync(builtinNpmModuleDir)) {
+                    builtinNpmModuleDir = path.join(builtinNodeDir, '..', 'lib', 'node_modules', 'npm');
+                }
                 if (fs.existsSync(builtinNpmModuleDir)) {
                     console.log(`[NodeVersionManager] Copying npm from builtin version`);
                     fs.mkdirSync(path.dirname(npmModuleDir), { recursive: true });
                     fs.cpSync(builtinNpmModuleDir, npmModuleDir, { recursive: true });
+                    // 创建 node_modules/npm 符号链接
+                    const targetNodeModules = path.join(versionDir, 'node_modules');
+                    const targetNpmLink = path.join(targetNodeModules, 'npm');
+                    if (!fs.existsSync(targetNpmLink)) {
+                        fs.mkdirSync(targetNodeModules, { recursive: true });
+                        const rel = path.relative(targetNodeModules, npmModuleDir);
+                        fs.symlinkSync(rel, targetNpmLink, 'dir');
+                    }
                 }
             } catch (error) {
                 console.warn(`[NodeVersionManager] Failed to copy npm from builtin: ${error}`);
