@@ -14,7 +14,7 @@ import { projectStore } from './config/ProjectStore'
 import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
 
-import { getBuiltinNodePath } from './utils/NodePath'
+import { getBuiltinNodePath, getBuiltinPnpmPath, getSystemNpxPath } from './utils/NodePath'
 import { resolveDeployEnv } from './utils/DeployEnvResolver'
 import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
@@ -2016,9 +2016,9 @@ ipcMain.handle('deploy:start', async (event, projectPath: string) => {
     fs.writeFileSync(pkgPath, JSON.stringify(pkgJson, null, 2) + '\n', 'utf-8');
     sender.send('deploy:log', `Version bumped: ${currentVersion} -> ${version}\n`);
 
-    // Step 2: Resolve deploy env (Node/npm/pnpm, compatible with nvm/fnm/builtin)
-    const deployEnvResult = await resolveDeployEnv(projectPath);
-    sender.send('deploy:log', `Using ${deployEnvResult.packageManager}, Node: ${deployEnvResult.nodePath}\n`);
+    // Step 2: Resolve deploy env（部署强制使用内置 Node 20，避免缓存/项目 Node 触发 npm 内部错误）
+    const deployEnvResult = await resolveDeployEnv(projectPath, true);
+    sender.send('deploy:log', `Using ${deployEnvResult.packageManager}, Node: ${deployEnvResult.nodePath} (built-in)\n`);
     sender.send('deploy:log', `✓ webstatic (via npx @bfe/webstatic)\n\n`);
     sender.send('deploy:log', `── CDN Deploy: ${projectName} v${version} ──\n\n`);
 
@@ -2096,9 +2096,12 @@ ipcMain.handle('deploy:start', async (event, projectPath: string) => {
         const existingConfig = defineConfigMatch[2];
         const afterConfig = defineConfigMatch[3];
 
-        // Extract plugins section if exists
+        // Extract plugins section if exists; for CDN build use only web-safe plugins to avoid
+        // "Class extends value undefined is not a constructor or null" when loading electron plugin in Node-only context
         const pluginsMatch = existingConfig.match(/(plugins\s*:\s*\[[\s\S]*?\])/);
-        const pluginsSection = pluginsMatch ? pluginsMatch[0] : 'plugins: []';
+        const originalPluginsSection = pluginsMatch ? pluginsMatch[0] : 'plugins: []';
+        const hasReact = importLines.some(l => l.includes('@vitejs/plugin-react')) || originalPluginsSection.includes('react()');
+        const cdnPluginsSection = hasReact ? 'plugins: [react()],' : 'plugins: [],';
 
         // Build complete config according to SKILL.md
         const completeConfig = `${beforeConfig}
@@ -2107,7 +2110,7 @@ ipcMain.handle('deploy:start', async (event, projectPath: string) => {
   // ========================================
   base: '${cdnBase}',
   
-  ${pluginsSection},
+  ${cdnPluginsSection}
 
   build: {
     outDir: '${cdnOutDir}',
@@ -2121,7 +2124,6 @@ ipcMain.handle('deploy:start', async (event, projectPath: string) => {
         format: 'esm',
         chunkFileNames: '[name].[hash].js',
         assetFileNames: '[name].[hash].[ext]',
-        cssCodeSplit: true,
         manualChunks: {
           tailwind: ['tailwindcss'],
         },
@@ -2133,11 +2135,14 @@ ${afterConfig}`;
 
         viteConfigContent = importLines.join('\n') + '\n\n' + completeConfig;
       } else {
-        // Fallback: generate minimal config
+        // Fallback: generate minimal config (web-only plugins to avoid electron in Node context)
+        const hasReactFallback = importLines.some((l: string) => l.includes('@vitejs/plugin-react'));
+        const fallbackPlugins = hasReactFallback ? 'plugins: [react()],' : 'plugins: [],';
         viteConfigContent = `${importLines.join('\n')}
 
 export default defineConfig({
   base: '${cdnBase}',
+  ${fallbackPlugins}
   build: {
     outDir: '${cdnOutDir}',
     target: 'esnext',
@@ -2150,7 +2155,6 @@ export default defineConfig({
         format: 'esm',
         chunkFileNames: '[name].[hash].js',
         assetFileNames: '[name].[hash].[ext]',
-        cssCodeSplit: true,
       },
       external: [],
     },
@@ -2172,6 +2176,7 @@ export default defineConfig({
       sender.send('deploy:log', `  assetsDir: '' (flat structure)\n`);
       sender.send('deploy:log', `  target: esnext, minify: false, sourcemap: false\n`);
       sender.send('deploy:log', `  rollupOptions: complete ESM configuration\n`);
+      sender.send('deploy:log', `  plugins: web-only (electron excluded to avoid "Class extends value undefined")\n`);
       sender.send('deploy:log', `  Backup: ${path.basename(viteConfigPath)}.deploy-backup\n\n`);
     } else {
       sender.send('deploy:error', 'No vite.config found, cannot proceed with deployment');
@@ -2194,100 +2199,174 @@ export default defineConfig({
       }
     };
 
-    const child = cpSpawn('npx', [
-      '@bfe/webstatic', 'publish',
-      '--appkey=com.sankuai.waimaiqafc.aie',
-      '--env=prod',
-      '--artifact=dist',
-      `--build-command=${deployEnvResult.buildCommand}`,
-      '--token=269883ad-b7b0-4431-b5e7-5886cd1d590f',
-    ], {
-      cwd: projectPath,
-      env: deployEnvResult.env,
-    });
+    // 使用内置 Node 直接执行 tsc + vite build，避免 webstatic 内部调用 npm/pnpm 触发 "Class extends value undefined"
+    const nodePath = deployEnvResult.nodePath;
+    const deployEnv = deployEnvResult.env;
+    const runBuildWithNode = (): Promise<boolean> => {
+      return new Promise((resolve) => {
+        const tscJs = path.join(projectPath, 'node_modules', 'typescript', 'bin', 'tsc.js');
+        const tscPath = fs.existsSync(tscJs) ? tscJs : path.join(projectPath, 'node_modules', 'typescript', 'bin', 'tsc');
+        const vitePath = path.join(projectPath, 'node_modules', 'vite', 'bin', 'vite.js');
+        const hasTsc = fs.existsSync(tscPath);
+        const hasVite = fs.existsSync(vitePath);
 
-    child.stdout?.on('data', (data: Buffer) => {
-      const text = data.toString();
-      allOutput += text;
-      sender.send('deploy:log', text);
-    });
+        const runStep = (args: string[], _name: string, onDone: (code: number | null) => void) => {
+          const proc = cpSpawn(nodePath, args, { cwd: projectPath, env: deployEnv });
+          proc.stdout?.on('data', (d: Buffer) => { allOutput += d.toString(); sender.send('deploy:log', d.toString()); });
+          proc.stderr?.on('data', (d: Buffer) => { allOutput += d.toString(); sender.send('deploy:log', d.toString()); });
+          proc.on('close', (code) => onDone(code));
+        };
 
-    child.stderr?.on('data', (data: Buffer) => {
-      const text = data.toString();
-      allOutput += text;
-      sender.send('deploy:log', text);
-    });
-
-    child.on('close', async (code: number | null) => {
-      restoreViteConfig();
-
-      if (code !== 0) {
-        const errSnippet = allOutput.slice(-500);
-        const isNodeInstallDirError = /Could not determine Node\.js install directory/i.test(allOutput);
-        const hint = isNodeInstallDirError
-          ? '\n\n💡 提示：Node 环境解析失败。请确保项目已执行 pnpm install 安装依赖。'
-          : '';
-        sender.send('deploy:error', `Deploy script exited with code ${code}\n\n${errSnippet}${hint}`);
-        return;
-      }
-
-      // Verify build output
-      const indexPath = path.join(expectedBuildPath, 'index.html');
-      const altIndexPath = path.join(projectPath, 'dist', 'index.html');
-      let buildPath: string | null = null;
-      if (fs.existsSync(indexPath)) {
-        buildPath = expectedBuildPath;
-      } else if (fs.existsSync(altIndexPath)) {
-        buildPath = path.join(projectPath, 'dist');
-        sender.send('deploy:log', `⚠ 构建产物在 dist/，预期为 dist/code/${projectName}/vite/${version}\n`);
-      }
-      if (!buildPath || !fs.existsSync(path.join(buildPath, 'index.html'))) {
-        sender.send('deploy:error', `Build output missing: ${expectedBuildPath}\n请检查 vite.config.ts 中 outDir 配置`);
-        return;
-      }
-      const countFiles = (dir: string): number => {
-        let n = 0;
-        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-          if (e.isFile()) n += 1;
-          else if (e.isDirectory()) n += countFiles(path.join(dir, e.name));
-        }
-        return n;
-      };
-      const fileCount = countFiles(buildPath);
-      sender.send('deploy:log', `✓ Build verified: ${fileCount} files\n`);
-
-      // Register proxy
-      const deployBaseUrl = `https://aie.sankuai.com/rdc_host/code/${projectName}/vite/${version}`;
-      const proxyUrl = `https://digitalgateway.waimai.test.sankuai.com/testgenius/open/agent/claudeProject/updateProjectProxyTarget?projectId=${projectName}&proxyType=publish&targetUrl=${encodeURIComponent(deployBaseUrl)}`;
-      try {
-        const proxyRes = await new Promise<number>((resolve) => {
-          const req = https.request(proxyUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-          }, (res) => resolve(res.statusCode ?? 0));
-          req.write('{}');
-          req.end();
-        });
-        if (proxyRes === 200) {
-          sender.send('deploy:log', `✓ Proxy registered\n\n✓ Deploy successful!\n  URL: ${expectedDeployUrl}\n`);
+        if (hasTsc && hasVite) {
+          sender.send('deploy:log', `Running build with built-in Node (tsc + vite build)...\n`);
+          runStep([tscPath], 'tsc', (tscCode) => {
+            if (tscCode !== 0) {
+              resolve(false);
+              return;
+            }
+            runStep([vitePath, 'build'], 'vite build', (viteCode) => resolve(viteCode === 0));
+          });
         } else {
-          sender.send('deploy:error', `Proxy registration failed (HTTP ${proxyRes})`);
+          // Fallback: 使用 shell 执行包管理器命令（可能仍会触发 npm 错误）
+          const pm = deployEnvResult.packageManager;
+          const cmd = pm === 'yarn' ? 'yarn exec tsc && yarn exec vite build' : `${pm} exec tsc && ${pm} exec vite build`;
+          sender.send('deploy:log', `Running build (fallback): ${cmd}\n`);
+          const shell = process.platform === 'win32' ? 'cmd' : 'sh';
+          const shellArg = process.platform === 'win32' ? '/c' : '-c';
+          const proc = cpSpawn(shell, [shellArg, cmd], { cwd: projectPath, env: deployEnv });
+          proc.stdout?.on('data', (d: Buffer) => { allOutput += d.toString(); sender.send('deploy:log', d.toString()); });
+          proc.stderr?.on('data', (d: Buffer) => { allOutput += d.toString(); sender.send('deploy:log', d.toString()); });
+          proc.on('close', (code) => resolve(code === 0));
+        }
+      });
+    };
+
+    runBuildWithNode().then((buildOk) => {
+      if (!buildOk) {
+        restoreViteConfig();
+        sender.send('deploy:error', `Build failed.\n\n${allOutput.slice(-800)}`);
+        return;
+      }
+      sender.send('deploy:log', `✓ Build completed, uploading via webstatic...\n\n`);
+
+      // 优先使用内置 Node 20 + 内置 pnpm（不依赖 npx，DMG 下也无 PATH 问题）
+      const webstaticArgs = [
+        '@bfe/webstatic', 'publish',
+        '--appkey=com.sankuai.waimaiqafc.aie',
+        '--env=prod',
+        '--artifact=dist',
+        '--build-command=true',
+        '--token=269883ad-b7b0-4431-b5e7-5886cd1d590f',
+      ];
+      const builtinPnpm = getBuiltinPnpmPath();
+      let uploadEnv: NodeJS.ProcessEnv;
+      let uploadExecPath: string;
+      let uploadExecArgs: string[];
+      if (builtinPnpm) {
+        uploadExecPath = nodePath;
+        uploadExecArgs = [builtinPnpm, 'dlx', ...webstaticArgs];
+        uploadEnv = deployEnv;
+        sender.send('deploy:log', `Using built-in Node + pnpm: ${builtinPnpm}\n`);
+      } else {
+        const systemNpx = getSystemNpxPath();
+        uploadExecPath = systemNpx || 'npx';
+        uploadExecArgs = uploadExecPath === 'npx' ? webstaticArgs : webstaticArgs;
+        uploadEnv = { ...deployEnv, PATH: process.env.PATH };
+        sender.send('deploy:log', systemNpx ? `Using system npx: ${systemNpx}\n` : `Using npx from PATH\n`);
+      }
+
+      const child = cpSpawn(uploadExecPath, uploadExecArgs, {
+        cwd: projectPath,
+        env: uploadEnv,
+      });
+
+      child.stdout?.on('data', (data: Buffer) => {
+        const text = data.toString();
+        allOutput += text;
+        sender.send('deploy:log', text);
+      });
+
+      child.stderr?.on('data', (data: Buffer) => {
+        const text = data.toString();
+        allOutput += text;
+        sender.send('deploy:log', text);
+      });
+
+      child.on('close', async (code: number | null) => {
+        restoreViteConfig();
+
+        if (code !== 0) {
+          const errSnippet = allOutput.slice(-500);
+          const isNodeInstallDirError = /Could not determine Node\.js install directory/i.test(allOutput);
+          const hint = isNodeInstallDirError
+            ? '\n\n💡 提示：Node 环境解析失败。请确保项目已执行 pnpm install 安装依赖。'
+            : '';
+          sender.send('deploy:error', `Upload script exited with code ${code}\n\n${errSnippet}${hint}`);
           return;
         }
-      } catch (err) {
-        sender.send('deploy:error', `Proxy registration failed: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-      }
 
-      sender.send('deploy:done', expectedDeployUrl);
-      if (mainWin && !mainWin.isDestroyed()) {
-        mainWin.webContents.send('agent:open-browser-preview', expectedDeployUrl);
-      }
-    });
+        // Verify build output
+        const indexPath = path.join(expectedBuildPath, 'index.html');
+        const altIndexPath = path.join(projectPath, 'dist', 'index.html');
+        let buildPath: string | null = null;
+        if (fs.existsSync(indexPath)) {
+          buildPath = expectedBuildPath;
+        } else if (fs.existsSync(altIndexPath)) {
+          buildPath = path.join(projectPath, 'dist');
+          sender.send('deploy:log', `⚠ 构建产物在 dist/，预期为 dist/code/${projectName}/vite/${version}\n`);
+        }
+        if (!buildPath || !fs.existsSync(path.join(buildPath, 'index.html'))) {
+          sender.send('deploy:error', `Build output missing: ${expectedBuildPath}\n请检查 vite.config.ts 中 outDir 配置`);
+          return;
+        }
+        const countFiles = (dir: string): number => {
+          let n = 0;
+          for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (e.isFile()) n += 1;
+            else if (e.isDirectory()) n += countFiles(path.join(dir, e.name));
+          }
+          return n;
+        };
+        const fileCount = countFiles(buildPath);
+        sender.send('deploy:log', `✓ Build verified: ${fileCount} files\n`);
 
-    child.on('error', (err: Error) => {
-      restoreViteConfig();
-      sender.send('deploy:error', `Failed to execute deploy: ${err.message}`);
+        // Register proxy
+        const deployBaseUrl = `https://aie.sankuai.com/rdc_host/code/${projectName}/vite/${version}`;
+        const proxyUrl = `https://digitalgateway.waimai.test.sankuai.com/testgenius/open/agent/claudeProject/updateProjectProxyTarget?projectId=${projectName}&proxyType=publish&targetUrl=${encodeURIComponent(deployBaseUrl)}`;
+        try {
+          const proxyRes = await new Promise<number>((resolve) => {
+            const req = https.request(proxyUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+            }, (res) => resolve(res.statusCode ?? 0));
+            req.write('{}');
+            req.end();
+          });
+          if (proxyRes === 200) {
+            sender.send('deploy:log', `✓ Proxy registered\n\n✓ Deploy successful!\n  URL: ${expectedDeployUrl}\n`);
+          } else {
+            sender.send('deploy:error', `Proxy registration failed (HTTP ${proxyRes})`);
+            return;
+          }
+        } catch (err) {
+          sender.send('deploy:error', `Proxy registration failed: ${err instanceof Error ? err.message : String(err)}`);
+          return;
+        }
+
+        sender.send('deploy:done', expectedDeployUrl);
+        if (mainWin && !mainWin.isDestroyed()) {
+          mainWin.webContents.send('agent:open-browser-preview', expectedDeployUrl);
+        }
+      });
+
+      child.on('error', (err: Error & { code?: string }) => {
+        restoreViteConfig();
+        const isNpxEnovent = err.code === 'ENOENT' || /spawn npx ENOENT/i.test(err.message);
+        const hint = isNpxEnovent
+          ? '\n\n💡 未找到 npx（DMG 安装后 GUI 启动时 PATH 可能不含 Node）。请：\n  • 安装 Node.js（https://nodejs.org）或使用 nvm/fnm；或\n  • 从终端执行 open -a QACowork 启动应用后再试部署。'
+          : '';
+        sender.send('deploy:error', `Failed to execute deploy: ${err.message}${hint}`);
+      });
     });
 
     return { success: true };

@@ -170,6 +170,51 @@ for (const check of checks) {
 
 console.log(`\n✅ SkillManager checks: ${skillManagerChecks}/${checks.length}`);
 
+// Check built-in Node.js 20
+console.log('\n📦 Checking built-in Node.js 20...');
+
+const NODE_EXPECTED_MAJOR = 20;
+const nodeResourcesPath = path.join(__dirname, '../resources/node');
+const platform = process.platform;
+const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+const platformKey = platform === 'win32' ? 'win32-x64' : `${platform}-${arch}`;
+const nodeDir = path.join(nodeResourcesPath, platformKey);
+const nodeExe = platform === 'win32' ? 'node.exe' : 'node';
+const nodePath = path.join(nodeDir, nodeExe);
+
+let nodeCheckPassed = false;
+if (fs.existsSync(nodePath)) {
+    try {
+        const { execSync } = require('child_process');
+        const versionOutput = execSync(`"${nodePath}" --version`, { encoding: 'utf-8' }).trim();
+        const match = versionOutput.match(/^v?(\d+)\./);
+        const major = match ? parseInt(match[1], 10) : 0;
+        if (major === NODE_EXPECTED_MAJOR) {
+            console.log(`✅ Built-in Node.js ${versionOutput} found (${platformKey})`);
+            nodeCheckPassed = true;
+        } else {
+            console.warn(`⚠️  Built-in Node.js version ${versionOutput} (expected v${NODE_EXPECTED_MAJOR}.x.x)`);
+        }
+    } catch (e) {
+        console.warn(`⚠️  Built-in Node.js exists but failed to run: ${e.message}`);
+    }
+} else {
+    console.warn(`⚠️  Built-in Node.js not found at ${nodePath}`);
+    console.warn('   Run: node scripts/download-node.mjs');
+}
+
+// Check built-in pnpm (required for installer: 整包 pnpm/ 含 bin+dist，直接 .app 或 DMG 均可找到)
+const pnpmBinPath = path.join(nodeDir, 'pnpm', 'bin', 'pnpm.cjs');
+const pnpmDistPath = path.join(nodeDir, 'pnpm', 'dist');
+let pnpmCheckPassed = false;
+if (fs.existsSync(pnpmBinPath) && fs.existsSync(pnpmDistPath)) {
+    console.log('✅ Built-in pnpm (pnpm/bin+dist) found - deploy will use built-in Node + pnpm');
+    pnpmCheckPassed = true;
+} else if (nodeCheckPassed) {
+    console.warn('⚠️  Built-in pnpm not found at', path.join(nodeDir, 'pnpm'));
+    console.warn('   Run: node scripts/prepare-pnpm.mjs (deploy will fallback to system npx)');
+}
+
 // Check Playwright package (browsers 不再打包，首次运行时下载到 userData)
 console.log('\n🌐 Checking Playwright...');
 
@@ -191,12 +236,13 @@ console.log('\n' + '='.repeat(60));
 console.log('📊 SUMMARY');
 console.log('='.repeat(60));
 
-const totalChecks = 3 + checks.length;
+const totalChecks = 4 + checks.length;
 let passedChecks = 0;
 
 if (validSkills > 0) passedChecks++;
 if (mcpContent.includes('DEFAULT_MCP_CONFIGS')) passedChecks++;
 if (builderConfig.includes('resources/skills')) passedChecks++;
+if (nodeCheckPassed) passedChecks++;
 passedChecks += skillManagerChecks;
 
 const percentage = Math.round((passedChecks / totalChecks) * 100);
@@ -214,6 +260,12 @@ if (percentage === 100) {
     process.exit(1);
 }
 
+if (nodeCheckPassed) {
+    console.log('   • Built-in Node.js 20 is ready for deploy and run_command');
+} else {
+    console.log('   • Run "node scripts/download-node.mjs" to build with built-in Node.js');
+}
+
 console.log('\n📝 Expected behavior:');
 console.log('   • Skills will be copied to ~/.qa-cowork/skills on first run');
 console.log('   • MCP servers will be loaded from resources/mcp/builtin-mcp.json');
@@ -224,4 +276,23 @@ console.log('\n📦 Packaging:');
 console.log('   • Skills are included in installer as extraResources');
 console.log('   • MCP configs are included in installer as extraResources');
 console.log('   • Green version (portable) works the same way');
+
+// 打安装包前必须通过的内置资源检查（缺一不可，否则安装包内部署会失败）
+console.log('\n📋 Required for installer (must pass before packaging):');
+const requiredOk = nodeCheckPassed && pnpmCheckPassed;
+if (requiredOk) {
+    console.log('   ✅ Built-in Node.js 20');
+    console.log('   ✅ Built-in pnpm (pnpm/bin+dist)');
+    console.log('   → Ready to build installer.');
+} else {
+    console.log('   ❌ Missing required built-in resources for installer.');
+    if (!nodeCheckPassed) {
+        console.log('   • Built-in Node.js: run  node scripts/download-node.mjs');
+    }
+    if (!pnpmCheckPassed) {
+        console.log('   • Built-in pnpm:     run  node scripts/prepare-pnpm.mjs');
+    }
+    console.log('\n   Then run  pnpm run build  again.');
+    process.exit(1);
+}
 process.exit(0);
