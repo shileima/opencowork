@@ -9,6 +9,7 @@ import { promisify } from 'util';
 import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from '../../utils/NodePath';
 import { getCommonPackageManagerPaths } from '../../utils/PathUtils';
 import { getPlaywrightEnvVars } from '../../utils/PlaywrightPath';
+import { ensurePlaywrightForAutomation } from '../../utils/PlaywrightEnsure';
 import { nodeVersionManager } from '../../utils/NodeVersionManager';
 import { ErrorDetector, DetectedError } from './ErrorDetector';
 
@@ -826,6 +827,14 @@ export class FileSystemTools {
 
         // 检测是否为自动化测试命令（可能启动 Chrome for Testing）
         const isAutomationTest = this.isAutomationTestCommand(command);
+        if (isAutomationTest) {
+            try {
+                await ensurePlaywrightForAutomation();
+            } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                return `自动化需要 Playwright/Chromium，自动安装失败: ${msg}\n请检查网络后重试，或手动在终端执行: npx playwright install chromium`;
+            }
+        }
 
         try {
             // 获取 Playwright 和 npm 环境变量

@@ -53,10 +53,16 @@
       "to": "node",
       "filter": ["**/*"]
     },
-    // 仅打包 playwright package（JS），不打包 browsers（未签名的 Chromium 会导致 macOS Hardened Runtime 拒绝启动）
+    // Playwright 包（JS）
     {
       "from": "resources/playwright/package",
       "to": "playwright/package",
+      "filter": ["**/*"]
+    },
+    // Chromium 浏览器内置（构建前需执行 pnpm run prepare:playwright；macOS 若遇签名问题会回退到 userData 安装）
+    {
+      "from": "resources/playwright/browsers",
+      "to": "playwright/browsers",
       "filter": ["**/*"]
     }
   ],

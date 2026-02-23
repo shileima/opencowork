@@ -19,6 +19,7 @@ import { resolveDeployEnv } from './utils/DeployEnvResolver'
 import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
+import { setPlaywrightManager } from './utils/PlaywrightEnsure'
 import { registerContextSwitchHandler } from './contextSwitchCoordinator'
 import Anthropic from '@anthropic-ai/sdk'
 
@@ -377,9 +378,9 @@ app.whenReady().then(() => {
     resourceUpdater.startAutoUpdateCheck(1 / 60, notifyUpdateFound)
   }
 
-  // 7.5 Initialize Playwright manager and check status
+  // 7.5 Initialize Playwright manager（不再弹窗提示安装；自动化执行时自动判断并静默安装）
   playwrightManager = new PlaywrightManager()
-  checkPlaywrightStatus()
+  setPlaywrightManager(playwrightManager)
 
   // 4. Create system tray
   createTray()
@@ -994,24 +995,7 @@ ipcMain.handle('resource:restart-app', () => {
 
 // ========== Playwright 管理 ==========
 
-// 检查 Playwright 安装状态
-async function checkPlaywrightStatus() {
-  if (!playwrightManager) return
-
-  try {
-    const status = await playwrightManager.getInstallStatus()
-    
-    if (status.needsInstall && mainWin) {
-      // 通知前端需要安装
-      mainWin.webContents.send('playwright:status', {
-        installed: false,
-        ...status
-      })
-    }
-  } catch (error) {
-    console.error('检查 Playwright 状态失败:', error)
-  }
-}
+// 不再在启动时通知前端“需要安装”；改为在自动化执行时自动判断并静默安装
 
 // 获取 Playwright 安装状态
 ipcMain.handle('playwright:get-status', async () => {

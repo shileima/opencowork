@@ -5,7 +5,6 @@ import { useI18n } from '../i18n/I18nContext';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import Anthropic from '@anthropic-ai/sdk';
 import { CopyButton } from './CopyButton';
-import { PlaywrightPrompt } from './PlaywrightPrompt';
 import { useToast } from './Toast';
 
 type Mode = 'chat' | 'work' | 'automation';
@@ -1014,9 +1013,6 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                             </div>
                         </div>
                     )}
-                    
-                    {/* Playwright Installation Prompt - 在 automation 模式或启动时显示 */}
-                    <PlaywrightPrompt />
                     
                     {relevantHistory.length === 0 && !streamingText ? (
                         <EmptyState mode={mode} workingDir={workingDir} />
