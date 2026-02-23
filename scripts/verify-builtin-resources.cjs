@@ -170,19 +170,31 @@ for (const check of checks) {
 
 console.log(`\n✅ SkillManager checks: ${skillManagerChecks}/${checks.length}`);
 
-// Check built-in Node.js 20
-console.log('\n📦 Checking built-in Node.js 20...');
+// Check built-in Node.js 20 and pnpm (all platform dirs must have complete pnpm for installer)
+console.log('\n📦 Checking built-in Node.js 20 and pnpm...');
 
 const NODE_EXPECTED_MAJOR = 20;
 const nodeResourcesPath = path.join(__dirname, '../resources/node');
 const platform = process.platform;
 const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
 const platformKey = platform === 'win32' ? 'win32-x64' : `${platform}-${arch}`;
-const nodeDir = path.join(nodeResourcesPath, platformKey);
 const nodeExe = platform === 'win32' ? 'node.exe' : 'node';
-const nodePath = path.join(nodeDir, nodeExe);
+
+function checkPlatformPnpm(platformDir, key) {
+    const nodePath = path.join(platformDir, nodeExe);
+    const pnpmBinPath = path.join(platformDir, 'pnpm', 'bin', 'pnpm.cjs');
+    const pnpmDistPath = path.join(platformDir, 'pnpm', 'dist');
+    const distHasContent = fs.existsSync(path.join(pnpmDistPath, 'pnpm.cjs')) || fs.existsSync(path.join(pnpmDistPath, 'node_modules'));
+    const hasNode = fs.existsSync(nodePath);
+    const hasPnpmBin = fs.existsSync(pnpmBinPath);
+    const hasPnpmDist = fs.existsSync(pnpmDistPath) && distHasContent;
+    return { key, hasNode, hasPnpmBin, hasPnpmDist, pnpmComplete: hasPnpmBin && hasPnpmDist };
+}
 
 let nodeCheckPassed = false;
+const nodeDir = path.join(nodeResourcesPath, platformKey);
+const nodePath = path.join(nodeDir, nodeExe);
+
 if (fs.existsSync(nodePath)) {
     try {
         const { execSync } = require('child_process');
@@ -203,16 +215,31 @@ if (fs.existsSync(nodePath)) {
     console.warn('   Run: node scripts/download-node.mjs');
 }
 
-// Check built-in pnpm (required for installer: 整包 pnpm/ 含 bin+dist，直接 .app 或 DMG 均可找到)
-const pnpmBinPath = path.join(nodeDir, 'pnpm', 'bin', 'pnpm.cjs');
-const pnpmDistPath = path.join(nodeDir, 'pnpm', 'dist');
-let pnpmCheckPassed = false;
-if (fs.existsSync(pnpmBinPath) && fs.existsSync(pnpmDistPath)) {
-    console.log('✅ Built-in pnpm (pnpm/bin+dist) found - deploy will use built-in Node + pnpm');
-    pnpmCheckPassed = true;
-} else if (nodeCheckPassed) {
-    console.warn('⚠️  Built-in pnpm not found at', path.join(nodeDir, 'pnpm'));
-    console.warn('   Run: node scripts/prepare-pnpm.mjs (deploy will fallback to system npx)');
+// 所有存在的平台目录都必须包含完整 pnpm（bin + dist），打包才会通过
+const platformDirs = fs.existsSync(nodeResourcesPath)
+    ? fs.readdirSync(nodeResourcesPath, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && /^(darwin|win32|linux)-(arm64|x64)$/.test(d.name))
+        .map((d) => ({ key: d.name, dir: path.join(nodeResourcesPath, d.name) }))
+    : [];
+const pnpmResults = platformDirs.map(({ key, dir }) => ({ ...checkPlatformPnpm(dir, key), dir }));
+
+let pnpmCheckPassed = true;
+for (const r of pnpmResults) {
+    if (r.pnpmComplete) {
+        console.log(`✅ pnpm 完整 (${r.key}): pnpm/bin/pnpm.cjs + pnpm/dist`);
+    } else {
+        pnpmCheckPassed = false;
+        if (!r.hasPnpmBin) console.warn(`❌ ${r.key}: 缺少 pnpm/bin/pnpm.cjs`);
+        if (!r.hasPnpmDist) console.warn(`❌ ${r.key}: 缺少或为空 pnpm/dist（需与 bin 同包）`);
+    }
+}
+if (pnpmResults.length === 0) {
+    console.warn('⚠️  resources/node 下无平台目录，请先执行 node scripts/download-node.mjs');
+    pnpmCheckPassed = false;
+} else if (pnpmCheckPassed) {
+    console.log('✅ 所有平台目录均包含完整 pnpm，打包将包含内置 pnpm');
+} else {
+    console.warn('   Run: node scripts/prepare-pnpm.mjs 后重新构建');
 }
 
 // Check Playwright package (browsers 不再打包，首次运行时下载到 userData)

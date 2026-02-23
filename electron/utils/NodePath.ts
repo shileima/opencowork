@@ -232,11 +232,19 @@ const BUILTIN_PNPM_BIN = path.join('pnpm', 'bin', 'pnpm.cjs');
  */
 export function getBuiltinPnpmPath(): string | null {
   const nodeDir = getBuiltinNodeDir();
-  if (!nodeDir) return null;
+  if (!nodeDir) {
+    console.warn('[NodePath] getBuiltinPnpmPath: nodeDir 为空');
+    return null;
+  }
   const pnpmBinPath = path.join(nodeDir, BUILTIN_PNPM_BIN);
+  if (!fs.existsSync(pnpmBinPath)) {
+    console.warn('[NodePath] getBuiltinPnpmPath: 未找到 pnpm.cjs:', pnpmBinPath);
+    return null;
+  }
   const pnpmDistDir = path.join(nodeDir, 'pnpm', 'dist');
-  if (!fs.existsSync(pnpmBinPath)) return null;
-  if (!fs.existsSync(pnpmDistDir)) return null;
+  if (!fs.existsSync(pnpmDistDir)) {
+    console.warn('[NodePath] getBuiltinPnpmPath: pnpm/dist 缺失（pnpm 依赖此目录，执行可能失败）:', pnpmDistDir);
+  }
   return pnpmBinPath;
 }
 
