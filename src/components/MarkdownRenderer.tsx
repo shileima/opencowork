@@ -22,6 +22,49 @@ interface MarkdownRendererProps {
 
 import { useI18n } from '../i18n/I18nContext';
 
+/**
+ * 将属性值由单引号改为双引号，便于被只接受双引号的严格解析器接受（XML 规范允许单引号与双引号）。
+ * 用于在需要兼容严格解析器时规范化用户提供的“允许的 XML 格式”。
+ */
+function normalizeXmlAttributesToDoubleQuotes(xml: string): string {
+    return xml.replace(
+        /\s+([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*'((?:[^']|&apos;)*)'/g,
+        (_, name, value) => ` ${name}="${value.replace(/"/g, '&quot;')}"`
+    );
+}
+
+/** 将单行或紧凑的 XML 格式化为带缩进的多行，便于阅读；支持单引号属性（允许的 XML 格式）。 */
+function formatXmlForDisplay(xml: string): string {
+    const trimmed = xml.trim();
+    if (!trimmed) return xml;
+    try {
+        // 在 > 与 < 之间、/> 与 < 之间插入换行，便于按标签分行
+        const withNewlines = trimmed
+            .replace(/\/>\s*</g, '/>\n<')
+            .replace(/>\s*</g, '>\n<');
+        const lines = withNewlines.split('\n').map((line) => line.trim()).filter(Boolean);
+        if (lines.length <= 1) return lines.length === 1 ? '  ' + lines[0] : xml;
+        let level = 0;
+        const indentSize = 2;
+        const formatted: string[] = [];
+        for (const line of lines) {
+            const isClosing = /^\s*<\//.test(line);
+            const isSelfClosing = /\/\s*>$/.test(line);
+            if (isClosing) {
+                level = Math.max(0, level - 1);
+            }
+            const indent = ' '.repeat(indentSize * level);
+            formatted.push(indent + line);
+            if (!isClosing && !isSelfClosing) {
+                level += 1;
+            }
+        }
+        return formatted.join('\n');
+    } catch {
+        return xml;
+    }
+}
+
 export function MarkdownRenderer({ content, className = '', isDark = false }: MarkdownRendererProps) {
     const { t } = useI18n();
     
@@ -66,6 +109,44 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
                                             }}
                                         >
                                             {codeContent}
+                                        </pre>
+                                    </div>
+                                );
+                            }
+
+                            // XML: 带左侧缩进与间距的展示，支持单引号属性等允许的 XML 格式
+                            if (match[1] === 'xml') {
+                                const displayContent = formatXmlForDisplay(codeContent);
+                                return (
+                                    <div className="my-5 rounded-xl border border-stone-200 bg-[#FAFAFA] dark:bg-[#1e1e1e] shadow-sm overflow-hidden">
+                                        <div className="flex items-center justify-between px-4 py-2.5 bg-[#F5F5F4] dark:bg-[#1e1e1e] border-b border-stone-200 dark:border-zinc-800">
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex gap-1.5">
+                                                    <div className="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E]" />
+                                                    <div className="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123]" />
+                                                    <div className="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29]" />
+                                                </div>
+                                                <span className="ml-2 text-xs font-mono font-medium text-stone-500 select-none">xml</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <CopyButton text={normalizeXmlAttributesToDoubleQuotes(codeContent)} title={t('copyAsDoubleQuoted')} label={t('copyDoubleQuoted')} />
+                                                <CopyButton text={codeContent} />
+                                            </div>
+                                        </div>
+                                        <pre
+                                            className="m-0 pl-4 pr-4 py-4 max-h-[480px] overflow-auto w-full min-w-0 text-left"
+                                            style={{
+                                                fontSize: '0.875rem',
+                                                lineHeight: '1.6',
+                                                fontFamily: "'Menlo', 'Monaco', 'Consolas', 'Courier New', monospace",
+                                                background: 'transparent',
+                                                color: isDark ? '#a1a1aa' : '#374151',
+                                                whiteSpace: 'pre-wrap',
+                                                wordBreak: 'break-word',
+                                                overflowWrap: 'anywhere',
+                                            }}
+                                        >
+                                            {displayContent}
                                         </pre>
                                     </div>
                                 );
@@ -218,7 +299,7 @@ function MermaidDiagram({ code, isDark }: { code: string, isDark: boolean }) {
     );
 }
 
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text, title: titleProp, label }: { text: string; title?: string; label?: string }) {
     const { t } = useI18n();
     const [copied, setCopied] = useState(false);
 
@@ -233,11 +314,14 @@ function CopyButton({ text }: { text: string }) {
         setTimeout(() => setCopied(false), 2000);
     };
 
+    const title = titleProp ?? t('copyCode');
+    const displayLabel = label ?? t('copy');
+
     return (
         <button
             onClick={handleCopy}
             className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium text-stone-500 hover:text-stone-700 hover:bg-stone-200/50 transition-all"
-            title={t('copyCode')}
+            title={title}
         >
             {copied ? (
                 <>
@@ -247,7 +331,7 @@ function CopyButton({ text }: { text: string }) {
             ) : (
                 <>
                     <Copy size={13} />
-                    <span>{t('copy')}</span>
+                    <span>{displayLabel}</span>
                 </>
             )}
         </button>

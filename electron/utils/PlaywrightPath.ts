@@ -25,7 +25,7 @@ export function getBuiltinPlaywrightPath(): string | null {
 /**
  * 获取 Playwright 浏览器路径
  *
- * 打包后：使用 userData 目录，避免将未签名的 Chromium 打入 app bundle（会导致 macOS Hardened Runtime 拒绝启动）
+ * 打包后：优先使用内置的 resources/playwright/browsers（若存在），否则使用 userData（首次运行或未打包浏览器时自动安装到此）
  * 开发环境：返回 null，使用默认路径（~/.cache/ms-playwright/）
  *
  * @returns Playwright 浏览器路径
@@ -33,6 +33,13 @@ export function getBuiltinPlaywrightPath(): string | null {
 export function getBuiltinPlaywrightBrowsersPath(): string | null {
   if (!app.isPackaged) {
     return null;
+  }
+  const resourcesBrowsers = path.join(process.resourcesPath, 'playwright', 'browsers');
+  if (fs.existsSync(resourcesBrowsers)) {
+    const hasChromium = fs.readdirSync(resourcesBrowsers).some((f) => f.startsWith('chromium-'));
+    if (hasChromium) {
+      return resourcesBrowsers;
+    }
   }
   return path.join(app.getPath('userData'), 'playwright', 'browsers');
 }

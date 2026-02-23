@@ -3,7 +3,7 @@
  * 检查、安装和管理 Playwright 及浏览器
  */
 
-import { exec } from 'node:child_process'
+import { exec, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -12,19 +12,34 @@ import { getBuiltinNodePath, getBuiltinNodeDir, getBuiltinNpmPath, getBuiltinNpm
 
 const execAsync = promisify(exec)
 
+/** Chromium 安装超时时间（约 15 分钟，避免网络慢时一直卡住） */
+const CHROMIUM_INSTALL_TIMEOUT_MS = 15 * 60 * 1000
+
 export class PlaywrightManager {
   private playwrightPath: string
   private browsersPath: string
 
   constructor() {
-    // 打包后：playwright 包在 Resources，浏览器在 userData（未签名的 Chromium 不能打入 app bundle）
+    // 打包后：playwright 包在 Resources，浏览器优先用 Resources 内置，否则 userData
     this.playwrightPath = app.isPackaged
       ? path.join(process.resourcesPath, 'playwright')
       : path.join(app.getAppPath(), 'resources', 'playwright')
 
-    this.browsersPath = app.isPackaged
-      ? path.join(app.getPath('userData'), 'playwright', 'browsers')
-      : path.join(this.playwrightPath, 'browsers')
+    if (app.isPackaged) {
+      const resourcesBrowsers = path.join(process.resourcesPath, 'playwright', 'browsers')
+      if (fs.existsSync(resourcesBrowsers)) {
+        const files = fs.readdirSync(resourcesBrowsers)
+        if (files.some((f) => f.startsWith('chromium-'))) {
+          this.browsersPath = resourcesBrowsers
+        } else {
+          this.browsersPath = path.join(app.getPath('userData'), 'playwright', 'browsers')
+        }
+      } else {
+        this.browsersPath = path.join(app.getPath('userData'), 'playwright', 'browsers')
+      }
+    } else {
+      this.browsersPath = path.join(this.playwrightPath, 'browsers')
+    }
   }
 
   /**
@@ -82,6 +97,19 @@ export class PlaywrightManager {
       playwrightInstalled,
       browserInstalled,
       needsInstall: !playwrightInstalled || !browserInstalled
+    }
+  }
+
+  /**
+   * 自动化执行前调用：若未安装则静默安装，不弹窗。安装失败时抛出。
+   */
+  async ensureInstalled(): Promise<void> {
+    const status = await this.getInstallStatus()
+    if (!status.needsInstall) return
+    const onProgress = (msg: string) => console.log('[PlaywrightManager]', msg)
+    const result = await this.installAll(onProgress)
+    if (!result.success) {
+      throw new Error(result.error || 'Playwright/Chromium 安装失败')
     }
   }
 
@@ -178,6 +206,59 @@ export class PlaywrightManager {
   }
 
   /**
+   * 执行 Chromium 安装子进程（spawn + 超时，避免 exec 的 maxBuffer 与无超时导致卡住）
+   */
+  private runChromiumInstall(
+    nodePath: string,
+    playwrightCli: string,
+    env: NodeJS.ProcessEnv,
+    _onProgress?: (message: string) => void
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(nodePath, [playwrightCli, 'install', 'chromium'], {
+        cwd: this.playwrightPath,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+
+      let stderrChunks: string[] = []
+      child.stdout?.on('data', (chunk: Buffer) => {
+        const line = chunk.toString()
+        if (line.trim()) console.log('[PlaywrightManager]', line.trim())
+      })
+      child.stderr?.on('data', (chunk: Buffer) => {
+        const line = chunk.toString()
+        stderrChunks.push(line)
+        if (line.trim()) console.warn('[PlaywrightManager]', line.trim())
+      })
+
+      const timeoutId = setTimeout(() => {
+        if (child.kill('SIGKILL')) {
+          const stderr = stderrChunks.join('').trim()
+          reject(new Error(`Chromium 安装超时（${CHROMIUM_INSTALL_TIMEOUT_MS / 60000} 分钟）。请检查网络或代理后重试。${stderr ? '\n' + stderr : ''}`))
+        }
+      }, CHROMIUM_INSTALL_TIMEOUT_MS)
+
+      child.on('error', (err) => {
+        clearTimeout(timeoutId)
+        reject(err)
+      })
+      child.on('close', (code, signal) => {
+        clearTimeout(timeoutId)
+        if (code === 0) {
+          resolve()
+          return
+        }
+        const stderr = stderrChunks.join('').trim()
+        const msg = signal
+          ? `安装进程被终止 (signal: ${signal})`
+          : `安装进程退出码: ${code}`
+        reject(new Error(`${msg}${stderr ? '\n' + stderr : ''}`))
+      })
+    })
+  }
+
+  /**
    * 安装浏览器
    * @param onProgress 进度回调
    */
@@ -216,18 +297,18 @@ export class PlaywrightManager {
 
       onProgress?.('正在下载 Chromium...(可能需要几分钟)')
 
-      // 安装 Chromium
-      await execAsync(
-        `"${nodePath}" "${playwrightCli}" install chromium`,
-        {
-          cwd: this.playwrightPath,
-          env: {
-            ...process.env,
-            PLAYWRIGHT_BROWSERS_PATH: this.browsersPath
-          }
-        }
-      )
+      // 使用 spawn 替代 exec，避免 stdout/stderr 过多导致 maxBuffer 报错或卡住
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        PLAYWRIGHT_BROWSERS_PATH: this.browsersPath
+      }
+      const nodeDir = getBuiltinNodeDir()
+      if (nodeDir) {
+        const pathSep = process.platform === 'win32' ? ';' : ':'
+        env.PATH = `${nodeDir}${pathSep}${process.env.PATH || ''}`
+      }
 
+      await this.runChromiumInstall(nodePath, playwrightCli, env, onProgress)
       onProgress?.('Chromium 安装完成 ✓')
       return { success: true }
     } catch (error) {
