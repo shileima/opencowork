@@ -120,7 +120,7 @@ export class PlaywrightManager {
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       }
 
-      // 优先使用内置 pnpm（与部署一致，打包后 npm 易出现 Class extends value undefined）
+      // 1) 优先使用内置 pnpm（与 CI 一致；打包后内置 npm 易出现 Class extends value undefined）
       if (pnpmPath && nodePath && nodePath !== 'node') {
         const nodeDir = getBuiltinNodeDir()
         if (nodeDir) {
@@ -128,8 +128,29 @@ export class PlaywrightManager {
           env.PATH = `${nodeDir}${pathSep}${process.env.PATH || ''}`
         }
         const pnpmCommand = `"${nodePath}" "${pnpmPath}" add playwright`
-        await execAsync(pnpmCommand, { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
+        try {
+          await execAsync(pnpmCommand, { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
+        } catch (builtinErr) {
+          if (app.isPackaged) {
+            console.warn('[PlaywrightManager] 内置 pnpm 执行失败，改用系统 pnpm/npm:', builtinErr instanceof Error ? builtinErr.message : String(builtinErr))
+            try {
+              await execAsync('pnpm add playwright', { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
+            } catch {
+              await execAsync('npm install playwright --no-package-lock', { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
+            }
+          } else {
+            throw builtinErr
+          }
+        }
+      } else if (app.isPackaged) {
+        // 2) 打包后若内置 pnpm 缺失（如增量更新未带全 resources），改用系统 PATH 的 pnpm/npm，避免用内置 npm 报错
+        try {
+          await execAsync('pnpm add playwright', { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
+        } catch {
+          await execAsync('npm install playwright --no-package-lock', { cwd: this.playwrightPath, env: env as NodeJS.ProcessEnv })
+        }
       } else {
+        // 3) 开发环境：内置 npm
         const npmEnv = getNpmEnvVars()
         const npmCliJsPath = getBuiltinNpmCliJsPath()
         Object.assign(env, npmEnv)
