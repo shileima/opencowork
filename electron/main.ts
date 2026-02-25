@@ -3790,6 +3790,7 @@ function createFloatingBallWindow() {
     resizable: false,
     hasShadow: false,
     skipTaskbar: true,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
     },

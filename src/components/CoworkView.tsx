@@ -1031,9 +1031,9 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
 
                             {streamingText && streamingText.trim().length > 0 && (
                                 <div className="animate-in fade-in duration-200">
-                                    <div className="text-stone-700 dark:text-zinc-300 text-[15px] leading-7 max-w-none">
+                                    <div className="text-stone-700 dark:text-zinc-300 text-[13px] leading-6 max-w-none">
                                         <div className="relative group">
-                                            <MarkdownRenderer content={streamingText} isDark={true} />
+                                            <MarkdownRenderer content={streamingText} isDark={true} className="prose-sm" />
                                             <span className="inline-block w-2 h-5 bg-orange-500 ml-0.5 animate-pulse" />
                                             {streamingText && streamingText.trim().length > 0 && (
                                                 <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1166,9 +1166,9 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
             {groupedBlocks.map((block, i: number) => {
                 if (block.type === 'text' && block.text && block.text.trim().length > 0) {
                     return (
-                        <div key={i} className="text-stone-700 dark:text-zinc-300 text-[15px] leading-7 max-w-none">
+                        <div key={i} className="text-stone-700 dark:text-zinc-300 text-[13px] leading-6 max-w-none">
                             <div className="relative group">
-                                <MarkdownRenderer content={block.text} isDark={true} />
+                                <MarkdownRenderer content={block.text} isDark={true} className="prose-sm" />
                                 {block.text && block.text.trim().length > 0 && (
                                     <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                         <CopyButton content={block.text} size="sm" />
