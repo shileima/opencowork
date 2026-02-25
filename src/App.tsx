@@ -39,6 +39,15 @@ function App() {
     window.ipcRenderer.invoke('window:set-maximized', activeView === 'project');
   }, [activeView]);
 
+  // 切换到协作/会话模式时，将默认工作目录设为 ~/.qa-cowork-workspace
+  useEffect(() => {
+    if (activeView === 'cowork') {
+      window.ipcRenderer.invoke('cowork:ensure-working-dir').catch((err) => {
+        console.warn('[App] cowork:ensure-working-dir failed:', err);
+      });
+    }
+  }, [activeView]);
+
   // 从 localStorage 加载任务面板与资源管理器隐藏状态
   useEffect(() => {
     if (activeView === 'project') {

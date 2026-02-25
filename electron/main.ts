@@ -810,6 +810,11 @@ ipcMain.handle('agent:get-scripts-dir', () => {
   return directoryManager.getScriptsDir()
 })
 
+// 获取协作/会话模式默认工作空间目录路径 (~/.qa-cowork-workspace/)
+ipcMain.handle('agent:get-cowork-workspace-dir', () => {
+  return directoryManager.getCoworkWorkspaceDir()
+})
+
 ipcMain.handle('agent:set-working-dir', (_, folderPath: string) => {
   // Set as first (primary) in the list
   const folders = configStore.getAll().authorizedFolders || []
@@ -1760,6 +1765,18 @@ ipcMain.handle('project:get-current', () => {
 ipcMain.handle('project:ensure-working-dir', () => {
   const project = projectStore.getCurrentProject();
   if (project) applyProjectWorkingDirs(project);
+});
+
+// 协作/会话模式：切换到 cowork 视图时，将默认工作目录设置为 ~/.qa-cowork-workspace
+ipcMain.handle('cowork:ensure-working-dir', () => {
+  const coworkWorkspaceDir = directoryManager.getCoworkWorkspaceDir();
+  const folders = configStore.getAll().authorizedFolders || [];
+  const normalizedCowork = toAbsoluteFolderPath(coworkWorkspaceDir);
+  const existing = folders.find((f: { path: string }) => toAbsoluteFolderPath(f.path) === normalizedCowork);
+  const coworkFolder = existing || { path: normalizedCowork, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() };
+  const otherFolders = folders.filter((f: { path: string }) => toAbsoluteFolderPath(f.path) !== normalizedCowork);
+  // 将 .qa-cowork-workspace 设为首位（primary）
+  configStore.setAll({ ...configStore.getAll(), authorizedFolders: [coworkFolder, ...otherFolders] });
 });
 
 ipcMain.handle('project:delete', async (event, id: string, projectPath?: string) => {
