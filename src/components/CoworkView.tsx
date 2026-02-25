@@ -91,13 +91,13 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
         window.ipcRenderer.invoke('permission:get-role').then((role) => {
             setUserRole(role as 'user' | 'admin');
         });
-        // 设置默认工作目录为 chrome-agent（仅在初始化时，如果工作目录为空）
+        // 设置默认工作目录为 .qa-cowork-workspace（协作/会话模式专属工作空间）
         (async () => {
             try {
-                const scriptsDir = await window.ipcRenderer.invoke('agent:get-scripts-dir') as string;
-                if (scriptsDir && !workingDir) {
-                    setWorkingDir(scriptsDir);
-                    await window.ipcRenderer.invoke('agent:set-working-dir', scriptsDir);
+                const coworkWorkspaceDir = await window.ipcRenderer.invoke('agent:get-cowork-workspace-dir') as string;
+                if (coworkWorkspaceDir) {
+                    setWorkingDir(coworkWorkspaceDir);
+                    await window.ipcRenderer.invoke('agent:set-working-dir', coworkWorkspaceDir);
                 }
             } catch (error) {
                 console.error('[CoworkView] Error setting default working dir:', error);
@@ -550,15 +550,15 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                         <button
                             onClick={async () => {
                                 await window.ipcRenderer.invoke('agent:new-session');
-                                // 新打开对话时，设置默认工作目录为 chrome-agent
+                                // 新打开对话时，设置默认工作目录为 .qa-cowork-workspace
                                 try {
-                                    const scriptsDir = await window.ipcRenderer.invoke('agent:get-scripts-dir') as string;
-                                    if (scriptsDir) {
-                                        setWorkingDir(scriptsDir);
-                                        await window.ipcRenderer.invoke('agent:set-working-dir', scriptsDir);
+                                    const coworkWorkspaceDir = await window.ipcRenderer.invoke('agent:get-cowork-workspace-dir') as string;
+                                    if (coworkWorkspaceDir) {
+                                        setWorkingDir(coworkWorkspaceDir);
+                                        await window.ipcRenderer.invoke('agent:set-working-dir', coworkWorkspaceDir);
                                     }
                                 } catch (error) {
-                                    console.error('[CoworkView] Error setting default scripts dir:', error);
+                                    console.error('[CoworkView] Error setting default cowork workspace dir:', error);
                                 }
                                 // 刷新历史任务列表（如果打开的话）
                                 if (showHistory) {

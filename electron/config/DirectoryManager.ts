@@ -54,6 +54,7 @@ export class DirectoryManager {
         this.ensureDirectory(this.getMcpDir());
         this.ensureDirectory(this.getCacheDir());
         this.ensureDirectory(this.getLogsDir());
+        this.ensureDirectory(this.getCoworkWorkspaceDir());
 
         this.initialized = true;
         console.log('[DirectoryManager] Directory initialization complete');
@@ -116,6 +117,14 @@ export class DirectoryManager {
      */
     public getLogsDir(): string {
         return path.join(this.baseDir, 'logs');
+    }
+
+    /**
+     * 获取协作/会话模式默认工作空间目录路径 (~/.qa-cowork-workspace/)
+     * 切换到协作或会话模式时，使用此目录作为默认工作目录
+     */
+    public getCoworkWorkspaceDir(): string {
+        return path.join(os.homedir(), '.qa-cowork-workspace');
     }
 
     /**
@@ -299,6 +308,7 @@ export class DirectoryManager {
         mcpDir: string;
         cacheDir: string;
         logsDir: string;
+        coworkWorkspaceDir: string;
         builtinResourcesDir: string;
         builtinSkillsDir: string;
         builtinMcpDir: string;
@@ -315,6 +325,7 @@ export class DirectoryManager {
             mcpDir: this.getMcpDir(),
             cacheDir: this.getCacheDir(),
             logsDir: this.getLogsDir(),
+            coworkWorkspaceDir: this.getCoworkWorkspaceDir(),
             builtinResourcesDir: this.getBuiltinResourcesDir(),
             builtinSkillsDir: this.getBuiltinSkillsDir(),
             builtinMcpDir: this.getBuiltinMcpDir(),
