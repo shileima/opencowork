@@ -7,6 +7,7 @@ export interface Session {
     title: string;
     createdAt: number;
     updatedAt: number;
+    workspaceDir?: string;
     messages: Anthropic.MessageParam[];
 }
 
@@ -39,7 +40,8 @@ class SessionStore {
             id: s.id,
             title: s.title,
             createdAt: s.createdAt,
-            updatedAt: s.updatedAt
+            updatedAt: s.updatedAt,
+            workspaceDir: s.workspaceDir
         }));
     }
 
@@ -66,12 +68,15 @@ class SessionStore {
     }
 
     // Update session messages
-    updateSession(id: string, messages: Anthropic.MessageParam[], title?: string): void {
+    updateSession(id: string, messages: Anthropic.MessageParam[], title?: string, workspaceDir?: string): void {
         const sessions = this.store.get('sessions') || [];
         const index = sessions.findIndex(s => s.id === id);
         if (index >= 0) {
             sessions[index].messages = messages;
             sessions[index].updatedAt = Date.now();
+            if (workspaceDir) {
+                sessions[index].workspaceDir = workspaceDir;
+            }
             if (title) {
                 sessions[index].title = title;
             } else if (sessions[index].title === '新会话' && messages.length > 0) {
@@ -93,7 +98,7 @@ class SessionStore {
     }
 
     // Create or update session only if it has meaningful content
-    saveSession(id: string | null, messages: Anthropic.MessageParam[]): string {
+    saveSession(id: string | null, messages: Anthropic.MessageParam[], workspaceDir?: string): string {
         // Check if there's real content (user or assistant messages with actual text)
         const hasRealContent = messages.some(m => {
             const content = m.content;
@@ -122,7 +127,7 @@ class SessionStore {
         }
 
         try {
-            this.updateSession(sessionId, messages);
+            this.updateSession(sessionId, messages, undefined, workspaceDir);
             console.log(`[SessionStore] Successfully saved session ${sessionId} with ${messages.length} messages`);
         } catch (error) {
             console.error(`[SessionStore] Error updating session ${sessionId}:`, error);
@@ -131,7 +136,7 @@ class SessionStore {
                 console.log('[SessionStore] Attempting recovery by creating new session...');
                 const newSession = this.createSession();
                 sessionId = newSession.id;
-                this.updateSession(sessionId, messages);
+                this.updateSession(sessionId, messages, undefined, workspaceDir);
                 console.log(`[SessionStore] Recovery successful, new session: ${sessionId}`);
             } else {
                 throw error; // Re-throw if we can't recover

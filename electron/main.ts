@@ -16,6 +16,7 @@ import { permissionService } from './config/PermissionService'
 
 import { getBuiltinNodePath, getBuiltinPnpmPath, getSystemNpxPath } from './utils/NodePath'
 import { resolveDeployEnv } from './utils/DeployEnvResolver'
+import { resolveShellPath, validateShellPath, getShellCandidates, resolveShellForCommand } from './utils/ShellResolver'
 import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
@@ -142,6 +143,53 @@ let isBallExpanded = false
 const BALL_SIZE = 64
 const EXPANDED_WIDTH = 340    // Match w-80 (320px) + padding
 const EXPANDED_HEIGHT = 320   // Compact height for less dramatic expansion
+
+// 右下角小窗模式：记录收缩前的位置/尺寸，便于还原
+const MINI_WINDOW_WIDTH = 430
+const MINI_WINDOW_HEIGHT = 560
+const MINI_WINDOW_MARGIN = 16
+let mainWinPreMiniState: { x: number; y: number; width: number; height: number } | null = null
+
+/**
+ * 将主窗口缩小并移至屏幕右下角，同时置顶。
+ * 仅在打开客户端外部的浏览器或应用时调用，方便用户对照查看。
+ * 打开客户端内置浏览器时不调用此函数。
+ */
+function shrinkMainWindowToBottomRight() {
+  if (!mainWin || mainWin.isDestroyed()) return
+  if (mainWin.isMinimized()) mainWin.restore()
+
+  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
+
+  // 记录还原状态（仅在未处于小窗模式时记录）
+  if (!mainWinPreMiniState) {
+    const [wx, wy] = mainWin.getPosition()
+    const [ww, wh] = mainWin.getSize()
+    mainWinPreMiniState = { x: wx, y: wy, width: ww, height: wh }
+  }
+
+  const targetX = sw - MINI_WINDOW_WIDTH - MINI_WINDOW_MARGIN
+  const targetY = sh - MINI_WINDOW_HEIGHT - MINI_WINDOW_MARGIN
+
+  mainWin.setBounds({ x: targetX, y: targetY, width: MINI_WINDOW_WIDTH, height: MINI_WINDOW_HEIGHT }, true)
+  mainWin.setAlwaysOnTop(true, 'floating')
+  mainWin.show()
+  mainWin.focus()
+
+  mainWin.webContents.send('window:enter-mini-mode')
+}
+
+/**
+ * 将主窗口从右下角小窗模式还原到之前的位置和大小。
+ */
+function restoreMainWindowFromMini() {
+  if (!mainWin || mainWin.isDestroyed()) return
+  mainWin.setAlwaysOnTop(false)
+  if (mainWinPreMiniState) {
+    mainWin.setBounds(mainWinPreMiniState, true)
+    mainWinPreMiniState = null
+  }
+}
 
 app.on('before-quit', async () => {
   app.isQuitting = true
@@ -312,6 +360,20 @@ app.whenReady().then(() => {
   const hotUpdateVersion = resourceUpdater ? directoryManager.getHotUpdateVersion() : null
   const effectiveVersion = resourceUpdater?.getCurrentVersion() || appVersion
   console.log(`[Main] App started - appVersion: ${appVersion}, hotUpdateVersion: ${hotUpdateVersion}, effectiveVersion: ${effectiveVersion}`)
+
+  // 清理过期热更新 dist：整包安装新版本后，若热更新目录版本低于应用版本，删除旧的 hot-update/dist
+  // 避免旧版前端资源遗留在热更新目录中，导致下次启动时 ResourceUpdater.getCurrentVersion 返回旧版本号
+  if (hotUpdateVersion && compareVersionsForDist(hotUpdateVersion, appVersion) < 0) {
+    try {
+      const staleDistDir = directoryManager.getHotUpdateDistDir()
+      if (fs.existsSync(staleDistDir)) {
+        fs.rmSync(staleDistDir, { recursive: true, force: true })
+        console.log(`[Main] Cleaned stale hot-update dist (hotUpdate=${hotUpdateVersion} < app=${appVersion})`)
+      }
+    } catch (cleanupErr) {
+      console.error('[Main] Failed to clean stale hot-update dist:', cleanupErr)
+    }
+  }
 
   // #region agent log - launch mode debug (H1,H2,H5)
   try {
@@ -497,11 +559,15 @@ ipcMain.handle('session:save', (event, messages: Anthropic.MessageParam[]) => {
   // Get the appropriate current session ID based on window
   const currentId = sessionStore.getSessionId(isFloatingBall)
 
-  console.log(`[Session] Saving session for ${isFloatingBall ? 'floating ball' : 'main window'}: ${messages.length} messages`)
+  // Capture current primary working directory for session binding
+  const authorizedFolders = configStore.getAll().authorizedFolders || []
+  const currentWorkspaceDir = authorizedFolders.length > 0 ? authorizedFolders[0].path : undefined
+
+  console.log(`[Session] Saving session for ${isFloatingBall ? 'floating ball' : 'main window'}: ${messages.length} messages, workspaceDir: ${currentWorkspaceDir}`)
 
   try {
     // Use the smart save method that only saves if there's meaningful content
-    const sessionId = sessionStore.saveSession(currentId, messages)
+    const sessionId = sessionStore.saveSession(currentId, messages, currentWorkspaceDir)
 
     // Update the appropriate current session ID
     if (sessionId) {
@@ -758,6 +824,7 @@ ipcMain.handle('app:open-external-url', async (_event, url: string) => {
   try {
     if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
       await shell.openExternal(url)
+      shrinkMainWindowToBottomRight()
       return { success: true }
     }
     return { success: false, error: 'Invalid URL' }
@@ -960,9 +1027,17 @@ ipcMain.handle('resource:perform-update', async () => {
       // 更新完成后获取新版本号
       const newVersion = resourceUpdater.getCurrentVersion()
       console.log(`[Main] Resource update completed. New version: ${newVersion}`)
+
+      // 更新成功后延迟 1.5 秒自动重启，给前端时间展示完成提示
+      setTimeout(() => {
+        console.log('[Main] Auto-restarting after resource update...')
+        app.relaunch()
+        app.quit()
+      }, 1500)
       
       return { 
         success: true, 
+        willRestart: true,
         message: `资源更新完成！新版本: v${newVersion}`,
         version: newVersion
       }
@@ -1196,6 +1271,10 @@ ipcMain.handle('window:set-maximized', (_event, maximized: boolean) => {
     }
   }
 })
+
+// 右下角小窗：前端主动触发缩小 / 还原
+ipcMain.handle('window:shrink-to-bottom-right', () => shrinkMainWindowToBottomRight())
+ipcMain.handle('window:restore-from-mini', () => restoreMainWindowFromMini())
 
 
 // MCP Configuration Handlers
@@ -2585,17 +2664,7 @@ console.log(`[Terminal:Diag] SHELL 环境变量: ${process.env.SHELL}`);
 console.log(`[Terminal:Diag] shell 路径 (${diagShellPath}): 存在=${fs.existsSync(diagShellPath)}`);
 console.log('[Terminal:Diag] ==================== 终端模块诊断结束 ====================');
 
-// 解析 shell 路径，确保是绝对路径且存在
-function resolveShellPath(): string {
-  const shellRaw = process.env.SHELL || '/bin/zsh';
-  let s = path.isAbsolute(shellRaw) ? shellRaw : path.join(process.env.HOME || '/', shellRaw.replace(/^~/, ''));
-  if (!fs.existsSync(s)) {
-    s = '/bin/zsh';
-    if (!fs.existsSync(s)) s = '/bin/bash';
-    if (!fs.existsSync(s)) s = '/bin/sh';
-  }
-  return s;
-}
+// resolveShellPath / validateShellPath / getShellCandidates 已提取到 ./utils/ShellResolver.ts
 
 // 构建 PTY 环境变量
 function buildPtyEnv(minimal: boolean): Record<string, string> {
@@ -2658,41 +2727,7 @@ function buildPtyEnv(minimal: boolean): Record<string, string> {
   return base;
 }
 
-// 验证 shell 文件是否存在且可执行
-function validateShellPath(shellPath: string): { valid: boolean; error?: string } {
-  if (!fs.existsSync(shellPath)) {
-    return { valid: false, error: `Shell file does not exist: ${shellPath}` };
-  }
-  try {
-    const stats = fs.statSync(shellPath);
-    if (!stats.isFile()) {
-      return { valid: false, error: `Shell path is not a file: ${shellPath}` };
-    }
-    // 检查是否可执行（Unix 权限）
-    if (process.platform !== 'win32') {
-      const mode = stats.mode;
-      const isExecutable = (mode & parseInt('111', 8)) !== 0;
-      if (!isExecutable) {
-        return { valid: false, error: `Shell file is not executable: ${shellPath}` };
-      }
-    }
-  } catch (e) {
-    return { valid: false, error: `Cannot access shell file: ${shellPath}, ${e instanceof Error ? e.message : String(e)}` };
-  }
-  return { valid: true };
-}
 
-// 尝试多种 shell 路径
-function getShellCandidates(): string[] {
-  const candidates: string[] = [];
-  const shellRaw = process.env.SHELL;
-  if (shellRaw && path.isAbsolute(shellRaw) && fs.existsSync(shellRaw)) {
-    candidates.push(shellRaw);
-  }
-  candidates.push('/bin/zsh', '/bin/bash', '/bin/sh');
-  // 去重并过滤不存在的路径
-  return [...new Set(candidates)].filter(p => fs.existsSync(p));
-}
 
 // 创建 PTY 终端
 function createPtyTerminal(
@@ -2876,17 +2911,12 @@ async function createPipeTerminal(
 ): Promise<{ success: boolean; error?: string; mode?: 'pty' | 'pipe' }> {
   const { spawn } = await import('child_process');
   
-  // 确定 shell 命令
+  // 确定 shell 命令（统一使用 ShellResolver 的候选回退逻辑）
   let shellCommand: string;
   if (process.platform === 'win32') {
     shellCommand = process.env.COMSPEC || 'cmd.exe';
   } else {
-    // 优先使用 bash
-    if (fs.existsSync('/bin/bash')) {
-      shellCommand = '/bin/bash';
-    } else {
-      shellCommand = resolveShellPath();
-    }
+    shellCommand = resolveShellForCommand() || resolveShellPath();
   }
   
   // 设置环境变量
@@ -3332,6 +3362,25 @@ async function deferredInitialization() {
       console.log('[Main] Project working dir applied for:', currentProject.name)
     }
 
+    // 无论当前处于何种模式，确保 cowork workspace 目录始终在授权列表中
+    // 避免安装新版本后首次启动时，因前端 IPC 时序问题导致协作模式工作目录未生效
+    const coworkWorkspaceDir = directoryManager.getCoworkWorkspaceDir()
+    const currentFolders = configStore.getAll().authorizedFolders || []
+    const normalizedCowork = toAbsoluteFolderPath(coworkWorkspaceDir)
+    const coworkAlreadyExists = currentFolders.some(
+      (f: { path: string }) => toAbsoluteFolderPath(f.path) === normalizedCowork
+    )
+    if (!coworkAlreadyExists) {
+      configStore.setAll({
+        ...configStore.getAll(),
+        authorizedFolders: [
+          ...currentFolders,
+          { path: coworkWorkspaceDir, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() }
+        ]
+      })
+      console.log('[Main] Cowork workspace dir added to authorized folders:', coworkWorkspaceDir)
+    }
+
     // Stage 3: 立即通知前端初始化完成，并附带当前项目，使首帧即可渲染资源管理器
     sendInitProgress('启动完成', 100)
     mainWin?.webContents.send('app:init-complete', currentProject ?? null)
@@ -3428,6 +3477,7 @@ async function initializeAgentAsync() {
     // Create agent instance (fast, no IO)
     const maxTokens = configStore.getMaxTokens();
     mainAgent = new AgentRuntime(apiKey, mainWin, model, apiUrl, maxTokens);
+    mainAgent.onShrinkWindow = () => shrinkMainWindowToBottomRight();
 
     // Initialize Skills + MCP in parallel (the slow part)
     sendInitProgress('加载 Skills', 30)
@@ -3469,6 +3519,7 @@ function initializeFloatingBallAgent() {
 
   console.log('[Main] Creating floating ball agent (main agent is ready)...')
   floatingBallAgent = new AgentRuntime(apiKey, floatingBallWin, configStore.getModel(), configStore.getApiUrl(), configStore.getMaxTokens());
+  floatingBallAgent.onShrinkWindow = () => shrinkMainWindowToBottomRight();
 
   // Skills 和 MCP 已被主 agent 加载过，这里的 initialize 会命中 SkillManager 的 cooldown 缓存
   floatingBallAgent.initialize().then(() => {
@@ -3589,7 +3640,7 @@ function createMainWindow() {
   mainWin = new BrowserWindow({
     width: DEFAULT_WINDOW_WIDTH,
     height: DEFAULT_WINDOW_HEIGHT,
-    minWidth: 400,
+    minWidth: 430,
     minHeight: 600,
     icon: iconImage || iconPath,
     frame: false, // Custom frame for consistent look
@@ -3705,20 +3756,21 @@ function createMainWindow() {
 
   // Handle external links：localhost 和部署域名用内置浏览器打开，其他用系统浏览器
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
-    // localhost / 127.0.0.1 - 使用内置浏览器
+    // localhost / 127.0.0.1 - 使用内置浏览器，不缩小窗口
     if (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1') ||
         url.startsWith('https://localhost') || url.startsWith('https://127.0.0.1')) {
       mainWin?.webContents.send('agent:open-browser-preview', url)
       return { action: 'deny' }
     }
-    // 部署相关域名 - 使用内置浏览器
+    // 部署相关域名 - 使用内置浏览器，不缩小窗口
     if (url.includes('.autocode.test.sankuai.com') || url.includes('aie.sankuai.com/rdc_host')) {
       mainWin?.webContents.send('agent:open-browser-preview', url)
       return { action: 'deny' }
     }
-    // 其他外部链接 - 使用系统默认浏览器
+    // 其他外部链接 - 使用系统默认浏览器，缩小窗口至右下角
     if (url.startsWith('https:') || url.startsWith('http:')) {
       shell.openExternal(url)
+      shrinkMainWindowToBottomRight()
       return { action: 'deny' }
     }
     return { action: 'allow' }

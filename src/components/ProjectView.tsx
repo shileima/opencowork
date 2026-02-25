@@ -22,6 +22,7 @@ interface ProjectViewProps {
     onToggleTaskPanel: () => void;
     isExplorerPanelHidden: boolean;
     onToggleExplorerPanel: () => void;
+    isNarrowWindow?: boolean;
     /** App 已加载的当前项目，用于尽早渲染资源管理器，不等 ProjectView 自身 loadCurrentProject 完成 */
     appCurrentProject?: Project | null;
 }
@@ -64,6 +65,7 @@ export function ProjectView({
     onToggleTaskPanel,
     isExplorerPanelHidden,
     onToggleExplorerPanel,
+    isNarrowWindow = false,
     appCurrentProject
 }: ProjectViewProps) {
     const { t } = useI18n();
@@ -97,10 +99,14 @@ export function ProjectView({
     defaultTaskTitleRef.current = t('newTask');
     const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const hoverRightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const isExplorerPanelHiddenRef = useRef(isExplorerPanelHidden);
+    const onToggleExplorerPanelRef = useRef(onToggleExplorerPanel);
     currentTaskIdRef.current = currentTaskId;
     currentProjectRef.current = currentProject;
     historyRef.current = history;
     multiTabEditorRefRef.current = multiTabEditorRef;
+    isExplorerPanelHiddenRef.current = isExplorerPanelHidden;
+    onToggleExplorerPanelRef.current = onToggleExplorerPanel;
 
     // 用 App 的 currentProject 尽早驱动渲染；删除项目后 App 置为 null 时也同步清空，避免资源管理器仍显示已删项目
     useEffect(() => {
@@ -240,9 +246,13 @@ export function ProjectView({
         });
 
         // 监听 Agent 触发打开浏览器预览（本地启动成功后）：已有浏览器 tab 则仅切换到该 tab 并打开 URL，不关闭其他 tab
+        // 同时自动收起右侧资源管理器，让浏览器预览获得更多空间
         const removeBrowserPreviewListener = window.ipcRenderer.on('agent:open-browser-preview', (_event, ...args) => {
             const url = args[0] as string;
             multiTabEditorRefRef.current?.openBrowserTab?.(url);
+            if (!isExplorerPanelHiddenRef.current) {
+                onToggleExplorerPanelRef.current();
+            }
         });
 
         const removeContextSwitchedListener = window.ipcRenderer.on('agent:context-switched', async (_event, ...args) => {
@@ -573,60 +583,78 @@ export function ProjectView({
                             />
                         </div>
 
-                        {/* 中间区域：聊天 + 编辑器（左右布局，可拖拽调整） */}
+                        {/* 中间区域：窄窗口仅聊天，宽窗口聊天 + 编辑器（左右布局，可拖拽调整） */}
                         <div className="flex-1 min-w-0">
-                            <ResizableSplitPane
-                                leftPanel={
-                                    <div className="flex flex-col h-full min-w-0">
-                                        {/* 与右侧 tab 栏同高，同款 border-b，使下边线与左侧无缝连接 */}
-                                        <div className="h-10 shrink-0 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900" />
-                                        <div className="flex-1 min-h-0 overflow-hidden">
-                                            <ChatPanel
-                                                history={history}
-                                                streamingText={streamingText}
-                                                onSendMessage={handleSendMessageWithRename}
-                                                onAbort={onAbort}
-                                                isProcessing={isProcessing}
-                                                workingDir={currentProject.path}
-                                                config={config}
-                                                setConfig={setConfig}
-                                                lockedProjectName={currentProject.name}
-                                                isLoadingHistory={isLoadingHistory}
-                                            />
-                                        </div>
+                            {isNarrowWindow ? (
+                                <div className="flex flex-col h-full min-w-0">
+                                    <div className="flex-1 min-h-0 overflow-hidden">
+                                        <ChatPanel
+                                            history={history}
+                                            streamingText={streamingText}
+                                            onSendMessage={handleSendMessageWithRename}
+                                            onAbort={onAbort}
+                                            isProcessing={isProcessing}
+                                            workingDir={currentProject.path}
+                                            config={config}
+                                            setConfig={setConfig}
+                                            lockedProjectName={currentProject.name}
+                                            isLoadingHistory={isLoadingHistory}
+                                        />
                                     </div>
-                                }
-                                rightPanel={
-                                    <MultiTabEditor
-                                        projectPath={currentProject.path}
-                                        agentContent={streamingText}
-                                        onFileChange={handleFileChange}
-                                        onFileSave={handleFileSave}
-                                        onRef={setMultiTabEditorRef}
-                                        pendingOpenFile={pendingOpenFile}
-                                        onConsumePendingOpenFile={() => setPendingOpenFile(null)}
-                                    />
-                                }
-                                initialRatio={splitRatio}
-                                onRatioChange={async (ratio) => {
-                                    setSplitRatio(ratio);
-                                    // 保存到配置
-                                    try {
-                                        await window.ipcRenderer.invoke('config:set-all', {
-                                            chatEditorSplitRatio: ratio
-                                        });
-                                    } catch (error) {
-                                        console.error('[ProjectView] Failed to save split ratio:', error);
+                                </div>
+                            ) : (
+                                <ResizableSplitPane
+                                    leftPanel={
+                                        <div className="flex flex-col h-full min-w-0">
+                                            {/* 与右侧 tab 栏同高，同款 border-b，使下边线与左侧无缝连接 */}
+                                            <div className="h-10 shrink-0 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900" />
+                                            <div className="flex-1 min-h-0 overflow-hidden">
+                                                <ChatPanel
+                                                    history={history}
+                                                    streamingText={streamingText}
+                                                    onSendMessage={handleSendMessageWithRename}
+                                                    onAbort={onAbort}
+                                                    isProcessing={isProcessing}
+                                                    workingDir={currentProject.path}
+                                                    config={config}
+                                                    setConfig={setConfig}
+                                                    lockedProjectName={currentProject.name}
+                                                    isLoadingHistory={isLoadingHistory}
+                                                />
+                                            </div>
+                                        </div>
                                     }
-                                }}
-                                minSize={20}
-                                leftMinSizePx={390}
-                                rightMinSizePx={390}
-                            />
+                                    rightPanel={
+                                        <MultiTabEditor
+                                            projectPath={currentProject.path}
+                                            agentContent={streamingText}
+                                            onFileChange={handleFileChange}
+                                            onFileSave={handleFileSave}
+                                            onRef={setMultiTabEditorRef}
+                                            pendingOpenFile={pendingOpenFile}
+                                            onConsumePendingOpenFile={() => setPendingOpenFile(null)}
+                                        />
+                                    }
+                                    initialRatio={splitRatio}
+                                    onRatioChange={async (ratio) => {
+                                        setSplitRatio(ratio);
+                                        try {
+                                            await window.ipcRenderer.invoke('config:set-all', {
+                                                chatEditorSplitRatio: ratio
+                                            });
+                                        } catch (error) {
+                                            console.error('[ProjectView] Failed to save split ratio:', error);
+                                        }
+                                    }}
+                                    minSize={20}
+                                    leftMinSizePx={390}
+                                    rightMinSizePx={390}
+                                />
+                            )}
                         </div>
 
-                        {/* 右侧悬停检测区域（仅在资源管理器收起时显示） */}
-                        {isExplorerPanelHidden && (
+                        {/* 右侧悬停检测区域（仅在资源管理器收起且非窄窗口时显示） */}
+                        {isExplorerPanelHidden && !isNarrowWindow && (
                             <div
                                 className="absolute right-0 top-0 bottom-0 w-2 z-50 cursor-pointer"
                                 onMouseEnter={handleRightEdgeMouseEnter}
@@ -635,14 +663,16 @@ export function ProjectView({
                             />
                         )}
 
-                        {/* 区域四：资源管理器 */}
-                        <div className={`transition-all duration-300 flex flex-col h-full ${isExplorerPanelHidden ? 'w-0 overflow-hidden' : 'w-64'} bg-white dark:bg-zinc-900`}>
-                            <FileExplorer
-                                projectPath={currentProject.path}
-                                onOpenFile={handleOpenFile}
-                                onFileDeleted={(path) => multiTabEditorRef?.closeTabByFilePath?.(path)}
-                            />
-                        </div>
+                        {/* 区域四：资源管理器（窄窗口下隐藏） */}
+                        {!isNarrowWindow && (
+                            <div className={`transition-all duration-300 flex flex-col h-full ${isExplorerPanelHidden ? 'w-0 overflow-hidden' : 'w-64'} bg-white dark:bg-zinc-900`}>
+                                <FileExplorer
+                                    projectPath={currentProject.path}
+                                    onOpenFile={handleOpenFile}
+                                    onFileDeleted={(path) => multiTabEditorRef?.closeTabByFilePath?.(path)}
+                                />
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

@@ -1,7 +1,8 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { ChatInput } from '../ChatInput';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CopyButton } from '../CopyButton';
+import { Pencil } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import { useI18n } from '../../i18n/I18nContext';
 
@@ -34,6 +35,11 @@ export function ChatPanel({
 }: ChatPanelProps) {
     const { t } = useI18n();
     const scrollRef = useRef<HTMLDivElement>(null);
+    const [editPrefill, setEditPrefill] = useState<string | null>(null);
+
+    const handleEditMessage = (content: string) => {
+        setEditPrefill(content);
+    };
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -94,8 +100,16 @@ export function ChatPanel({
                                                         {content}
                                                     </div>
                                                     {content && content.trim().length > 0 && (
-                                                        <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <div className="flex items-center justify-end gap-0.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                                             <CopyButton content={content} size="sm" />
+                                                            <button
+                                                                onClick={() => handleEditMessage(content)}
+                                                                className="p-1 inline-flex items-center justify-center rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 transition-all duration-200"
+                                                                title={t('edit')}
+                                                                aria-label={t('edit')}
+                                                            >
+                                                                <Pencil size={14} />
+                                                            </button>
                                                         </div>
                                                     )}
                                                 </div>
@@ -121,7 +135,7 @@ export function ChatPanel({
                                     <div className="text-stone-700 dark:text-zinc-300 text-xs leading-5 max-w-none">
                                         <div className="relative group">
                                             <MarkdownRenderer content={streamingText} isDark={true} className="prose-sm !text-xs !leading-5" />
-                                            <span className="inline-block w-2 h-5 bg-orange-500 ml-0.5 animate-pulse" />
+                                            <span className="inline-block w-[3px] h-[1em] bg-current ml-0.5 align-middle rounded-sm animate-[blink_1s_step-end_infinite]" />
                                             {streamingText && streamingText.trim().length > 0 && (
                                                 <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                     <CopyButton content={streamingText} size="sm" />
@@ -133,9 +147,18 @@ export function ChatPanel({
                             )}
 
                             {isProcessing && !streamingText && (
-                                <div className="flex items-center gap-2 text-stone-400 text-[11px] animate-pulse">
-                                    <div className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-bounce" />
-                                    <span>{t('thinking')}</span>
+                                <div className="flex items-end gap-1 text-stone-400 dark:text-zinc-600">
+                                    <svg className="w-2.5 h-2.5 shrink-0 opacity-50 mb-px" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
+                                        <path d="M9 18h6" />
+                                        <path d="M10 22h4" />
+                                    </svg>
+                                    <span className="text-[10px] font-light tracking-wide leading-none">{t('thinking')}</span>
+                                    <span className="flex items-end gap-[2px] pb-px">
+                                        <span className="w-[3px] h-[3px] rounded-full bg-stone-400 dark:bg-zinc-600 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '0ms'}} />
+                                        <span className="w-[3px] h-[3px] rounded-full bg-stone-400 dark:bg-zinc-600 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '200ms'}} />
+                                        <span className="w-[3px] h-[3px] rounded-full bg-stone-400 dark:bg-zinc-600 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '400ms'}} />
+                                    </span>
                                 </div>
                             )}
                         </>
@@ -155,6 +178,8 @@ export function ChatPanel({
                     config={config}
                     setConfig={setConfig}
                     lockedProjectName={lockedProjectName}
+                    prefillText={editPrefill}
+                    onPrefillConsumed={() => setEditPrefill(null)}
                 />
             </div>
         </div>

@@ -12,6 +12,7 @@ import { getPlaywrightEnvVars } from '../../utils/PlaywrightPath';
 import { ensurePlaywrightForAutomation } from '../../utils/PlaywrightEnsure';
 import { nodeVersionManager } from '../../utils/NodeVersionManager';
 import { ErrorDetector, DetectedError } from './ErrorDetector';
+import { resolveShellForCommand } from '../../utils/ShellResolver';
 
 const execAsync = promisify(exec);
 
@@ -884,6 +885,12 @@ export class FileSystemTools {
             
             console.log(`[FileSystemTools] Executing command: ${command} in ${workingDir}`);
 
+            const resolvedShell = resolveShellForCommand();
+            console.log(`[FileSystemTools] Resolved shell: ${resolvedShell}`);
+            if (!resolvedShell) {
+                return `Command execution failed: No usable shell found on this system. Checked: /bin/zsh, /bin/bash, /bin/sh. Please verify shell availability.`;
+            }
+
             // 开发服务器命令：后台运行，统一端口 3000，便于内置浏览器预览
             if (isDevServerCommand) {
                 const PROJECT_DEV_PORT = 3000;
@@ -899,7 +906,6 @@ export class FileSystemTools {
                         : command.trimEnd() + portHostArg;
                 }
                 await this.killProcessOnPort(PROJECT_DEV_PORT);
-                const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
                 
                 console.log(`[FileSystemTools] Starting dev server with command: ${runCommand}`);
                 console.log(`[FileSystemTools] Using Node.js: ${nodePath}`);
@@ -910,9 +916,9 @@ export class FileSystemTools {
                 const child = spawn(runCommand, [], {
                     cwd: workingDir,
                     env: env,
-                    shell,
+                    shell: resolvedShell,
                     detached: true,
-                    stdio: ['ignore', 'pipe', 'pipe'] // 捕获输出以便调试
+                    stdio: ['ignore', 'pipe', 'pipe'],
                 });
                 
                 // 跟踪子进程和端口
@@ -999,13 +1005,12 @@ export class FileSystemTools {
             if (isPreviewServerCommand) {
                 const PROJECT_PREVIEW_PORT = 4173;
                 await this.killProcessOnPort(PROJECT_PREVIEW_PORT);
-                const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
 
                 console.log(`[FileSystemTools] Starting preview server with command: ${command}`);
                 const child = spawn(command, [], {
                     cwd: workingDir,
                     env: env,
-                    shell,
+                    shell: resolvedShell,
                     detached: true,
                     stdio: ['ignore', 'pipe', 'pipe'],
                 });
@@ -1038,9 +1043,9 @@ export class FileSystemTools {
                 cwd: workingDir,
                 env: env,
                 timeout: timeout,
-                maxBuffer: 1024 * 1024 * 10, // 10MB buffer
+                maxBuffer: 1024 * 1024 * 10,
                 encoding: 'utf-8',
-                shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/bash'
+                shell: resolvedShell,
             });
 
             // 如果是自动化测试命令，执行完成后清理 Chrome for Testing 进程

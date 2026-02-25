@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Minus, Square, X, Zap, FolderKanban, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, ChevronDown, FolderOpen, FolderPlus, Trash2, Loader2, Rocket, CheckCircle } from 'lucide-react';
+import { Minus, Square, X, Zap, FolderKanban, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, ChevronDown, FolderOpen, FolderPlus, Trash2, Loader2, Rocket, CheckCircle, Monitor } from 'lucide-react';
 import { CoworkView } from './components/CoworkView';
 import { SettingsView } from './components/SettingsView';
 import { ConfirmDialog, useConfirmations } from './components/ConfirmDialog';
@@ -33,6 +33,22 @@ function App() {
   const projectButtonRef = useRef<HTMLButtonElement>(null);
   const { pendingRequest, handleConfirm, handleDeny } = useConfirmations();
   const { t } = useI18n();
+
+  const NARROW_BREAKPOINT = 880;
+  const [isNarrowWindow, setIsNarrowWindow] = useState(() => window.innerWidth < NARROW_BREAKPOINT);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const narrow = window.innerWidth < NARROW_BREAKPOINT;
+      setIsNarrowWindow(narrow);
+      if (narrow) {
+        setIsTaskPanelHidden(true);
+        setIsExplorerPanelHidden(true);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // 当切换到 Project 模式时最大化窗口，切换回 Cowork 时恢复窗口大小
   useEffect(() => {
@@ -99,6 +115,17 @@ function App() {
       };
     }
   }, [activeView]);
+
+  // 窗口缩小到右下角时，自动收起左侧任务面板和右侧资源管理器
+  useEffect(() => {
+    const removeMiniModeListener = window.ipcRenderer.on('window:enter-mini-mode', () => {
+      setIsTaskPanelHidden(true);
+      setIsExplorerPanelHidden(true);
+    });
+    return () => {
+      removeMiniModeListener();
+    };
+  }, []);
 
   // 点击外部关闭项目下拉菜单
   useEffect(() => {
@@ -374,6 +401,18 @@ ${err}
     return `**🚀 ${t('deployLogTitle')}**\n\n\`\`\`deploy-log\n${clean}\n\`\`\``;
   };
 
+  // Preview handler: creates a new task and sends a message to run the local service and open browser
+  const handlePreview = async () => {
+    if (!currentProject?.id || isProcessing) return;
+
+    // Create a new task for preview
+    const result = await window.ipcRenderer.invoke('project:task:create', currentProject.id, t('preview') || '预览') as { success: boolean; task?: { id: string } };
+    if (!result.success) return;
+
+    // Send message to start local service and open browser at localhost:3000
+    await handleSendMessage('请运行本地开发服务（npm run dev 或类似命令），启动成功后自动打开内置浏览器 localhost:3000 进行预览。');
+  };
+
   // Deploy handler
   const handleDeploy = async () => {
     if (!currentProject?.path || deployStatus === 'deploying') return;
@@ -464,13 +503,15 @@ ${err}
     <div className="h-screen w-full bg-[#FAF8F5] dark:bg-zinc-950 flex flex-col overflow-hidden font-sans text-stone-900 dark:text-zinc-100">
       {/* Custom Titlebar */}
       <header
-        className={`h-10 border-b border-stone-200/80 dark:border-zinc-800 flex items-center justify-between bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm shrink-0 transition-colors relative z-50 ${navigator.userAgent.includes('Mac') ? 'pl-20 pr-3' : 'px-3'
+        className={`h-10 border-b border-stone-200/80 dark:border-zinc-800 flex items-center bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm shrink-0 transition-colors relative z-50 ${navigator.userAgent.includes('Mac') ? 'pl-20 pr-3' : 'px-3'
           }`}
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        onDoubleClick={() => window.ipcRenderer.invoke('window:maximize')}
       >
-        <div className="flex items-center gap-4" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        {/* Left section: Logo + title + panel toggles */}
+        <div className="flex items-center gap-2 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <img src="./icon.png" alt="Logo" className="w-6 h-6 rounded-md object-cover" />
-          <span className="font-medium text-stone-700 dark:text-zinc-200 text-sm">QACowork</span>
+          <span className="font-medium text-stone-700 dark:text-zinc-200 text-sm mr-2">QACowork</span>
           
           {/* Task Panel Toggle Button - Only show in Project view */}
           {activeView === 'project' && (
@@ -484,8 +525,8 @@ ${err}
             </button>
           )}
 
-          {/* Project Selector - Only show in Project view */}
-          {activeView === 'project' && (
+          {/* Project Selector - Only show in Project view when wide enough */}
+          {activeView === 'project' && !isNarrowWindow && (
             <div className="relative" ref={projectDropdownRef}>
               <button
                 ref={projectButtonRef}
@@ -585,8 +626,15 @@ ${err}
             </div>
           )}
           
+        </div>
+
+        {/* Center drag region (fills remaining space, fully draggable) */}
+        <div className="flex-1" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
+
+        {/* Right section: Navigation tabs + version + action buttons */}
+        <div className="flex items-center gap-3 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           {/* Navigation Tabs */}
-          <div className="flex items-center gap-0.5 bg-stone-100 dark:bg-zinc-800 rounded-lg p-0.5 ml-4">
+          <div className="flex items-center gap-0.5 bg-stone-100 dark:bg-zinc-800 rounded-lg p-0.5">
             <button
               onClick={() => setActiveView('cowork')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'cowork'
@@ -609,13 +657,11 @@ ${err}
             </button>
           </div>
           {appVersion && (
-            <span className="text-xs text-stone-400 dark:text-zinc-500 ml-0 shrink-0">{appVersion}</span>
+            <span className="text-xs text-stone-400 dark:text-zinc-500 shrink-0">{appVersion}</span>
           )}
-        </div>
 
-        <div className="flex items-center gap-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          {/* Explorer Panel Toggle - Only show in Project view */}
-          {activeView === 'project' && (
+          {/* Explorer Panel Toggle - Only show in Project view when wide enough */}
+          {activeView === 'project' && !isNarrowWindow && (
             <button
               onClick={() => setIsExplorerPanelHidden(!isExplorerPanelHidden)}
               className="p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 rounded transition-colors"
@@ -625,8 +671,25 @@ ${err}
               {isExplorerPanelHidden ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
             </button>
           )}
-          {/* Deploy Button - Only show in Project view */}
-          {activeView === 'project' && currentProject && (
+          {/* Preview Button - Only show in Project view when wide enough */}
+          {activeView === 'project' && currentProject && !isNarrowWindow && (
+            <button
+              onClick={handlePreview}
+              disabled={isProcessing}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                isProcessing
+                  ? 'bg-blue-400 text-white cursor-not-allowed'
+                  : 'bg-blue-500 hover:bg-blue-600 text-white'
+              }`}
+              title={t('previewButtonTitle')}
+              aria-label={t('preview')}
+            >
+              <Monitor size={14} />
+              {t('preview') || '预览'}
+            </button>
+          )}
+          {/* Deploy Button - Only show in Project view when wide enough */}
+          {activeView === 'project' && currentProject && !isNarrowWindow && (
             <button
               onClick={handleDeploy}
               disabled={deployStatus === 'deploying'}
@@ -712,6 +775,7 @@ ${err}
             onToggleTaskPanel={() => setIsTaskPanelHidden(!isTaskPanelHidden)}
             isExplorerPanelHidden={isExplorerPanelHidden}
             onToggleExplorerPanel={() => setIsExplorerPanelHidden(!isExplorerPanelHidden)}
+            isNarrowWindow={isNarrowWindow}
             appCurrentProject={currentProject}
           />
         )}

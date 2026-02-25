@@ -21,6 +21,7 @@ interface SessionSummary {
     title: string;
     createdAt: number;
     updatedAt: number;
+    workspaceDir?: string;
 }
 
 interface Script {
@@ -47,6 +48,8 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     const [mode, setMode] = useState<Mode>('work');
     const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set());
     const [streamingText, setStreamingText] = useState('');
+    // 内部执行状态：脚本执行（不经过 App.tsx handleSendMessage）期间为 true
+    const [isInternalProcessing, setIsInternalProcessing] = useState(false);
     const [workingDir, setWorkingDir] = useState<string | null>(null);
     const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -107,6 +110,8 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
         const removeStreamListener = window.ipcRenderer.on('agent:stream-token', (_event, ...args) => {
             const token = args[0] as string;
             setStreamingText(prev => prev + token);
+            // 收到 stream token 说明 agent 正在运行，确保 isInternalProcessing 为 true
+            setIsInternalProcessing(true);
         });
 
         // Listen for config updates from main process (e.g. settings change)
@@ -131,6 +136,8 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
         const removeDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
             const data = args[0] as { timestamp?: number; taskId?: string };
             console.log(`[CoworkView] agent:done event received:`, data);
+            setIsInternalProcessing(false);
+            setStreamingText('');
             if (data?.taskId) {
                 // 通过 taskId (sessionId) 找到对应的 scriptId 并移除运行状态
                 setRunningScripts(prev => {
@@ -222,6 +229,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
         // Listen for abort events
         const removeAbortListener = window.ipcRenderer.on('agent:aborted', () => {
             setStreamingText('');
+            setIsInternalProcessing(false);
             setPermissionRequest(null);
         });
 
@@ -231,6 +239,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             const msg = typeof payload === 'string' ? payload : (payload?.message ?? '');
             console.error('[CoworkView] Received agent error:', msg);
             setError(msg);
+            setIsInternalProcessing(false);
             setStreamingText(''); // Stop streaming effect on error
         });
 
@@ -516,19 +525,10 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                             {t('cowork')}
                         </button>
                         <button
-                            onClick={async () => {
+                            onClick={() => {
                                 setMode('automation');
                                 setShowScripts(true);
-                                // 切换到自动化模式时，自动设置工作目录为 chrome-agent
-                                try {
-                                    const scriptsDir = await window.ipcRenderer.invoke('agent:get-scripts-dir') as string;
-                                    if (scriptsDir) {
-                                        setWorkingDir(scriptsDir);
-                                        await window.ipcRenderer.invoke('agent:set-working-dir', scriptsDir);
-                                    }
-                                } catch (error) {
-                                    console.error('[CoworkView] Error setting scripts dir:', error);
-                                }
+                                // 切换到自动化模式时，不修改工作目录，保持 .qa-cowork-workspace
                             }}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-all ${mode === 'automation' ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm' : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
                                 }`}
@@ -630,17 +630,27 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                             key={session.id}
                                             className="group relative p-3 rounded-lg hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors border border-transparent hover:border-stone-100 dark:hover:border-zinc-700"
                                         >
-                                            <p className="text-xs font-medium text-stone-700 dark:text-zinc-300 line-clamp-2 leading-relaxed">
+                                            <p className="text-xs font-medium text-stone-700 dark:text-zinc-300 line-clamp-2 leading-relaxed pr-16">
                                                 {session.title}
                                             </p>
-                                            <p className="text-[10px] text-stone-400 mt-1">
-                                                {new Date(session.updatedAt).toLocaleString('zh-CN', {
-                                                    month: 'short',
-                                                    day: 'numeric',
-                                                    hour: '2-digit',
-                                                    minute: '2-digit'
-                                                })}
-                                            </p>
+                                            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                                <p className="text-[10px] text-stone-400">
+                                                    {new Date(session.updatedAt).toLocaleString('zh-CN', {
+                                                        month: 'short',
+                                                        day: 'numeric',
+                                                        hour: '2-digit',
+                                                        minute: '2-digit'
+                                                    })}
+                                                </p>
+                                                {session.workspaceDir && (
+                                                    <span
+                                                        className="text-[9px] px-1.5 py-0.5 rounded-full bg-stone-100 dark:bg-zinc-700 text-stone-500 dark:text-zinc-400 max-w-[120px] truncate"
+                                                        title={session.workspaceDir}
+                                                    >
+                                                        {session.workspaceDir.replace(/^.*[\\/]/, '') || session.workspaceDir}
+                                                    </span>
+                                                )}
+                                            </div>
                                             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                                 <button
                                                     onClick={async () => {
@@ -797,6 +807,9 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                     // 保持在当前模式，不切换到 work 模式
                                                     
                                                     try {
+                                                        // 执行脚本前立即显示执行中状态
+                                                        setIsInternalProcessing(true);
+                                                        setStreamingText('');
                                                         // 执行脚本（script:execute 会使用当前会话，不清空历史）
                                                         const result = await window.ipcRenderer.invoke('script:execute', script.id) as { success: boolean; error?: string; sessionId?: string };
                                                         if (result.success && result.sessionId) {
@@ -809,10 +822,12 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                                 return newMap;
                                                             });
                                                         } else {
+                                                            setIsInternalProcessing(false);
                                                             setError(result.error || '执行脚本失败');
                                                         }
                                                         // 注意：会话会在 agent:history-update 事件触发时自动保存和刷新列表
                                                     } catch (err) {
+                                                        setIsInternalProcessing(false);
                                                         setError('执行脚本时出错');
                                                         console.error(err);
                                                     }
@@ -1034,7 +1049,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                     <div className="text-stone-700 dark:text-zinc-300 text-[13px] leading-6 max-w-none">
                                         <div className="relative group">
                                             <MarkdownRenderer content={streamingText} isDark={true} className="prose-sm" />
-                                            <span className="inline-block w-2 h-5 bg-orange-500 ml-0.5 animate-pulse" />
+                                            <span className="inline-block w-[3px] h-[1em] bg-current ml-0.5 align-middle rounded-sm animate-[blink_1s_step-end_infinite]" />
                                             {streamingText && streamingText.trim().length > 0 && (
                                                 <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                     <CopyButton content={streamingText} size="sm" />
@@ -1047,10 +1062,19 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                         </>
                     )}
 
-                    {isProcessing && !streamingText && (
-                        <div className="flex items-center gap-2 text-stone-400 text-sm animate-pulse">
-                            <div className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-bounce" />
-                            <span>{t('thinking')}</span>
+                    {(isProcessing || isInternalProcessing) && !streamingText && (
+                        <div className="flex items-center gap-1.5 text-stone-400 dark:text-zinc-500 text-sm">
+                            <svg className="w-4 h-4 shrink-0 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
+                                <path d="M9 18h6" />
+                                <path d="M10 22h4" />
+                            </svg>
+                            <span className="text-[13px]">{t('thinking')}</span>
+                            <span className="flex items-end gap-[2px] ml-0.5 mb-[1px]">
+                                <span className="w-[3px] h-[3px] rounded-full bg-stone-400/60 dark:bg-zinc-500/60 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '0ms'}} />
+                                <span className="w-[3px] h-[3px] rounded-full bg-stone-400/60 dark:bg-zinc-500/60 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '200ms'}} />
+                                <span className="w-[3px] h-[3px] rounded-full bg-stone-400/60 dark:bg-zinc-500/60 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '400ms'}} />
+                            </span>
                         </div>
                     )}
                 </div>
@@ -1061,10 +1085,11 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             <ChatInput
                 onSendMessage={(msg) => {
                     setStreamingText('');
+                    setIsInternalProcessing(true);
                     onSendMessage(msg);
                 }}
                 onAbort={onAbort}
-                isProcessing={isProcessing}
+                isProcessing={isProcessing || isInternalProcessing}
                 workingDir={workingDir}
                 onSelectFolder={handleSelectFolder}
                 mode={mode}
