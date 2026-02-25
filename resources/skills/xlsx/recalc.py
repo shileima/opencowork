@@ -13,12 +13,52 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 
+def _get_libreoffice_user_macro_dir() -> str:
+    """Return LibreOffice user macro directory for the current OS."""
+    system = platform.system()
+    if system == 'Darwin':
+        return os.path.expanduser('~/Library/Application Support/LibreOffice/4/user/basic/Standard')
+    if system == 'Windows':
+        appdata = os.environ.get('APPDATA') or os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming')
+        return os.path.join(appdata, 'LibreOffice', '4', 'user', 'basic', 'Standard')
+    # Linux and others
+    return os.path.expanduser('~/.config/libreoffice/4/user/basic/Standard')
+
+
+def _which(cmd: str) -> str | None:
+    """Minimal cross-platform 'which' for executables."""
+    from shutil import which
+    return which(cmd)
+
+
+def _find_soffice() -> str:
+    """Find LibreOffice 'soffice' executable; return command to execute."""
+    found = _which('soffice')
+    if found:
+        return found
+
+    if platform.system() == 'Windows':
+        candidates = [
+            os.path.join(os.environ.get('PROGRAMFILES', r'C:\\Program Files'), 'LibreOffice', 'program', 'soffice.exe'),
+            os.path.join(os.environ.get('PROGRAMFILES(X86)', r'C:\\Program Files (x86)'), 'LibreOffice', 'program', 'soffice.exe'),
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+
+    # macOS app bundle fallback
+    if platform.system() == 'Darwin':
+        mac = '/Applications/LibreOffice.app/Contents/MacOS/soffice'
+        if os.path.exists(mac):
+            return mac
+
+    # Let subprocess raise a clear error
+    return 'soffice'
+
+
 def setup_libreoffice_macro():
     """Setup LibreOffice macro for recalculation if not already configured"""
-    if platform.system() == 'Darwin':
-        macro_dir = os.path.expanduser('~/Library/Application Support/LibreOffice/4/user/basic/Standard')
-    else:
-        macro_dir = os.path.expanduser('~/.config/libreoffice/4/user/basic/Standard')
+    macro_dir = _get_libreoffice_user_macro_dir()
     
     macro_file = os.path.join(macro_dir, 'Module1.xba')
     
@@ -28,7 +68,8 @@ def setup_libreoffice_macro():
                 return True
     
     if not os.path.exists(macro_dir):
-        subprocess.run(['soffice', '--headless', '--terminate_after_init'], 
+        soffice = _find_soffice()
+        subprocess.run([soffice, '--headless', '--terminate_after_init'],
                       capture_output=True, timeout=10)
         os.makedirs(macro_dir, exist_ok=True)
     
@@ -69,8 +110,9 @@ def recalc(filename, timeout=30):
     if not setup_libreoffice_macro():
         return {'error': 'Failed to setup LibreOffice macro'}
     
+    soffice = _find_soffice()
     cmd = [
-        'soffice', '--headless', '--norestore',
+        soffice, '--headless', '--norestore',
         'vnd.sun.star.script:Standard.Module1.RecalculateAndSave?language=Basic&location=application',
         abs_path
     ]
@@ -85,10 +127,10 @@ def recalc(filename, timeout=30):
                 timeout_cmd = 'gtimeout'
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
-        
+
         if timeout_cmd:
             cmd = [timeout_cmd, str(timeout)] + cmd
-    
+
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode != 0 and result.returncode != 124:  # 124 is timeout exit code

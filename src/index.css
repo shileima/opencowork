@@ -101,7 +101,7 @@
 
 @layer components {
   .user-bubble {
-    @apply bg-[#E8E4DF] text-stone-800 dark:bg-zinc-800 dark:text-zinc-200 rounded-2xl px-4 py-2.5 leading-6 shadow-sm;
+    @apply bg-[#E8E4DF] text-stone-800 dark:bg-zinc-800 dark:text-zinc-200 rounded-2xl px-4 py-2.5 text-[13px] leading-5 shadow-sm;
   }
 
   .command-block {

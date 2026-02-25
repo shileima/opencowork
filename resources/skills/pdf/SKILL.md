@@ -281,9 +281,7 @@ with open("encrypted.pdf", "wb") as output:
 | Split PDFs | pypdf | One page per file |
 | Extract text | pdfplumber | `page.extract_text()` |
 | Extract tables | pdfplumber | `page.extract_tables()` |
-| Create PDFs (Python) | reportlab | Canvas or Platypus |
-| Create PDFs (Node.js) | pdfkit | `new PDFDocument()` |
-| **Chinese text in pdfkit** | **pdfkit + font** | **Must register Chinese font** |
+| Create PDFs | reportlab | Canvas or Platypus |
 | Command line merge | qpdf | `qpdf --empty --pages ...` |
 | OCR scanned PDFs | pytesseract | Convert to image first |
 | Fill PDF forms | pdf-lib or pypdf (see forms.md) | See forms.md |
@@ -291,7 +289,6 @@ with open("encrypted.pdf", "wb") as output:
 ## Next Steps
 
 - For advanced pypdfium2 usage, see reference.md
-- For JavaScript libraries (pdf-lib, pdfkit), see reference.md
-- **For Chinese/CJK text support in pdfkit, see reference.md** (critical to avoid garbled text)
+- For JavaScript libraries (pdf-lib), see reference.md
 - If you need to fill out a PDF form, follow the instructions in forms.md
 - For troubleshooting guides, see reference.md
