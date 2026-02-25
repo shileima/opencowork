@@ -283,9 +283,11 @@ class ConfigStore {
             };
         }
         if (stored) {
+            // For isCustom providers with isPreset flag, fall back to def.apiKey if stored is empty
+            const rawKey = stored.apiKey || (stored.isPreset && def?.apiKey ? def.apiKey : '');
             return {
                 ...stored,
-                apiKey: resolveApiKey(stored.apiKey),
+                apiKey: resolveApiKey(rawKey),
             };
         }
         return undefined;
@@ -328,7 +330,8 @@ class ConfigStore {
                 };
             } else {
                 // For custom providers, preserve all fields including isPreset
-                let apiKey = s.apiKey;
+                // Fall back to default apiKey if stored is empty and provider has isPreset flag
+                let apiKey = s.apiKey || (s.isPreset && d?.apiKey ? d.apiKey : '');
                 
                 // Decrypt if encrypted
                 if (apiKey && isEncrypted(apiKey)) {
