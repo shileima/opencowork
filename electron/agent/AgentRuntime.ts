@@ -251,6 +251,9 @@ export class AgentRuntime {
     private userWantsCloseBrowser: boolean = false; // 用户是否要求关闭浏览器
     private runUsedKillProjectDevServer: boolean = false; // 本次 run 是否调用了 kill_project_dev_server，用于 agent:done 时跳过刷新内置浏览器
 
+    // 打开本地应用时缩小主窗口至右下角的回调（由 main.ts 注入）
+    public onShrinkWindow: (() => void) | null = null;
+
     // 支持并发任务：每个任务有独立的处理状态
     private activeTasks: Map<string, {
         abortController: AbortController;
@@ -384,9 +387,9 @@ export class AgentRuntime {
                 }
             }
             
-            // 创建任务上下文
+            // 创建任务上下文，以当前已有历史为基础（保证多轮对话历史累积，不丢失之前的记录）
             const abortController = new AbortController();
-            const taskHistory: Anthropic.MessageParam[] = [];
+            const taskHistory: Anthropic.MessageParam[] = this.history.slice();
             this.activeTasks.set(taskId, {
                 abortController,
                 startTime: Date.now(),
@@ -419,7 +422,8 @@ export class AgentRuntime {
                     this.broadcast('agent:history-update', taskHistory.slice());
                 }
                 // 确保状态恢复和任务清理（无论成功还是失败）
-                this.history = restoreRef.originalHistory;
+                // 用 taskHistory（包含完整历史）更新全局 history，保证下次发消息时能继续累积
+                this.history = taskHistory.length > 0 ? taskHistory : restoreRef.originalHistory;
                 this.isProcessing = originalIsProcessing;
                 this.abortController = originalAbortController;
                 this.activeTasks.delete(taskId);
@@ -734,6 +738,12 @@ export class AgentRuntime {
                 ? `${projectContext}\n\nWORKING DIRECTORY:\n- Primary (current selected project): ${authorizedFolders[0]}\n- All authorized: ${authorizedFolders.join(', ')}\n\nYou MUST primarily work within the Primary directory. When user does NOT specify a project (e.g. start/stop service), use ONLY the Primary. Always use absolute paths.`
                 : '\n\nNote: No working directory has been selected yet. Ask the user to select a folder first.';
 
+            // Read workspace context files for conversation continuity
+            const workspaceContextSection = await buildWorkspaceContextSection(
+                directoryManager.getCoworkWorkspaceDir(),
+                authorizedFolders[0]
+            );
+
             const skillsDir = os.homedir() + '/.qa-cowork/skills';
             const systemPrompt = `
 # OpenCowork Assistant System
@@ -812,8 +822,16 @@ When creating new projects or generating code, if the user does NOT specify a te
 **When to deviate**: Only use a different stack if the user explicitly specifies it (e.g., "use Next.js", "use Vue", "use npm instead of pnpm").
 
 ### Tool Usage Protocol
-1. **Skills First**: Before any task, check for relevant skills in \`${skillsDir}\`
-2. **MCP Integration**: Leverage available MCP servers for enhanced capabilities
+${currentProject ? `⚠️ **PROJECT MODE - STRICT CONSTRAINTS**:
+You are in **Project Mode**. Your ONLY purpose is to generate code files for the user's project.
+- **FORBIDDEN**: Do NOT use browser automation skills (agent-browser, chrome-agent, webapp-testing, etc.)
+- **FORBIDDEN**: Do NOT use web search or information retrieval skills
+- **FORBIDDEN**: Do NOT attempt to search the internet or access external URLs
+- **ALLOWED**: Only use \`write_file\`, \`read_file\`, \`list_dir\`, \`run_command\` (for pnpm install/dev), \`open_browser_preview\`, \`kill_project_dev_server\`
+- **ALLOWED**: Only use \`react-project-builder\` skill if needed for project structure guidance
+- If the user asks something unrelated to code generation (e.g., searching for information, querying external services), politely explain that Project Mode is focused on code generation and ask them to clarify what code they need.
+` : `1. **Skills First**: Before any task, check for relevant skills in \`${skillsDir}\`
+`}2. **MCP Integration**: Leverage available MCP servers for enhanced capabilities
 3. **Tool Prefixes**: MCP tools use namespace prefixes (e.g., \`tool_name__action\`)
 
 ### Development Server & Browser Preview
@@ -880,7 +898,7 @@ When executing Playwright automation scripts:
 ${this.skillManager.getSkillMetadata().map(s => `- ${s.name}: ${s.description}`).join('\n')}
 
 **Active MCP Servers**: ${JSON.stringify(this.mcpService.getActiveServers())}
-
+${workspaceContextSection}
 ---
 Remember: Plan internally, execute visibly. Focus on results, not process.`;
 
@@ -1108,6 +1126,10 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                             const workingDir = args.cwd || defaultCwd;
                                             await this.autoFixErrors(workingDir, previewUrl, 5);
                                         }
+                                        // 打开本地应用命令（macOS: open -a / open /path; Windows: start /B）时，缩小主窗口至右下角
+                                        if (this.onShrinkWindow && this.isOpenLocalAppCommand(args.command)) {
+                                            this.onShrinkWindow();
+                                        }
                                     } else {
                                         result = 'User denied the command execution.';
                                     }
@@ -1325,6 +1347,20 @@ ${skillInfo.instructions}
         }
     }
 
+    /**
+     * 检测命令是否为打开本地应用的命令。
+     * macOS: `open -a AppName` 或 `open /path/to/App.app`
+     * Windows: `start "" "AppName.exe"` 或 `start /B ...`
+     */
+    private isOpenLocalAppCommand(command: string): boolean {
+        const cmd = command.trim();
+        // macOS: open -a <AppName> 或 open /Applications/...app 或 open ~/...app
+        if (/^open\s+(-a\s+|.*\.app\b)/i.test(cmd)) return true;
+        // Windows: start 命令启动应用
+        if (/^start\s+/i.test(cmd) && !/^start\s+http/i.test(cmd)) return true;
+        return false;
+    }
+
     // Broadcast to all windows. When taskId is provided, always attach it to payload so renderer can update task status.
     private broadcast(channel: string, data?: unknown, taskId?: string) {
         let payload: unknown = data;
@@ -1480,4 +1516,53 @@ ${skillInfo.instructions}
         this.abort();
         this.mcpService.dispose();
     }
+}
+
+/**
+ * 读取单个文件内容，失败时返回 null
+ */
+async function readFileOptional(filePath: string): Promise<string | null> {
+    try {
+        if (fs.existsSync(filePath)) {
+            return fs.readFileSync(filePath, 'utf-8');
+        }
+    } catch {
+        // ignore
+    }
+    return null;
+}
+
+/**
+ * 构建工作空间上下文注入段落
+ * 读取全局指引文件和用户偏好，以及项目级 CLAUDE.md（如存在）
+ */
+async function buildWorkspaceContextSection(
+    coworkWorkspaceDir: string,
+    primaryWorkingDir?: string
+): Promise<string> {
+    const sections: string[] = [];
+
+    // 1. 全局行为指引 (~/.qa-cowork-workspace/CLAUDE.md)
+    const globalGuide = await readFileOptional(path.join(coworkWorkspaceDir, 'CLAUDE.md'));
+    if (globalGuide) {
+        sections.push(`## Assistant Guide\n${globalGuide.trim()}`);
+    }
+
+    // 2. 用户偏好记忆 (~/.qa-cowork-workspace/user-preferences.md)
+    const userPrefs = await readFileOptional(path.join(coworkWorkspaceDir, 'user-preferences.md'));
+    if (userPrefs) {
+        sections.push(`## User Preferences\n${userPrefs.trim()}`);
+    }
+
+    // 3. 项目级指引（当前工作目录/CLAUDE.md，仅当与全局工作空间不同时）
+    if (primaryWorkingDir && primaryWorkingDir !== coworkWorkspaceDir) {
+        const projectGuide = await readFileOptional(path.join(primaryWorkingDir, 'CLAUDE.md'));
+        if (projectGuide) {
+            sections.push(`## Project Instructions (${primaryWorkingDir})\n${projectGuide.trim()}`);
+        }
+    }
+
+    if (sections.length === 0) return '';
+
+    return '\n\n---\n\n' + sections.join('\n\n');
 }

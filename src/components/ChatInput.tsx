@@ -13,6 +13,10 @@ interface ChatInputProps {
     setConfig: (config: any) => void;
     /** Project 模式：锁定项目名称，不显示文件夹选择按钮 */
     lockedProjectName?: string | null;
+    /** 外部预填文本（编辑消息时使用） */
+    prefillText?: string | null;
+    /** 预填文本消费后的回调，用于清空外部状态 */
+    onPrefillConsumed?: () => void;
 }
 
 export function ChatInput({
@@ -24,7 +28,9 @@ export function ChatInput({
     mode,
     config,
     setConfig,
-    lockedProjectName
+    lockedProjectName,
+    prefillText,
+    onPrefillConsumed
 }: ChatInputProps) {
     const { t } = useI18n();
     const [input, setInput] = useState('');
@@ -64,6 +70,21 @@ export function ChatInput({
         'minimax_intl': 'MiniMax (海外)',
         'custom': '自定义'
     };
+
+    // 响应外部预填文本（编辑消息）
+    useEffect(() => {
+        if (prefillText != null) {
+            setInput(prefillText);
+            onPrefillConsumed?.();
+            setTimeout(() => {
+                if (inputRef.current) {
+                    inputRef.current.focus();
+                    const len = prefillText.length;
+                    inputRef.current.setSelectionRange(len, len);
+                }
+            }, 0);
+        }
+    }, [prefillText]);
 
     // Auto-resize textarea - Isolated to this component
     useLayoutEffect(() => {

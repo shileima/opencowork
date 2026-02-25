@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Download, X, Loader2 } from 'lucide-react';
+import { Download, X, Loader2, CheckCircle } from 'lucide-react';
 
 interface UpdateNotificationProps {
     currentVersion: string;
@@ -24,6 +24,8 @@ export function UpdateNotification({
 }: UpdateNotificationProps) {
     const [isUpdating, setIsUpdating] = useState(false);
     const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+    const [updateDone, setUpdateDone] = useState(false);
+    const [countdown, setCountdown] = useState(3);
 
     useEffect(() => {
         // 监听更新进度
@@ -39,20 +41,35 @@ export function UpdateNotification({
         };
     }, []);
 
+    // 更新成功后倒计时（主进程会在 1.5s 后自动重启，此处仅展示倒计时提示）
+    useEffect(() => {
+        if (!updateDone) return;
+
+        if (countdown <= 0) return;
+
+        const timer = setTimeout(() => {
+            setCountdown(prev => prev - 1);
+        }, 500);
+
+        return () => clearTimeout(timer);
+    }, [updateDone, countdown]);
+
     const handleUpdate = async () => {
         setIsUpdating(true);
         setUpdateProgress(null);
         
         try {
-            const result = await window.ipcRenderer?.invoke('resource:perform-update') as { success: boolean; error?: string } | undefined;
+            const result = await window.ipcRenderer?.invoke('resource:perform-update') as {
+                success: boolean;
+                willRestart?: boolean;
+                error?: string;
+                version?: string;
+            } | undefined;
             
             if (result && result.success) {
-                // 更新完成，提示重启
-                if (confirm('资源更新完成！是否立即重启应用以应用更改？')) {
-                    await window.ipcRenderer?.invoke('resource:restart-app');
-                } else {
-                    onClose();
-                }
+                // 主进程会自动重启，此处展示倒计时提示
+                setUpdateDone(true);
+                setCountdown(3);
             } else {
                 const errorMsg = result?.error || '未知错误';
                 alert(`资源更新失败: ${errorMsg}\n\n请检查网络连接或稍后重试。`);
@@ -101,31 +118,38 @@ export function UpdateNotification({
                 <div className="relative bg-gradient-to-r from-orange-400/20 to-amber-400/20 dark:from-orange-500/20 dark:to-amber-500/20 px-6 py-3.5">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-orange-500/10 dark:bg-orange-500/20 flex items-center justify-center shrink-0">
-                            <Download size={20} className="text-orange-600 dark:text-orange-400" />
+                            {updateDone
+                                ? <CheckCircle size={20} className="text-green-600 dark:text-green-400" />
+                                : <Download size={20} className="text-orange-600 dark:text-orange-400" />
+                            }
                         </div>
                         <div className="flex-1 min-w-0">
                             <h3 className="text-base font-bold text-orange-700 dark:text-orange-300 mb-0.5">
-                                🎉 发现新资源版本!
+                                {updateDone ? '✅ 更新完成' : '🎉 发现新资源版本!'}
                             </h3>
                             <p className="text-sm text-orange-600 dark:text-orange-400">
-                                当前: v{currentVersion} → 最新: v{latestVersion} {formatSize(updateSize)}
+                                {updateDone
+                                    ? `应用即将重启以应用新版本...`
+                                    : `当前: v${currentVersion} → 最新: v${latestVersion} ${formatSize(updateSize)}`
+                                }
                             </p>
                         </div>
-                        <button
-                            onClick={onClose}
-                            disabled={isUpdating}
-                            className="p-1.5 text-orange-500 dark:text-orange-400 hover:bg-orange-100 dark:hover:bg-orange-900/30 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            aria-label="关闭"
-                        >
-                            <X size={18} />
-                        </button>
+                        {!isUpdating && !updateDone && (
+                            <button
+                                onClick={onClose}
+                                className="p-1.5 text-orange-500 dark:text-orange-400 hover:bg-orange-100 dark:hover:bg-orange-900/30 rounded-lg transition-colors"
+                                aria-label="关闭"
+                            >
+                                <X size={18} />
+                            </button>
+                        )}
                     </div>
                 </div>
 
                 {/* Content */}
                 <div className="p-5 bg-white dark:bg-zinc-900">
                     {/* Progress Bar */}
-                    {isUpdating && updateProgress && (
+                    {isUpdating && !updateDone && updateProgress && (
                         <div className="mb-4 space-y-2">
                             <div className="flex justify-between items-center text-sm">
                                 <span className="text-orange-700 dark:text-orange-300 font-medium">
@@ -149,8 +173,18 @@ export function UpdateNotification({
                         </div>
                     )}
 
+                    {/* Restart countdown */}
+                    {updateDone && (
+                        <div className="flex items-center justify-center gap-2 text-green-600 dark:text-green-400 py-1">
+                            <Loader2 size={14} className="animate-spin" />
+                            <span className="text-sm font-medium">
+                                正在重启应用，请稍候...
+                            </span>
+                        </div>
+                    )}
+
                     {/* Buttons */}
-                    {!isUpdating && (
+                    {!isUpdating && !updateDone && (
                         <div className="flex gap-2.5 justify-end">
                             <button
                                 onClick={onClose}
@@ -169,7 +203,7 @@ export function UpdateNotification({
                     )}
 
                     {/* Updating State */}
-                    {isUpdating && (
+                    {isUpdating && !updateDone && (
                         <div className="flex items-center justify-center gap-2 text-orange-600 dark:text-orange-400 py-1">
                             <Loader2 size={14} className="animate-spin" />
                             <span className="text-sm font-medium">正在更新，请稍候...</span>

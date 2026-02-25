@@ -180,7 +180,7 @@ export const translations = {
         taskHistory: 'Task History',
         noHistorySessions: 'No history sessions',
         load: 'Load',
-        thinking: 'Thinking...',
+        thinking: 'Thinking',
         inputMessage: 'Input message... (Shift+Enter for new line)',
         describeTaskPlaceholder: 'Describe task... (Shift+Enter for new line)',
         selectWorkingDirFirst: 'Please select working directory first',
@@ -384,6 +384,10 @@ export const translations = {
         noTabsOpen: 'No tabs open',
         openFileHint: 'Click a file in the file explorer to open it in the editor',
 
+        // Preview
+        preview: 'Preview',
+        previewButtonTitle: 'Run local service and open browser preview',
+
         // Deploy
         deploy: 'Deploy',
         deploying: 'Deploying...',
@@ -581,7 +585,7 @@ export const translations = {
         taskHistory: '历史任务',
         noHistorySessions: '暂无历史会话',
         load: '加载',
-        thinking: '思考中...',
+        thinking: '正在思考',
         inputMessage: '输入消息... (Shift+Enter 换行)',
         describeTaskPlaceholder: '描述任务... (Shift+Enter 换行)',
         selectWorkingDirFirst: '请先选择工作目录',
@@ -773,6 +777,10 @@ export const translations = {
         // Project View - Editor
         noTabsOpen: '没有打开的标签页',
         openFileHint: '点击文件资源管理器中的文件打开编辑器',
+
+        // Preview
+        preview: '预览',
+        previewButtonTitle: '本地运行服务并打开浏览器预览',
 
         // Deploy
         deploy: '部署',

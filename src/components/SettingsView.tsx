@@ -199,6 +199,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         changelog?: string;
     } | null>(null);
     const [updatingResources, setUpdatingResources] = useState(false);
+    const [resourceUpdateDone, setResourceUpdateDone] = useState(false);
     const [clearingHotUpdate, setClearingHotUpdate] = useState(false);
     const [updateProgress, setUpdateProgress] = useState<{ 
         stage?: 'checking' | 'downloading' | 'extracting' | 'applying' | 'completed';
@@ -287,6 +288,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     // 执行资源更新
     const handlePerformResourceUpdate = async () => {
         setUpdatingResources(true);
+        setResourceUpdateDone(false);
         setUpdateProgress(null);
         try {
             // 监听更新进度
@@ -294,33 +296,30 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                 setUpdateProgress(progress);
             });
 
-            const result = await window.ipcRenderer?.invoke('resource:perform-update') as any;
+            const result = await window.ipcRenderer?.invoke('resource:perform-update') as {
+                success: boolean;
+                willRestart?: boolean;
+                error?: string;
+                version?: string;
+            } | undefined;
             
             if (removeListener) {
                 removeListener();
             }
 
             if (result && result.success) {
-                // 刷新应用信息以显示新版本
-                const info = await window.ipcRenderer?.invoke('app:info') as any;
-                setAppInfo(info);
-                
-                // 显示成功消息并提示重启
-                if (confirm('资源更新完成！是否立即重启应用以应用更改？')) {
-                    await window.ipcRenderer?.invoke('resource:restart-app');
-                } else {
-                    // 刷新资源更新信息
-                    await handleCheckResourceUpdate();
-                }
+                // 主进程会在 1.5s 后自动重启，展示重启提示即可
+                setResourceUpdateDone(true);
             } else {
                 const errorMsg = result?.error || '未知错误';
                 alert(`资源更新失败: ${errorMsg}\n\n请检查网络连接或稍后重试。`);
+                setUpdatingResources(false);
+                setUpdateProgress(null);
             }
         } catch (error: any) {
             console.error('Resource update failed', error);
             const errorMsg = error?.message || '未知错误';
             alert(`资源更新失败: ${errorMsg}\n\n请检查开发者控制台获取详细信息。`);
-        } finally {
             setUpdatingResources(false);
             setUpdateProgress(null);
         }
@@ -328,23 +327,21 @@ export function SettingsView({ onClose }: SettingsViewProps) {
 
     // 清理热更新目录（整包更新后仍显示旧界面时使用，重启后将使用内置资源）
     const handleClearHotUpdate = async () => {
-        if (!confirm('确定要清理热更新目录吗？重启后将使用应用内置的前端资源版本。')) return;
         setClearingHotUpdate(true);
         try {
             const result = await window.ipcRenderer?.invoke('resource:clear-hot-update') as { success: boolean; error?: string; message?: string };
             if (result?.success) {
-                const info = await window.ipcRenderer?.invoke('app:info') as any;
-                setAppInfo(info);
-                if (confirm(result.message ?? '已清理。是否立即重启应用？')) {
-                    await window.ipcRenderer?.invoke('resource:restart-app');
-                }
+                // 清理成功后自动重启应用
+                setTimeout(() => {
+                    window.ipcRenderer?.invoke('resource:restart-app');
+                }, 800);
             } else {
                 alert(result?.error ?? '清理失败');
+                setClearingHotUpdate(false);
             }
         } catch (error: any) {
             console.error('Clear hot update failed', error);
             alert(error?.message ?? '清理失败');
-        } finally {
             setClearingHotUpdate(false);
         }
     };
@@ -1817,16 +1814,18 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                                 注: 首次更新需下载完整资源包
                                                             </p>
                                                         </div>
-                                                        <button
-                                                            onClick={handlePerformResourceUpdate}
-                                                            disabled={updatingResources}
-                                                            className="w-full px-3 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                                                        >
-                                                            {updatingResources && <Loader2 size={14} className="animate-spin" />}
-                                                            {updatingResources ? '更新中...' : '立即更新'}
-                                                        </button>
+                                                        {!resourceUpdateDone && (
+                                                            <button
+                                                                onClick={handlePerformResourceUpdate}
+                                                                disabled={updatingResources}
+                                                                className="w-full px-3 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                                            >
+                                                                {updatingResources && <Loader2 size={14} className="animate-spin" />}
+                                                                {updatingResources ? '更新中...' : '立即更新'}
+                                                            </button>
+                                                        )}
                                                         {/* 进度区域：使用固定高度避免内容变化时的布局抖动 */}
-                                                        {updateProgress && (
+                                                        {updateProgress && !resourceUpdateDone && (
                                                             <div className="mt-2 space-y-1">
                                                                 <div className="flex justify-between text-xs text-amber-700 dark:text-amber-300 h-4 min-w-0">
                                                                     <span className="truncate flex-1 min-w-0 mr-2">
@@ -1856,6 +1855,13 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                                 <p className="text-xs text-amber-600 dark:text-amber-400 font-mono truncate h-4 leading-4" title={updateProgress.current}>
                                                                     {updateProgress.current}
                                                                 </p>
+                                                            </div>
+                                                        )}
+                                                        {/* 更新完成：展示重启提示 */}
+                                                        {resourceUpdateDone && (
+                                                            <div className="mt-2 flex items-center justify-center gap-2 text-green-600 dark:text-green-400 py-2 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-700">
+                                                                <Loader2 size={13} className="animate-spin shrink-0" />
+                                                                <span className="text-sm font-medium">更新完成，正在重启应用...</span>
                                                             </div>
                                                         )}
                                                     </div>

@@ -1,6 +1,6 @@
 ---
 name: agent-browser
-description: Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications, or extract information from web pages.
+description: Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use ONLY in Cowork (协作) mode when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications, or extract information from web pages. DO NOT use in Project (项目) mode - Project mode is exclusively for code generation.
 allowed-tools: Bash(agent-browser:*)
 ---
 
