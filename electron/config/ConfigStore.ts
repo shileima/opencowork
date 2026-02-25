@@ -91,7 +91,7 @@ const defaultProviders: Record<string, ProviderConfig> = {
     'custom': {
         id: 'custom',
         name: '自定义',
-        apiKey: 'ENCRYPTED:I/8TmhI7yKbUOwCFkVeVCQ==:eWCxb+AuF7rUt51Y44qw0Y5mpL4Hd9ZziwBFRuHT5EXnTaep80DG+upbdNwo9oAz',
+        apiKey: 'ENCRYPTED:zGZwbvx1R37mveafnzwneQ==:lEy+LbvgUNPM3VDoDBWhdMXtyB78h3tTxDPTKJtwB2U+nXEmp7pTX6xGJ4H1y/ZB',
         apiUrl: 'http://ccr.waimai.test.sankuai.com',
         model: 'oneapi,aws.claude-sonnet-4.5',
         maxTokens: DEFAULT_MAX_TOKENS,
@@ -185,6 +185,29 @@ class ConfigStore {
             this.store.delete('apiKey');
             this.store.delete('apiUrl');
             this.store.delete('model');
+        }
+
+        // Migrate: clear API keys that were encrypted with old machine-based key (pre fixed-key scheme)
+        // If a stored key has ENCRYPTED: prefix but fails to decrypt, it was encrypted on another machine.
+        // Clear it so the user is prompted to re-enter, avoiding repeated ERR_OSSL_BAD_DECRYPT errors.
+        const storedProviders = this.store.get('providers');
+        if (storedProviders) {
+            let hasStaleKeys = false;
+            const cleanedProviders = { ...storedProviders };
+            for (const [id, provider] of Object.entries(cleanedProviders) as [string, ProviderConfig][]) {
+                if (provider.apiKey && isEncrypted(provider.apiKey)) {
+                    try {
+                        decryptApiKey(extractEncryptedData(provider.apiKey));
+                    } catch {
+                        console.warn(`[ConfigStore] Clearing stale encrypted key for provider ${id} (encrypted with old machine key)`);
+                        cleanedProviders[id] = { ...provider, apiKey: '' };
+                        hasStaleKeys = true;
+                    }
+                }
+            }
+            if (hasStaleKeys) {
+                this.store.set('providers', cleanedProviders);
+            }
         }
 
         // Migrate authorizedFolders from string[] to FolderAuthorization[]

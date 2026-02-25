@@ -9,7 +9,6 @@
  */
 
 import crypto from 'crypto';
-import os from 'os';
 import readline from 'readline';
 
 const ALGORITHM = 'aes-256-cbc';
@@ -18,38 +17,10 @@ const SALT = 'qacowork-salt';
 const ITERATIONS = 100000;
 
 /**
- * 获取机器唯一标识
- */
-function getMachineId() {
-    try {
-        const interfaces = os.networkInterfaces();
-        const macs = [];
-        
-        for (const name of Object.keys(interfaces)) {
-            const nets = interfaces[name];
-            if (nets) {
-                for (const net of nets) {
-                    if (!net.internal && net.mac && net.mac !== '00:00:00:00:00:00') {
-                        macs.push(net.mac);
-                    }
-                }
-            }
-        }
-        
-        return macs.length > 0 ? macs[0] : os.hostname();
-    } catch (error) {
-        console.error('Failed to get machine ID:', error);
-        return os.hostname();
-    }
-}
-
-/**
- * 生成加密密钥
+ * 生成加密密钥（固定密钥，跨机器通用）
  */
 function getMachineKey() {
-    const machineId = getMachineId();
-    const keyMaterial = machineId + APP_SECRET;
-    return crypto.pbkdf2Sync(keyMaterial, SALT, ITERATIONS, 32, 'sha256');
+    return crypto.pbkdf2Sync(APP_SECRET, SALT, ITERATIONS, 32, 'sha256');
 }
 
 /**
@@ -106,11 +77,7 @@ async function main() {
     console.log('='.repeat(60));
     console.log();
     
-    // 显示机器信息
-    const machineId = getMachineId();
-    console.log(`机器标识: ${machineId}`);
-    console.log(`主机名: ${os.hostname()}`);
-    console.log(`平台: ${os.platform()}`);
+    console.log('加密密钥模式: 固定密钥（跨机器通用）');
     console.log();
     
     // 默认密钥（用户提供的）
@@ -179,10 +146,9 @@ async function main() {
         console.log('='.repeat(60));
         console.log('注意事项:');
         console.log('='.repeat(60));
-        console.log('1. 加密密钥基于当前机器特征生成');
-        console.log('2. 在不同机器上需要重新加密');
-        console.log('3. 请妥善保管原始 API 密钥');
-        console.log('4. 加密后的字符串可以安全地提交到代码仓库');
+        console.log('1. 加密密钥为固定密钥，所有机器均可解密');
+        console.log('2. 请妥善保管原始 API 密钥');
+        console.log('3. 加密后的字符串可以安全地提交到代码仓库');
         console.log();
         
     } catch (error) {
