@@ -77,21 +77,22 @@ const compareVersions = (a, b) => {
 };
 
 /**
- * 从远端拉取所有 tag，找到最大的 vX.Y.Z
+ * 直接查询远端 tag 列表（不依赖本地缓存），找到最大的 vX.Y.Z
  */
 const getLatestRemoteTag = () => {
-  try {
-    runSilent(`git fetch ${REMOTE} --tags --quiet`, { ignoreError: true });
-  } catch (_) {}
-
-  const tagsRaw = runSilent('git tag --list "v*"', { ignoreError: true });
+  // 直接列出远端 tag，避免本地缓存（来自上游 fork）的干扰
+  const tagsRaw = runSilent(`git ls-remote --tags ${REMOTE} "refs/tags/v*"`, { ignoreError: true });
   if (!tagsRaw) return null;
 
+  // 格式：<sha>\trefs/tags/vX.Y.Z 或 refs/tags/vX.Y.Z^{} (annotated tag)
   const versions = tagsRaw
     .split('\n')
-    .map((t) => t.trim())
+    .map((line) => line.trim())
     .filter(Boolean)
-    .map((t) => ({ tag: t, parts: parseVersion(t) }))
+    .map((line) => line.split('\t')[1]) // 取 ref 部分
+    .filter((ref) => ref && !ref.endsWith('^{}')) // 排除 annotated tag 的解引用行
+    .map((ref) => ref.replace('refs/tags/', ''))
+    .map((tag) => ({ tag, parts: parseVersion(tag) }))
     .filter((t) => t.parts !== null)
     .sort((a, b) => compareVersions(b.parts, a.parts));
 
