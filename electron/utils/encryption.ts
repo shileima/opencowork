@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import os from 'os';
 
 /**
  * 加密工具模块
@@ -12,45 +11,11 @@ const SALT = 'qacowork-salt';
 const ITERATIONS = 100000;
 
 /**
- * 获取机器唯一标识
- * 基于网络接口的 MAC 地址生成
- */
-function getMachineId(): string {
-    try {
-        const interfaces = os.networkInterfaces();
-        const macs: string[] = [];
-        
-        for (const name of Object.keys(interfaces)) {
-            const nets = interfaces[name];
-            if (nets) {
-                for (const net of nets) {
-                    // 跳过内部和非物理接口
-                    if (!net.internal && net.mac && net.mac !== '00:00:00:00:00:00') {
-                        macs.push(net.mac);
-                    }
-                }
-            }
-        }
-        
-        // 使用第一个有效的 MAC 地址，如果没有则使用主机名
-        return macs.length > 0 ? macs[0] : os.hostname();
-    } catch (error) {
-        console.error('[Encryption] Failed to get machine ID:', error);
-        // 回退到主机名
-        return os.hostname();
-    }
-}
-
-/**
  * 生成加密密钥
- * 基于机器 ID 和应用密钥派生
+ * 使用固定 APP_SECRET 派生，确保跨机器兼容
  */
 function getMachineKey(): Buffer {
-    const machineId = getMachineId();
-    const keyMaterial = machineId + APP_SECRET;
-    
-    // 使用 PBKDF2 派生密钥
-    return crypto.pbkdf2Sync(keyMaterial, SALT, ITERATIONS, 32, 'sha256');
+    return crypto.pbkdf2Sync(APP_SECRET, SALT, ITERATIONS, 32, 'sha256');
 }
 
 /**
