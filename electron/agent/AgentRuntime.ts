@@ -1101,7 +1101,11 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     finalContent.push({ type: 'text', text: textBuffer, citations: null });
                                     textBuffer = "";
                                 }
-                                currentToolUse = { ...chunk.content_block, input: "" };
+                                const initialInput = chunk.content_block.input;
+                                const inputStr = (typeof initialInput === 'object' && initialInput !== null)
+                                    ? JSON.stringify(initialInput)
+                                    : "";
+                                currentToolUse = { ...chunk.content_block, input: inputStr };
                             }
                             break;
                         case 'content_block_delta':
@@ -1122,12 +1126,16 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                             if (currentToolUse) {
                                 const rawInput = (currentToolUse.input ?? '').toString().trim();
                                 let parsedInput: Record<string, unknown>;
-                                if (rawInput === '') {
+                                if (rawInput === '' || rawInput === '{}') {
                                     parsedInput = {};
                                 } else {
                                     try {
                                         parsedInput = JSON.parse(rawInput) as Record<string, unknown>;
                                         if (parsedInput === null || typeof parsedInput !== 'object' || Array.isArray(parsedInput)) {
+                                            parsedInput = {};
+                                        }
+                                        if (parsedInput.error === 'Invalid JSON input' || parsedInput.error === 'Invalid JSON') {
+                                            console.warn('[AgentRuntime] Proxy returned invalid JSON input marker, treating as empty input');
                                             parsedInput = {};
                                         }
                                     } catch {
@@ -1191,6 +1199,12 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                             }
 
                             if (toolUse.type !== 'tool_use') continue;
+
+                            const inputCheck = toolUse.input as Record<string, unknown>;
+                            if (inputCheck && inputCheck.error === 'Invalid JSON input') {
+                                console.warn('[AgentRuntime] Proxy error in tool input, replacing with empty object');
+                                (toolUse as any).input = {};
+                            }
 
                             console.log(`Executing tool: ${toolUse.name}`);
                             let result = "Tool execution failed or unknown tool.";
@@ -1406,12 +1420,8 @@ ${skillInfo.instructions}
                                         }
                                     }
                                 }
-                                // Check if input has parse error
-                                const inputObj = toolUse.input as Record<string, unknown>;
-                                if (inputObj && inputObj.error === "Invalid JSON input") {
-                                    // Provide simpler error, just raw info
-                                    result = `Error: The tool input was not valid JSON. Please fix the JSON format and retry. Raw input length: ${(inputObj.raw as string)?.length || 0}`;
-                                }
+                                // Note: "Invalid JSON input" proxy errors are now handled
+                                // pre-execution (input replaced with {} before tool dispatch)
                             } catch (toolErr: unknown) {
                                 result = `Error executing tool: ${(toolErr as Error).message}`;
                             }
