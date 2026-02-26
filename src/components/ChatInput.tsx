@@ -5,7 +5,7 @@ import { useI18n } from '../i18n/I18nContext';
 const useAppVersion = () => {
     const [version, setVersion] = useState<string>('');
     useEffect(() => {
-        window.ipcRenderer.invoke('app:get-version').then((v: string) => setVersion(v)).catch(() => {});
+        window.ipcRenderer.invoke('app:get-version').then((v: unknown) => setVersion(v as string)).catch(() => {});
     }, []);
     return version;
 };
