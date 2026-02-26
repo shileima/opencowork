@@ -2,6 +2,14 @@ import React, { useState, useRef, useLayoutEffect, useEffect } from 'react';
 import { ArrowUp, FolderOpen, Square, ChevronDown, Check, X, Image } from 'lucide-react';
 import { useI18n } from '../i18n/I18nContext';
 
+const useAppVersion = () => {
+    const [version, setVersion] = useState<string>('');
+    useEffect(() => {
+        window.ipcRenderer.invoke('app:get-version').then((v: string) => setVersion(v)).catch(() => {});
+    }, []);
+    return version;
+};
+
 interface ChatInputProps {
     onSendMessage: (message: string | { content: string, images: string[] }) => void;
     onAbort: () => void;
@@ -33,6 +41,7 @@ export function ChatInput({
     onPrefillConsumed
 }: ChatInputProps) {
     const { t } = useI18n();
+    const appVersion = useAppVersion();
     const [input, setInput] = useState('');
     const [images, setImages] = useState<string[]>([]);
     const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
@@ -123,6 +132,8 @@ export function ChatInput({
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
+            // 中文等 IME 组合输入（拼音选字）时，不拦截 Enter，让输入法先确认选字
+            if (e.nativeEvent.isComposing) return;
             e.preventDefault();
             handleSubmit(e as any);
         }
@@ -399,7 +410,7 @@ export function ChatInput({
                 </form>
 
                 <p className="text-[11px] text-stone-400 dark:text-zinc-600 text-center mt-1.5">
-                    {t('aiDisclaimer')}
+                    {t('aiDisclaimer')}{appVersion && <span className="ml-1 opacity-70">{appVersion}</span>}
                 </p>
             </div>
         </div>

@@ -105,11 +105,13 @@
   }
 
   .command-block {
-    @apply bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm;
+    @apply bg-white/80 dark:bg-zinc-900/80 border border-stone-200/80 dark:border-zinc-800/60 rounded-xl overflow-hidden;
+    @apply shadow-[0_1px_3px_rgba(0,0,0,0.04)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.2)];
+    @apply backdrop-blur-sm;
   }
 
   .command-block-header {
-    @apply flex items-center justify-between px-4 py-3 hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer;
+    @apply flex items-center justify-between px-3 py-2.5 hover:bg-stone-50/80 dark:hover:bg-zinc-800/50 transition-colors cursor-pointer;
   }
 
   .steps-indicator {
@@ -322,4 +324,48 @@
   font-size: 14px;
   line-height: 1.2;
   letter-spacing: 0;
+}
+
+@keyframes ellipsis {
+  0%   { width: 0; }
+  25%  { width: 0.5em; }
+  50%  { width: 1em; }
+  75%  { width: 1.5em; }
+  100% { width: 0; }
+}
+
+@keyframes shimmer-thinking {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.shimmer-thinking-text {
+  background-image: linear-gradient(
+    90deg,
+    #78716c 0%,
+    #78716c 25%,
+    #d6d3d1 50%,
+    #78716c 75%,
+    #78716c 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer-thinking 2s linear infinite;
+}
+
+.dark .shimmer-thinking-text {
+  background-image: linear-gradient(
+    90deg,
+    #71717a 0%,
+    #71717a 25%,
+    #e4e4e7 50%,
+    #71717a 75%,
+    #71717a 100%
+  );
 }

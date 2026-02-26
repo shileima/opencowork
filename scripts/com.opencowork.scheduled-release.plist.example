@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.opencowork.scheduled-release</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd /path/to/opencowork && ./scripts/scheduled-release.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>36</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/tmp/opencowork-release.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/opencowork-release.err</string>
+</dict>
+</plist>

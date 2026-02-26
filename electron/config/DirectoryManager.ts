@@ -54,7 +54,7 @@ export class DirectoryManager {
         this.ensureDirectory(this.getMcpDir());
         this.ensureDirectory(this.getCacheDir());
         this.ensureDirectory(this.getLogsDir());
-        this.ensureDirectory(this.getCoworkWorkspaceDir());
+        this.ensureDirectory(this.getCoworkOutputDir());
 
         // 初始化工作空间上下文文件（用于保持对话连续性）
         this.ensureContextFiles();
@@ -65,7 +65,7 @@ export class DirectoryManager {
 
     /**
      * 初始化工作空间上下文文件
-     * 在 ~/.qa-cowork-workspace/ 下创建 CLAUDE.md 和 user-preferences.md 模板（如不存在）
+     * 在 ~/.qa-cowork/ 下创建 CLAUDE.md 和 user-preferences.md 模板（如不存在）
      */
     private ensureContextFiles(): void {
         const workspaceDir = this.getCoworkWorkspaceDir();
@@ -143,11 +143,19 @@ export class DirectoryManager {
     }
 
     /**
-     * 获取协作/会话模式默认工作空间目录路径 (~/.qa-cowork-workspace/)
-     * 切换到协作或会话模式时，使用此目录作为默认工作目录
+     * 获取协作/会话模式默认工作空间目录路径 (~/.qa-cowork/)
+     * 统一使用 .qa-cowork 作为默认工作目录
      */
     public getCoworkWorkspaceDir(): string {
-        return path.join(os.homedir(), '.qa-cowork-workspace');
+        return this.baseDir;
+    }
+
+    /**
+     * 获取协作模式文件输出目录路径 (~/.qa-cowork/out/)
+     * Cowork 模式下 AI 生成的非代码文件（Excel、PDF、图片等）统一输出到此目录
+     */
+    public getCoworkOutputDir(): string {
+        return path.join(this.baseDir, 'out');
     }
 
     /**
@@ -305,6 +313,22 @@ export class DirectoryManager {
     }
 
     /**
+     * 获取 SSO token 存储文件路径 (~/.qa-cowork/sso)
+     * 参考小美搭档 ~/.xiaomei-cowork-sso 方案，存储 access_token / refresh_token
+     */
+    public getSsoTokenPath(): string {
+        return path.join(this.baseDir, 'sso');
+    }
+
+    /**
+     * 获取用户身份信息存储文件路径 (~/.qa-cowork/userinfo)
+     * 参考小美搭档 ~/.xiaomei-cowork-userinfo 方案，存储姓名、工号等
+     */
+    public getUserInfoPath(): string {
+        return path.join(this.baseDir, 'userinfo');
+    }
+
+    /**
      * 验证目录是否存在且可访问
      */
     public validateDirectory(dirPath: string): boolean {
@@ -332,6 +356,7 @@ export class DirectoryManager {
         cacheDir: string;
         logsDir: string;
         coworkWorkspaceDir: string;
+        coworkOutputDir: string;
         builtinResourcesDir: string;
         builtinSkillsDir: string;
         builtinMcpDir: string;
@@ -349,6 +374,7 @@ export class DirectoryManager {
             cacheDir: this.getCacheDir(),
             logsDir: this.getLogsDir(),
             coworkWorkspaceDir: this.getCoworkWorkspaceDir(),
+            coworkOutputDir: this.getCoworkOutputDir(),
             builtinResourcesDir: this.getBuiltinResourcesDir(),
             builtinSkillsDir: this.getBuiltinSkillsDir(),
             builtinMcpDir: this.getBuiltinMcpDir(),
@@ -372,13 +398,13 @@ const CLAUDE_MD_TEMPLATE = `# OpenCowork 助手指南
 
 **先读取用户信息**：
 \`\`\`
-Read ~/.qa-cowork-workspace/user-preferences.md
+Read ~/.qa-cowork/user-preferences.md
 \`\`\`
 根据读取的信息了解用户是谁、有什么偏好，并据此调整回答风格和内容。
 
 ## 自动学习
 
-当检测到以下内容时，**自动记录**到 \`~/.qa-cowork-workspace/user-preferences.md\`：
+当检测到以下内容时，**自动记录**到 \`~/.qa-cowork/user-preferences.md\`：
 
 1. **个人信息** — 用户提到姓名、团队、项目、角色
 2. **用户纠正错误** — 记录正确做法

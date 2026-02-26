@@ -7,18 +7,27 @@ import { FloatingBallPage } from './components/FloatingBallPage';
 import { ProjectView } from './components/ProjectView';
 import { TerminalWindow } from './pages/TerminalWindow';
 import { SplashScreen } from './components/SplashScreen';
+import { SsoLoginView } from './components/SsoLoginView';
 import { useI18n } from './i18n/I18nContext';
 import Anthropic from '@anthropic-ai/sdk';
+
+interface SsoUserInfo {
+  name: string;
+  subject: string;
+  mtEmpId: number;
+  expire: number;
+}
 
 type ViewType = 'cowork' | 'project';
 
 function App() {
   const [isAppReady, setIsAppReady] = useState(false);
+  const [ssoUser, setSsoUser] = useState<SsoUserInfo | null>(null);
+  const [ssoChecked, setSsoChecked] = useState(false);
   const [history, setHistory] = useState<Anthropic.MessageParam[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [appVersion, setAppVersion] = useState<string>('');
-  const [activeView, setActiveView] = useState<ViewType>('project');
+  const [activeView, setActiveView] = useState<ViewType>('cowork');
   const [isTaskPanelHidden, setIsTaskPanelHidden] = useState(false);
   const [isExplorerPanelHidden, setIsExplorerPanelHidden] = useState(false);
   const [projects, setProjects] = useState<any[]>([]);
@@ -55,11 +64,24 @@ function App() {
     window.ipcRenderer.invoke('window:set-maximized', activeView === 'project');
   }, [activeView]);
 
-  // 切换到协作/会话模式时，将默认工作目录设为 ~/.qa-cowork-workspace
+  // 切换到协作/会话模式时，将默认工作目录设为 ~/.qa-cowork
   useEffect(() => {
     if (activeView === 'cowork') {
       window.ipcRenderer.invoke('cowork:ensure-working-dir').catch((err) => {
         console.warn('[App] cowork:ensure-working-dir failed:', err);
+      });
+    }
+  }, [activeView]);
+
+  // 从 project 模式切换回 cowork 时，自动加载最近的历史任务
+  const prevActiveViewRef = useRef<ViewType | null>(null);
+  useEffect(() => {
+    const prev = prevActiveViewRef.current;
+    prevActiveViewRef.current = activeView;
+    if (prev === 'project' && activeView === 'cowork') {
+      setHistory([]);
+      window.ipcRenderer.invoke('session:auto-load').catch((err) => {
+        console.warn('[App] session:auto-load on switch failed:', err);
       });
     }
   }, [activeView]);
@@ -279,24 +301,37 @@ function App() {
   // Check if this is a terminal window
   const isTerminalWindow = window.location.hash.includes('terminal-window');
 
-  // 处理启动加载完成；payload 为主进程下发的 currentProject，首帧即可渲染资源管理器
-  const handleSplashComplete = (payload?: unknown) => {
+  // SSO 登录成功回调
+  const handleSsoLoginSuccess = (userInfo: SsoUserInfo) => {
+    setSsoUser(userInfo);
+    setSsoChecked(true);
+  };
+
+  // 处理启动加载完成：先做 SSO 检查，再标记 isAppReady
+  const handleSplashComplete = async (payload?: unknown) => {
     if (payload && typeof payload === 'object' && payload !== null && 'id' in payload && 'name' in payload) {
       setCurrentProject(payload);
     }
+
+    // SSO 静默检查：有本地 token 则直接恢复，无则展示登录页
+    try {
+      const result = await window.ipcRenderer.invoke('sso:check-session') as {
+        loggedIn: boolean;
+        userInfo: SsoUserInfo | null;
+      };
+      if (result.loggedIn && result.userInfo) {
+        setSsoUser(result.userInfo);
+        setSsoChecked(true);
+      }
+      // 若未登录，setSsoChecked 保持 false → 展示 SsoLoginView
+    } catch {
+      // SSO 检查失败不阻断启动（离线等情况下允许跳过）
+      setSsoChecked(true);
+    }
+
     setIsAppReady(true);
   };
 
-  // 获取应用版本号
-  useEffect(() => {
-    // 尝试从 IPC 获取版本号，如果没有则使用默认值
-    window.ipcRenderer.invoke('app:get-version').then((version) => {
-      setAppVersion(version as string || '');
-    }).catch(() => {
-      // 如果 IPC 方法不存在，使用 package.json 中的版本（在构建时注入）
-      setAppVersion(import.meta.env.VITE_APP_VERSION || '');
-    });
-  }, []);
 
   useEffect(() => {
     // Listen for history updates (don't reset isProcessing here - wait for agent:done)
@@ -373,7 +408,7 @@ ${err}
   const handleSendMessage = async (msg: string | { content: string, images: string[] }) => {
     setIsProcessing(true);
     try {
-      const result = await window.ipcRenderer.invoke('agent:send-message', msg) as { error?: string } | undefined;
+      const result = await window.ipcRenderer.invoke('agent:send-message', msg, activeView) as { error?: string } | undefined;
       if (result?.error) {
         console.error(result.error);
         setIsProcessing(false);
@@ -498,6 +533,15 @@ ${err}
     return <SplashScreen onComplete={handleSplashComplete} />;
   }
 
+  // SSO 未登录 → 展示登录页（全屏）
+  if (!ssoChecked) {
+    return (
+      <div className="h-screen w-full bg-[#FAF8F5] dark:bg-zinc-950 flex flex-col overflow-hidden font-sans">
+        <SsoLoginView onLoginSuccess={handleSsoLoginSuccess} />
+      </div>
+    );
+  }
+
   // Main App - Narrow vertical layout
   return (
     <div className="h-screen w-full bg-[#FAF8F5] dark:bg-zinc-950 flex flex-col overflow-hidden font-sans text-stone-900 dark:text-zinc-100">
@@ -510,8 +554,8 @@ ${err}
       >
         {/* Left section: Logo + title + panel toggles */}
         <div className="flex items-center gap-2 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          <img src="./icon.png" alt="Logo" className="w-6 h-6 rounded-md object-cover" />
-          <span className="font-medium text-stone-700 dark:text-zinc-200 text-sm mr-2">QACowork</span>
+          <img src="./icon.png" alt="Logo" className="w-4 h-4 rounded-sm object-cover" />
+          <span className="font-medium text-stone-700 dark:text-zinc-200 text-xs mr-2">QACowork</span>
           
           {/* Task Panel Toggle Button - Only show in Project view */}
           {activeView === 'project' && (
@@ -656,8 +700,14 @@ ${err}
               {t('project')}
             </button>
           </div>
-          {appVersion && (
-            <span className="text-xs text-stone-400 dark:text-zinc-500 shrink-0">{appVersion}</span>
+          {/* SSO 用户信息 */}
+          {ssoUser && (
+            <div className={`flex items-center rounded-lg bg-stone-100 dark:bg-zinc-800 cursor-default ${isNarrowWindow ? 'p-1' : 'gap-1.5 px-2 py-1'}`}>
+              <div className="w-5 h-5 rounded-full bg-orange-400 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
+                {ssoUser.name.charAt(0)}
+              </div>
+              {!isNarrowWindow && <span className="text-xs text-stone-600 dark:text-zinc-300 max-w-[80px] truncate">{ssoUser.name}</span>}
+            </div>
           )}
 
           {/* Explorer Panel Toggle - Only show in Project view when wide enough */}

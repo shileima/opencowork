@@ -13,6 +13,7 @@ import { scriptStore } from './config/ScriptStore'
 import { projectStore } from './config/ProjectStore'
 import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
+import { ssoStore } from './config/SsoStore'
 
 import { getBuiltinNodePath, getBuiltinPnpmPath, getSystemNpxPath } from './utils/NodePath'
 import { resolveDeployEnv } from './utils/DeployEnvResolver'
@@ -177,6 +178,41 @@ function shrinkMainWindowToBottomRight() {
   mainWin.focus()
 
   mainWin.webContents.send('window:enter-mini-mode')
+}
+
+/**
+ * 延迟若干毫秒后通过 AppleScript 将 Google Chrome for Testing 窗口最大化。
+ * 仅在 macOS 上生效；agent-browser --headed 启动后浏览器需要一小段时间初始化，
+ * 所以延迟 1.5 秒再执行最大化，确保窗口已创建。
+ */
+function maximizeChromeForTesting(delayMs = 1500) {
+  if (process.platform !== 'darwin') return
+  setTimeout(async () => {
+    const { spawn } = await import('node:child_process')
+    // 使用 spawn 传递多个 -e 参数，避免单引号转义问题
+    // 通过点击缩放按钮（绿色按钮）最大化窗口，而非全屏
+    const child = spawn('osascript', [
+      '-e', 'tell application "System Events"',
+      '-e', 'set chromeProcs to every process whose name contains "Google Chrome for Testing"',
+      '-e', 'repeat with proc in chromeProcs',
+      '-e', 'set frontmost of proc to true',
+      '-e', 'repeat with win in windows of proc',
+      '-e', 'try',
+      '-e', 'set zoomBtn to (first button of win whose subrole is "AXZoomButton")',
+      '-e', 'click zoomBtn',
+      '-e', 'end try',
+      '-e', 'end repeat',
+      '-e', 'end repeat',
+      '-e', 'end tell',
+    ])
+    child.on('error', (err: Error) => {
+      console.warn('[Main] maximizeChromeForTesting error:', err.message)
+    })
+    child.stderr?.on('data', (data: Buffer) => {
+      const msg = data.toString().trim()
+      if (msg) console.warn('[Main] maximizeChromeForTesting AppleScript:', msg)
+    })
+  }, delayMs)
 }
 
 /**
@@ -474,14 +510,15 @@ app.whenReady().then(() => {
 
 // IPC Handlers
 
-ipcMain.handle('agent:send-message', async (event, message: string | { content: string, images: string[] }) => {
+ipcMain.handle('agent:send-message', async (event, message: string | { content: string, images: string[] }, viewContext?: 'cowork' | 'project') => {
   // Determine which agent to use based on sender window
   const isFloatingBall = event.sender === floatingBallWin?.webContents
   const targetAgent = isFloatingBall ? floatingBallAgent : mainAgent
   if (!targetAgent) throw new Error('Agent not initialized')
-  // 项目视图下传入当前任务 ID 与项目 ID，以便 agent:done 时能可靠更新任务状态
-  const currentProject = isFloatingBall ? null : projectStore.getCurrentProject()
-  const taskId = isFloatingBall ? undefined : (currentProject && currentTaskIdForSession ? currentTaskIdForSession : undefined)
+  // 仅在项目视图（非协作视图）下才传入当前任务 ID 与项目 ID
+  const isCoworkView = viewContext === 'cowork' || isFloatingBall
+  const currentProject = isCoworkView ? null : projectStore.getCurrentProject()
+  const taskId = isCoworkView ? undefined : (currentProject && currentTaskIdForSession ? currentTaskIdForSession : undefined)
   const projectId = currentProject?.id
   // 开始处理时立即将任务状态设为进行中，左侧任务卡片显示正确图标
   if (projectId && taskId) {
@@ -491,7 +528,8 @@ ipcMain.handle('agent:send-message', async (event, message: string | { content: 
       targetWindow.webContents.send('project:task:updated', { projectId, taskId, updates: { status: 'active' } })
     }
   }
-  return await targetAgent.processUserMessage(message, taskId, projectId, isFloatingBall)
+  const viewCtx: 'cowork' | 'project' = isCoworkView ? 'cowork' : 'project'
+  return await targetAgent.processUserMessage(message, taskId, projectId, isFloatingBall, viewCtx)
 })
 
 ipcMain.handle('agent:abort', (event) => {
@@ -566,15 +604,18 @@ ipcMain.handle('session:save', (event, messages: Anthropic.MessageParam[]) => {
   console.log(`[Session] Saving session for ${isFloatingBall ? 'floating ball' : 'main window'}: ${messages.length} messages, workspaceDir: ${currentWorkspaceDir}`)
 
   try {
+    // 根据当前是否处于 project 模式来标记 session 来源
+    const currentProject = projectStore.getCurrentProject()
+    const sessionMode: 'cowork' | 'project' = currentProject ? 'project' : 'cowork'
+
     // Use the smart save method that only saves if there's meaningful content
-    const sessionId = sessionStore.saveSession(currentId, messages, currentWorkspaceDir)
+    const sessionId = sessionStore.saveSession(currentId, messages, currentWorkspaceDir, sessionMode)
 
     // Update the appropriate current session ID
     if (sessionId) {
       sessionStore.setSessionId(sessionId, isFloatingBall)
       
       // 如果是项目视图，尝试更新当前任务的 sessionId
-      const currentProject = projectStore.getCurrentProject()
       if (currentProject && currentTaskIdForSession) {
         const task = projectStore.getTasks(currentProject.id).find(t => t.id === currentTaskIdForSession)
         if (task && (!task.sessionId || task.sessionId === '')) {
@@ -819,15 +860,20 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
   }
 })
 
-// 打开外部链接（在系统默认浏览器中打开）
+// 打开外部链接（在系统默认浏览器中打开；美团内网改用内置浏览器，避免「扫码用户登录」报错）
 ipcMain.handle('app:open-external-url', async (_event, url: string) => {
   try {
-    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
-      await shell.openExternal(url)
-      shrinkMainWindowToBottomRight()
+    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+      return { success: false, error: 'Invalid URL' }
+    }
+    // 美团内网用内置浏览器打开，避免系统浏览器报扫码登录错误
+    if (url.includes('.sankuai.com') || url.includes('.meituan.com')) {
+      mainWin?.webContents.send('agent:open-browser-preview', url)
       return { success: true }
     }
-    return { success: false, error: 'Invalid URL' }
+    await shell.openExternal(url)
+    shrinkMainWindowToBottomRight()
+    return { success: true }
   } catch (error) {
     console.error('[Main] Error opening external URL:', error)
     return { success: false, error: (error as Error).message }
@@ -877,7 +923,7 @@ ipcMain.handle('agent:get-scripts-dir', () => {
   return directoryManager.getScriptsDir()
 })
 
-// 获取协作/会话模式默认工作空间目录路径 (~/.qa-cowork-workspace/)
+// 获取协作/会话模式默认工作空间目录路径 (~/.qa-cowork/)
 ipcMain.handle('agent:get-cowork-workspace-dir', () => {
   return directoryManager.getCoworkWorkspaceDir()
 })
@@ -890,6 +936,11 @@ ipcMain.handle('agent:set-working-dir', (_, folderPath: string) => {
   const newFolders = existing ? [existing, ...otherFolders] : [{ path: folderPath, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() }, ...otherFolders]
   configStore.set('authorizedFolders', newFolders)
   return true
+})
+
+ipcMain.handle('agent:set-language', (_, lang: string) => {
+  mainAgent?.setLanguage(lang)
+  floatingBallAgent?.setLanguage(lang)
 })
 
 ipcMain.handle('config:get-all', () => configStore.getAll())
@@ -962,6 +1013,61 @@ ipcMain.handle('app:get-version', () => {
   // 返回有效版本（优先热更新版本）
   return resourceUpdater?.getCurrentVersion() || app.getVersion()
 })
+
+// ─── SSO 登录相关 IPC ────────────────────────────────────────────────────────
+
+/** 检查本地是否有有效 SSO 会话 */
+ipcMain.handle('sso:check-session', async () => {
+  const session = await ssoStore.tryRestoreSession();
+  if (session) {
+    return { loggedIn: true, userInfo: session.userInfo };
+  }
+  return { loggedIn: false, userInfo: null };
+})
+
+/** 获取扫码登录页 URL（兼容旧调用，实际登录由 sso:start-login 通过 SDK 完成） */
+ipcMain.handle('sso:get-login-url', () => {
+  return { loginUrl: 'https://ssosv.sankuai.com/sson/login' };
+})
+
+/**
+ * 启动 SSO 登录流程（@mtfe/sso-web-oidc-cli 方案）：
+ * 1. 调用 ssoStore.login() → SDK 自动打开系统浏览器访问 ssosv.sankuai.com
+ * 2. 用户扫码后 SSO 回调本地端口（9152/10152）
+ * 3. SDK 完成授权码交换，写入标准 AT token（有效期 3 天，含 refresh_token）
+ * 4. 获取 userinfo 并通知前端
+ */
+ipcMain.handle('sso:start-login', async (_event) => {
+  try {
+    console.log('[SSO] Starting login via @mtfe/sso-web-oidc-cli...');
+    await ssoStore.login();
+    console.log('[SSO] Token obtained, fetching userinfo...');
+    const userInfo = await ssoStore.fetchUserInfo();
+    if (userInfo) {
+      mainWin?.webContents.send('sso:login-success', { userInfo });
+      return { success: true, userInfo };
+    }
+    return { success: false, error: '登录成功但获取用户信息失败，请重试' };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[SSO] Login failed:', msg);
+    return { success: false, error: msg || '登录失败，请重试' };
+  }
+})
+
+/** 获取当前登录用户信息 */
+ipcMain.handle('sso:get-user-info', async () => {
+  return ssoStore.readUserInfo();
+})
+
+/** 登出：清除本地 token 和 userinfo */
+ipcMain.handle('sso:logout', () => {
+  ssoStore.logout();
+  mainWin?.webContents.send('sso:logged-out');
+  return { success: true };
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
 
 ipcMain.handle('app:check-update', async () => {
   try {
@@ -1846,7 +1952,7 @@ ipcMain.handle('project:ensure-working-dir', () => {
   if (project) applyProjectWorkingDirs(project);
 });
 
-// 协作/会话模式：切换到 cowork 视图时，将默认工作目录设置为 ~/.qa-cowork-workspace
+// 协作/会话模式：切换到 cowork 视图时，将默认工作目录设置为 ~/.qa-cowork
 ipcMain.handle('cowork:ensure-working-dir', () => {
   const coworkWorkspaceDir = directoryManager.getCoworkWorkspaceDir();
   const folders = configStore.getAll().authorizedFolders || [];
@@ -1854,7 +1960,7 @@ ipcMain.handle('cowork:ensure-working-dir', () => {
   const existing = folders.find((f: { path: string }) => toAbsoluteFolderPath(f.path) === normalizedCowork);
   const coworkFolder = existing || { path: normalizedCowork, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() };
   const otherFolders = folders.filter((f: { path: string }) => toAbsoluteFolderPath(f.path) !== normalizedCowork);
-  // 将 .qa-cowork-workspace 设为首位（primary）
+  // 将 .qa-cowork 设为首位（primary）
   configStore.setAll({ ...configStore.getAll(), authorizedFolders: [coworkFolder, ...otherFolders] });
 });
 
@@ -3412,8 +3518,21 @@ function autoLoadLatestSession() {
     }
     
     const sessions = sessionStore.getSessions()
+    const coworkWorkspaceDir = directoryManager.getCoworkWorkspaceDir()
     if (sessions && sessions.length > 0) {
-      const sortedSessions = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+      // 只加载 cowork 模式的会话，避免加载 project 模式任务历史
+      // 判断规则：
+      //   1. 有 mode 字段时：直接按 mode === 'cowork' 判断（新数据）
+      //   2. 无 mode 字段的旧数据：通过 workspaceDir 判断
+      //      - workspaceDir 为空 或 等于 ~/.qa-cowork 目录 → cowork 会话
+      //      - workspaceDir 是其他路径（项目目录）→ project 会话，排除
+      const coworkSessions = sessions.filter(s => {
+        if (s.mode) return s.mode === 'cowork'
+        // 旧数据兜底：workspaceDir 是 cowork 目录或为空才认定为 cowork 会话
+        if (!s.workspaceDir) return true
+        return s.workspaceDir === coworkWorkspaceDir || s.workspaceDir.endsWith('/.qa-cowork') || s.workspaceDir.endsWith('\\.qa-cowork')
+      })
+      const sortedSessions = [...coworkSessions].sort((a, b) => b.updatedAt - a.updatedAt)
       const latestSession = sortedSessions[0]
       
       if (latestSession) {
@@ -3427,7 +3546,7 @@ function autoLoadLatestSession() {
         }
       }
     } else {
-      console.log('[Main] No sessions found, skipping auto-load')
+      console.log('[Main] No cowork sessions found, skipping auto-load')
     }
   } catch (error) {
     console.error('[Main] Error auto-loading latest session:', error)
@@ -3478,6 +3597,7 @@ async function initializeAgentAsync() {
     const maxTokens = configStore.getMaxTokens();
     mainAgent = new AgentRuntime(apiKey, mainWin, model, apiUrl, maxTokens);
     mainAgent.onShrinkWindow = () => shrinkMainWindowToBottomRight();
+    mainAgent.onMaximizeBrowserWindow = () => maximizeChromeForTesting();
 
     // Initialize Skills + MCP in parallel (the slow part)
     sendInitProgress('加载 Skills', 30)
@@ -3520,6 +3640,7 @@ function initializeFloatingBallAgent() {
   console.log('[Main] Creating floating ball agent (main agent is ready)...')
   floatingBallAgent = new AgentRuntime(apiKey, floatingBallWin, configStore.getModel(), configStore.getApiUrl(), configStore.getMaxTokens());
   floatingBallAgent.onShrinkWindow = () => shrinkMainWindowToBottomRight();
+  floatingBallAgent.onMaximizeBrowserWindow = () => maximizeChromeForTesting();
 
   // Skills 和 MCP 已被主 agent 加载过，这里的 initialize 会命中 SkillManager 的 cooldown 缓存
   floatingBallAgent.initialize().then(() => {
@@ -3764,6 +3885,11 @@ function createMainWindow() {
     }
     // 部署相关域名 - 使用内置浏览器，不缩小窗口
     if (url.includes('.autocode.test.sankuai.com') || url.includes('aie.sankuai.com/rdc_host')) {
+      mainWin?.webContents.send('agent:open-browser-preview', url)
+      return { action: 'deny' }
+    }
+    // 美团内网 - 使用内置浏览器打开，避免用系统默认浏览器导致「扫码用户登录」报错
+    if (url.includes('.sankuai.com') || url.includes('.meituan.com')) {
       mainWin?.webContents.send('agent:open-browser-preview', url)
       return { action: 'deny' }
     }

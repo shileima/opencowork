@@ -219,6 +219,7 @@ export const translations = {
         copyCode: 'Copy code',
         copied: 'Copied',
         copy: 'Copy',
+        reEdit: 'Re-edit',
         copyAsDoubleQuoted: 'Copy as double-quoted (for strict XML parsers)',
         copyDoubleQuoted: 'Copy (double-quoted)',
         openInFileManager: 'Open in File Manager',
@@ -398,6 +399,20 @@ export const translations = {
         deployLogTitle: 'Deployment Log',
         deploySuccessMessage: 'Deployment successful! Click the link below to visit:',
         deployFailedMessage: 'Deployment failed, please check the log for details.',
+
+        // SSO Login
+        ssoTitle: 'Sign in with Meituan SSO',
+        ssoSubtitle: 'Meituan SSO login required to continue',
+        ssoLoginButton: 'Scan QR Code to Login',
+        ssoLoggingIn: 'Waiting for scan...',
+        ssoLoginHint1: 'Click the button below, the SSO login page will open in your browser',
+        ssoLoginHint2: 'Scan the QR code with DaXiang App to complete login',
+        ssoLoginHint3: 'After login, you will be redirected automatically',
+        ssoLoginSaved: 'Login info is saved locally, no need to login again next time',
+        ssoLoginFailed: 'Login failed, please try again',
+        ssoLogout: 'Sign Out',
+        ssoCheckingSession: 'Checking login status...',
+        ssoRetry: 'Retry',
     },
     zh: {
         // Navigation
@@ -613,6 +628,7 @@ export const translations = {
         copyCode: '复制代码',
         copied: '已复制',
         copy: '复制',
+        reEdit: '重新编辑',
         copyAsDoubleQuoted: '复制为双引号格式（兼容严格 XML 解析器）',
         copyDoubleQuoted: '复制(双引号)',
         openInFileManager: '点击在文件管理器中打开',
@@ -792,6 +808,20 @@ export const translations = {
         deployLogTitle: '部署日志',
         deploySuccessMessage: '部署成功！点击以下链接访问：',
         deployFailedMessage: '部署失败，请查看日志了解详情。',
+
+        // SSO Login
+        ssoTitle: '美团 SSO 登录',
+        ssoSubtitle: '需要美团 SSO 登录以继续使用',
+        ssoLoginButton: '扫码登录',
+        ssoLoggingIn: '等待扫码登录...',
+        ssoLoginHint1: '点击下方按钮，将在系统浏览器打开 SSO 登录页',
+        ssoLoginHint2: '使用大象 App 扫码完成登录',
+        ssoLoginHint3: '登录成功后自动跳转，无需重复操作',
+        ssoLoginSaved: '登录信息将保存在本地，下次启动无需重复登录',
+        ssoLoginFailed: '登录失败，请重试',
+        ssoLogout: '退出登录',
+        ssoCheckingSession: '正在检查登录状态...',
+        ssoRetry: '重试',
     }
 };
 

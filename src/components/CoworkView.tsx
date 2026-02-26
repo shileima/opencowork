@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, memo, useCallback } from 'react';
-import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, MessageCircle, Download, Play, Edit2, Star, RefreshCw, FolderOpen } from 'lucide-react';
+import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
+import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, MessageCircle, Download, Play, Edit2, Star, RefreshCw, FolderOpen, Terminal, FileText, Search, Globe, Code2, Cpu, FolderSearch, Wrench, Copy, RotateCcw } from 'lucide-react';
 import { ChatInput } from './ChatInput';
 import { useI18n } from '../i18n/I18nContext';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -63,6 +63,8 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     const [editingScriptName, setEditingScriptName] = useState<string>('');
     // 跟踪正在运行的脚本：scriptId -> sessionId 映射
     const [runningScripts, setRunningScripts] = useState<Map<string, string>>(new Map());
+    // 重新编辑消息时的预填文本
+    const [prefillText, setPrefillText] = useState<string | null>(null);
     // 资源更新通知状态
     const [resourceUpdateAvailable, setResourceUpdateAvailable] = useState<{
         currentVersion: string;
@@ -94,7 +96,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
         window.ipcRenderer.invoke('permission:get-role').then((role) => {
             setUserRole(role as 'user' | 'admin');
         });
-        // 设置默认工作目录为 .qa-cowork-workspace（协作/会话模式专属工作空间）
+        // 设置默认工作目录为 .qa-cowork
         (async () => {
             try {
                 const coworkWorkspaceDir = await window.ipcRenderer.invoke('agent:get-cowork-workspace-dir') as string;
@@ -504,10 +506,12 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             )}
 
             {/* Top Bar with Mode Tabs and Settings */}
-            <div className="border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-2.5 flex items-center justify-between shrink-0">
+            <div className="border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2.5 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-3">
                     {/* Mode Tabs */}
                     <div className="flex items-center gap-0.5 bg-stone-100 dark:bg-zinc-800 rounded-lg p-0.5">
+                        {/* 对话 tab 暂时隐藏，保留逻辑供后续启用 */}
+                        {false && (
                         <button
                             onClick={() => setMode('chat')}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-all ${mode === 'chat' ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm' : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
@@ -516,6 +520,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                             <MessageCircle size={12} />
                             {t('chat')}
                         </button>
+                        )}
                         <button
                             onClick={() => setMode('work')}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-all ${mode === 'work' ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm' : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
@@ -528,7 +533,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                             onClick={() => {
                                 setMode('automation');
                                 setShowScripts(true);
-                                // 切换到自动化模式时，不修改工作目录，保持 .qa-cowork-workspace
+                                // 切换到自动化模式时，不修改工作目录，保持 .qa-cowork
                             }}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-all ${mode === 'automation' ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm' : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
                                 }`}
@@ -540,17 +545,17 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                 </div>
 
                 {/* History + Settings */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                     {workingDir && (
                         <span className="text-xs text-stone-400 dark:text-zinc-500 truncate w-[120px] flex-shrink-0" title={workingDir.split(/[\\/]/).pop()}>
                             📂 {workingDir.split(/[\\/]/).pop()}
                         </span>
                     )}
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-0.5">
                         <button
                             onClick={async () => {
                                 await window.ipcRenderer.invoke('agent:new-session');
-                                // 新打开对话时，设置默认工作目录为 .qa-cowork-workspace
+                                // 新打开对话时，设置默认工作目录为 .qa-cowork
                                 try {
                                     const coworkWorkspaceDir = await window.ipcRenderer.invoke('agent:get-cowork-workspace-dir') as string;
                                     if (coworkWorkspaceDir) {
@@ -569,25 +574,25 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                     }, 100);
                                 }
                             }}
-                            className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded-lg transition-colors"
+                            className="p-1 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded-md transition-colors"
                             title={t('newSession')}
                         >
-                            <Plus size={16} />
+                            <Plus size={14} />
                         </button>
                         <button
                             onClick={() => setShowHistory(!showHistory)}
-                            className={`p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded-lg transition-colors ${showHistory ? 'bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-zinc-300' : ''}`}
+                            className={`p-1 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded-md transition-colors ${showHistory ? 'bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-zinc-300' : ''}`}
                             title={t('history')}
                         >
-                            <History size={16} />
+                            <History size={14} />
                         </button>
                     </div>
                     <button
                         onClick={onOpenSettings}
-                        className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded-lg transition-colors"
+                        className="p-1 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800 rounded-md transition-colors"
                         title="Settings"
                     >
-                        <Settings size={16} />
+                        <Settings size={14} />
                     </button>
                 </div>
             </div>
@@ -1041,12 +1046,13 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                     toggleBlock={toggleBlock}
                                     showTools={mode === 'work'}
                                     onImageClick={setSelectedImage}
+                                    onEdit={(text) => setPrefillText(text)}
                                 />
                             ))}
 
                             {streamingText && streamingText.trim().length > 0 && (
                                 <div className="animate-in fade-in duration-200">
-                                    <div className="text-stone-700 dark:text-zinc-300 text-[13px] leading-6 max-w-none">
+                                    <div className="text-stone-700 dark:text-zinc-300 text-[12px] leading-6 max-w-none">
                                         <div className="relative group">
                                             <MarkdownRenderer content={streamingText} isDark={true} className="prose-sm" />
                                             <span className="inline-block w-[3px] h-[1em] bg-current ml-0.5 align-middle rounded-sm animate-[blink_1s_step-end_infinite]" />
@@ -1063,17 +1069,12 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                     )}
 
                     {(isProcessing || isInternalProcessing) && !streamingText && (
-                        <div className="flex items-center gap-1.5 text-stone-400 dark:text-zinc-500 text-sm">
-                            <svg className="w-4 h-4 shrink-0 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
-                                <path d="M9 18h6" />
-                                <path d="M10 22h4" />
+                        <div className="flex items-center gap-2 text-sm">
+                            <svg className="w-3 h-3 shrink-0 text-stone-400 dark:text-zinc-500 animate-spin" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="31.4 31.4" strokeDashoffset="0" />
                             </svg>
-                            <span className="text-[13px]">{t('thinking')}</span>
-                            <span className="flex items-end gap-[2px] ml-0.5 mb-[1px]">
-                                <span className="w-[3px] h-[3px] rounded-full bg-stone-400/60 dark:bg-zinc-500/60 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '0ms'}} />
-                                <span className="w-[3px] h-[3px] rounded-full bg-stone-400/60 dark:bg-zinc-500/60 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '200ms'}} />
-                                <span className="w-[3px] h-[3px] rounded-full bg-stone-400/60 dark:bg-zinc-500/60 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '400ms'}} />
+                            <span className="text-[11px] select-none shimmer-thinking-text">
+                                {t('thinking')}<span className="animate-[ellipsis_1.5s_steps(4,end)_infinite] overflow-hidden whitespace-nowrap inline-block w-[1.5em] align-bottom">...</span>
                             </span>
                         </div>
                     )}
@@ -1099,6 +1100,8 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                     // Also update in main process if ChatInput doesn't do it directly?
                     // ChatInput logic calls invoke, so we just update local state.
                 }}
+                prefillText={prefillText}
+                onPrefillConsumed={() => setPrefillText(null)}
             />
         </div>
     );
@@ -1106,14 +1109,42 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
 
 
 
-const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleBlock, showTools, onImageClick }: {
+type ToolAccent = { bg: string; icon: string };
+type ToolMeta = { label: string; Icon: React.ElementType; accent: ToolAccent };
+
+const TOOL_META_MAP: Record<string, ToolMeta> = {
+    run_command:    { label: '运行指令',   Icon: Terminal,    accent: { bg: 'bg-violet-100 dark:bg-violet-900/30', icon: 'text-violet-500 dark:text-violet-400' } },
+    'agent-browser': { label: 'agent-browser', Icon: Wrench, accent: { bg: 'bg-violet-100 dark:bg-violet-900/30', icon: 'text-violet-500 dark:text-violet-400' } },
+    write_file:     { label: '写入文件',   Icon: FileText,    accent: { bg: 'bg-blue-100 dark:bg-blue-900/30',   icon: 'text-blue-500 dark:text-blue-400' } },
+    read_file:      { label: '读取文件',   Icon: FileText,    accent: { bg: 'bg-sky-100 dark:bg-sky-900/30',     icon: 'text-sky-500 dark:text-sky-400' } },
+    search_files:   { label: '搜索文件',   Icon: FolderSearch,accent: { bg: 'bg-amber-100 dark:bg-amber-900/30', icon: 'text-amber-500 dark:text-amber-400' } },
+    search_replace: { label: '搜索替换',   Icon: Search,      accent: { bg: 'bg-orange-100 dark:bg-orange-900/30',icon: 'text-orange-500 dark:text-orange-400' } },
+    web_search:     { label: '网络搜索',   Icon: Globe,       accent: { bg: 'bg-emerald-100 dark:bg-emerald-900/30', icon: 'text-emerald-500 dark:text-emerald-400' } },
+    code_execute:   { label: '执行代码',   Icon: Code2,       accent: { bg: 'bg-pink-100 dark:bg-pink-900/30',   icon: 'text-pink-500 dark:text-pink-400' } },
+    computer:       { label: '控制电脑',   Icon: Cpu,         accent: { bg: 'bg-rose-100 dark:bg-rose-900/30',   icon: 'text-rose-500 dark:text-rose-400' } },
+};
+
+const DEFAULT_TOOL_META: ToolMeta = {
+    label: '执行工具',
+    Icon: Wrench,
+    accent: { bg: 'bg-stone-100 dark:bg-zinc-800', icon: 'text-stone-400 dark:text-zinc-500' },
+};
+
+const getToolMeta = (toolName?: string): ToolMeta => {
+    if (!toolName) return DEFAULT_TOOL_META;
+    return TOOL_META_MAP[toolName] ?? { ...DEFAULT_TOOL_META, label: toolName };
+};
+
+const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleBlock, showTools, onImageClick, onEdit }: {
     message: Anthropic.MessageParam,
     expandedBlocks: Set<string>,
     toggleBlock: (id: string) => void,
     showTools: boolean,
-    onImageClick: (src: string) => void
+    onImageClick: (src: string) => void,
+    onEdit?: (text: string) => void
 }) {
     const { t } = useI18n();
+    const { showToast } = useToast();
     const isUser = message.role === 'user';
 
     if (isUser && Array.isArray(message.content) && message.content[0]?.type === 'tool_result') {
@@ -1127,6 +1158,18 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
 
         // Extract images from user message
         const images = contentArray.filter((b): b is Anthropic.ImageBlockParam => 'type' in b && b.type === 'image');
+
+        const handleCopy = () => {
+            if (!text.trim()) return;
+            navigator.clipboard.writeText(text).then(() => {
+                showToast(t('copied') || '已复制', 'success');
+            });
+        };
+
+        const handleEdit = () => {
+            if (!text.trim()) return;
+            onEdit?.(text);
+        };
 
         return (
             <div className="space-y-2 max-w-[85%]">
@@ -1148,13 +1191,32 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
                     </div>
                 )}
                 {text && (
-                    <div className="relative group inline-block">
+                    <div className="group inline-block">
                         <div className="user-bubble">
                             {text}
                         </div>
-                        {text && text.trim().length > 0 && (
-                            <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <CopyButton content={text} size="sm" />
+                        {text.trim().length > 0 && (
+                            <div className="flex items-center justify-end gap-0.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button
+                                    type="button"
+                                    onClick={handleCopy}
+                                    aria-label={t('copy') || '复制'}
+                                    title={t('copy') || '复制'}
+                                    tabIndex={0}
+                                    className="p-1 rounded-md text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 transition-colors"
+                                >
+                                    <Copy size={12} />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleEdit}
+                                    aria-label={t('reEdit') || '重新编辑'}
+                                    title={t('reEdit') || '重新编辑'}
+                                    tabIndex={0}
+                                    className="p-1 rounded-md text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 transition-colors"
+                                >
+                                    <RotateCcw size={12} />
+                                </button>
                             </div>
                         )}
                     </div>
@@ -1191,7 +1253,7 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
             {groupedBlocks.map((block, i: number) => {
                 if (block.type === 'text' && block.text && block.text.trim().length > 0) {
                     return (
-                        <div key={i} className="text-stone-700 dark:text-zinc-300 text-[13px] leading-6 max-w-none">
+                        <div key={i} className="text-stone-700 dark:text-zinc-300 text-[12px] leading-6 max-w-none">
                             <div className="relative group">
                                 <MarkdownRenderer content={block.text} isDark={true} className="prose-sm" />
                                 {block.text && block.text.trim().length > 0 && (
@@ -1207,40 +1269,43 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
                 if (block.type === 'tool_group' && showTools) {
                     const toolGroup = block as ToolGroup;
                     return (
-                        <div key={i} className="space-y-2">
+                        <div key={i} className="space-y-1.5">
                             {toolGroup.items.map((tool, j: number) => {
                                 const blockId = tool.id || `tool-${i}-${j}`;
                                 const isExpanded = expandedBlocks.has(blockId);
+                                const { label, Icon, accent } = getToolMeta(tool.name);
 
                                 return (
-                                    <div key={j} className="command-block">
+                                    <div key={j} className="command-block group/tool">
                                         <div
                                             className="command-block-header"
                                             onClick={() => toggleBlock(blockId)}
                                         >
-                                            <div className="flex items-center gap-2.5">
-                                                <span className="text-stone-400 dark:text-zinc-500 text-sm">⌘</span>
-                                                <span className="text-sm text-stone-600 dark:text-zinc-300 font-medium">{tool.name || 'Running command'}</span>
+                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                <div className={`flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center ${accent.bg}`}>
+                                                    <Icon size={13} className={accent.icon} />
+                                                </div>
+                                                <span className="text-[11px] text-stone-600 dark:text-zinc-300 font-medium truncate">{label}</span>
                                             </div>
-                                            <div className="flex items-center gap-2">
-                                                {tool.name === 'write_file' && (
-                                                    <Download size={14} className="text-stone-400" />
-                                                )}
+                                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <span className="text-[9px] text-stone-400 dark:text-zinc-600 font-mono hidden group-hover/tool:inline-block transition-opacity">
+                                    {tool.name}
+                                </span>
                                                 <ChevronDown
-                                                    size={16}
-                                                    className={`text-stone-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                                                    size={14}
+                                                    className={`text-stone-400 dark:text-zinc-500 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
                                                 />
                                             </div>
                                         </div>
                                         {isExpanded && (
-                                            <div className="p-3 bg-stone-50 dark:bg-zinc-900 border-t border-stone-100 dark:border-zinc-800">
-                                                {/* For Context Skills (empty input), show a friendly message */}
+                                            <div className="px-3 pb-3 pt-2 bg-stone-50/80 dark:bg-zinc-950/60 border-t border-stone-100 dark:border-zinc-800/60">
                                                 {Object.keys(tool.input || {}).length === 0 ? (
-                                                    <div className="text-xs text-emerald-600 font-medium">
-                                                        ✓ {t('skillLoaded')}
+                                                    <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+                                                        <Check size={12} />
+                                                        <span>{t('skillLoaded')}</span>
                                                     </div>
                                                 ) : (
-                                                    <pre className="text-xs font-mono text-stone-500 dark:text-zinc-400 whitespace-pre-wrap overflow-x-auto">
+                                                    <pre className="text-[11px] font-mono text-stone-500 dark:text-zinc-400 whitespace-pre-wrap overflow-x-auto leading-relaxed">
                                                         {JSON.stringify(tool.input, null, 2)}
                                                     </pre>
                                                 )}
