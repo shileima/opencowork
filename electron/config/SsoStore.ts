@@ -1,7 +1,18 @@
 import fs from 'fs';
 import { directoryManager } from './DirectoryManager';
-// @ts-ignore – @mtfe/sso-web-oidc-cli 是美团内部包，无类型声明
-import { SSOCliClient, SSOAccessEnvType } from '@mtfe/sso-web-oidc-cli';
+
+/** @mtfe/sso-web-oidc-cli 是美团内部包，CI 环境不可用，需动态加载 */
+type SsoClientCtor = new (opts: unknown) => { login: () => Promise<SsoToken>; whoami: () => Promise<unknown> };
+let SSOCliClient: SsoClientCtor | null = null;
+let SSOAccessEnvType: { product: string } | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const mod = require('@mtfe/sso-web-oidc-cli');
+  SSOCliClient = mod.SSOCliClient as SsoClientCtor;
+  SSOAccessEnvType = mod.SSOAccessEnvType;
+} catch {
+  console.warn('[SsoStore] @mtfe/sso-web-oidc-cli not available (optional), SSO disabled');
+}
 
 /**
  * 用户身份信息（对齐小美搭档 ~/.xiaomei-cowork-userinfo 格式）
@@ -83,12 +94,14 @@ function parseAtTokenExpMs(token: string): number | null {
 const TOKEN_EXPIRE_BUFFER = 60 * 60 * 1000;  // 提前 1 小时刷新
 const TOKEN_MAX_AGE = 3 * 24 * 60 * 60 * 1000; // 3 天兜底（AT 无法解析时）
 
+type SsoClientLike = { login: () => Promise<SsoToken>; whoami: () => Promise<unknown> };
+
 class SsoStore {
     private tokenPath: string;
     private userInfoPath: string;
     private cachedToken: SsoToken | null = null;
     private cachedUserInfo: UserInfo | null = null;
-    private ssoClient: ReturnType<typeof this.createSsoClient>;
+    private ssoClient: SsoClientLike;
     private refreshPromise: Promise<boolean> | null = null;
 
     constructor() {
@@ -98,6 +111,16 @@ class SsoStore {
     }
 
     private createSsoClient() {
+        if (!SSOCliClient || !SSOAccessEnvType) {
+            return {
+                login: async () => {
+                    throw new Error('SSO not available: @mtfe/sso-web-oidc-cli not installed (e.g. in CI)');
+                },
+                whoami: async () => {
+                    throw new Error('SSO not available');
+                },
+            };
+        }
         return new SSOCliClient({
             clientId: '12d702aa62',
             accessEnv: SSOAccessEnvType.product,
