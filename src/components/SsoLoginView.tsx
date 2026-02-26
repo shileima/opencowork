@@ -85,13 +85,14 @@ export const SsoLoginView = ({ onLoginSuccess }: SsoLoginViewProps) => {
 
         try {
             // 异步调用，不阻塞 UI；登录结果通过 sso:login-success 事件或 result 返回
-            window.ipcRenderer.invoke('sso:start-login').then((result: { success: boolean; error?: string; userInfo?: UserInfo }) => {
+            window.ipcRenderer.invoke('sso:start-login').then((result: unknown) => {
+                const r = result as { success: boolean; error?: string; userInfo?: UserInfo };
                 // 若窗口被关闭（无 success）且尚未被事件处理过，恢复为 need-login
-                if (!result.success && result.error === '登录窗口已关闭') {
+                if (!r.success && r.error === '登录窗口已关闭') {
                     setStatus((prev) => prev === 'logging-in' ? 'need-login' : prev);
-                } else if (!result.success && result.error) {
+                } else if (!r.success && r.error) {
                     setStatus((prev) => prev === 'logging-in' ? 'error' : prev);
-                    setErrorMsg(result.error);
+                    setErrorMsg(r.error);
                 }
                 // 成功情况由 sso:login-success 事件处理，此处不重复处理
             }).catch((err: Error) => {

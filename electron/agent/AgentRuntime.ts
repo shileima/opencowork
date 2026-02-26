@@ -1655,15 +1655,15 @@ ${skillInfo.instructions}
         const sessionsToTry: string[] = session === 'default' ? [AgentRuntime.MEITUAN_SSO_SESSION, 'default'] : [session];
 
         let socketPath: string = '';
-        let net: typeof import('net');
-        let fsModule: typeof import('fs');
+        let net: typeof import('node:net');
+        let fsModule: typeof import('node:fs');
         let osTmpdir: string;
         try {
             const osMod = await import('node:os');
             const netMod = await import('node:net');
             const fsMod = await import('node:fs');
-            net = netMod.default ?? netMod;
-            fsModule = fsMod.default ?? fsMod;
+            net = (netMod.default ?? netMod) as typeof import('node:net');
+            fsModule = (fsMod.default ?? fsMod) as typeof import('node:fs');
             osTmpdir = (osMod.default ?? osMod).tmpdir();
         } catch (requireErr) {
             console.warn('[AgentRuntime] import failed in injectMeituanSsoCookieIfNeeded:', requireErr);
