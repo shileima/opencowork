@@ -11,7 +11,9 @@ import { configStore } from '../config/ConfigStore';
 import { directoryManager } from '../config/DirectoryManager';
 import { projectStore } from '../config/ProjectStore';
 import { sessionStore } from '../config/SessionStore';
+import { ssoStore } from '../config/SsoStore';
 import { setCurrentTaskIdForContextSwitch } from '../contextSwitchCoordinator';
+import { setMaxListeners } from 'node:events';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -21,7 +23,8 @@ const SAFE_COMMANDS = [
     'python', 'python3', 'node', 'npm', 'pip', 'pip3', 'git', 'ls', 'cat', 'head', 'tail',
     'grep', 'find', 'echo', 'pwd', 'cd', 'ls -la', 'ls -l', 'ls -a', 'tree', 'wc', 'sort',
     'uniq', 'diff', 'patch', 'tar', 'unzip', 'zip', 'gzip', 'gunzip', 'bunzip2',
-    'curl', 'wget', 'ping', 'traceroute', 'netstat', 'ps', 'top', 'htop'
+    'curl', 'wget', 'ping', 'traceroute', 'netstat', 'ps', 'top', 'htop',
+    'agent-browser'
 ];
 
 // Dangerous patterns that always require confirmation
@@ -250,9 +253,15 @@ export class AgentRuntime {
     private lastProcessTime: number = 0;
     private userWantsCloseBrowser: boolean = false; // 用户是否要求关闭浏览器
     private runUsedKillProjectDevServer: boolean = false; // 本次 run 是否调用了 kill_project_dev_server，用于 agent:done 时跳过刷新内置浏览器
+    private language: string = 'en'; // UI 语言，用于指导 AI 回复语言
+    private currentViewContext: 'cowork' | 'project' = 'cowork'; // 当前消息来源视图，协作视图不注入项目模式约束
+    private contextSwitchRetryCount: number = 0; // 本轮消息的上下文切换重试次数，防止 400 死循环
 
     // 打开本地应用时缩小主窗口至右下角的回调（由 main.ts 注入）
     public onShrinkWindow: (() => void) | null = null;
+
+    // 通过 agent-browser --headed 打开浏览器后最大化 Chrome For Testing 窗口的回调（由 main.ts 注入）
+    public onMaximizeBrowserWindow: (() => void) | null = null;
 
     // 支持并发任务：每个任务有独立的处理状态
     private activeTasks: Map<string, {
@@ -291,6 +300,10 @@ export class AgentRuntime {
         } catch (error) {
             console.error('Failed to initialize AgentRuntime:', error);
         }
+    }
+
+    public setLanguage(lang: string) {
+        this.language = lang;
     }
 
     // Hot-Swap Configuration without reloading context
@@ -369,7 +382,9 @@ export class AgentRuntime {
         return this.history.slice();
     }
 
-    public async processUserMessage(input: string | { content: string, images: string[] }, taskId?: string, projectId?: string, isFloatingBall?: boolean) {
+    public async processUserMessage(input: string | { content: string, images: string[] }, taskId?: string, projectId?: string, isFloatingBall?: boolean, viewContext?: 'cowork' | 'project') {
+        // 根据来源视图设置上下文，协作视图不注入项目模式约束
+        this.currentViewContext = (isFloatingBall || viewContext === 'cowork') ? 'cowork' : 'project';
         // 如果提供了 taskId，使用任务级别的并发控制；否则使用全局控制（向后兼容）
         const useTaskLevelConcurrency = taskId !== undefined;
         const restoreRef = { originalHistory: this.history };
@@ -389,6 +404,7 @@ export class AgentRuntime {
             
             // 创建任务上下文，以当前已有历史为基础（保证多轮对话历史累积，不丢失之前的记录）
             const abortController = new AbortController();
+            setMaxListeners(32, abortController.signal);
             const taskHistory: Anthropic.MessageParam[] = this.history.slice();
             this.activeTasks.set(taskId, {
                 abortController,
@@ -444,7 +460,7 @@ export class AgentRuntime {
             this.lastProcessTime = Date.now();
             this.isProcessing = true;
             this.abortController = new AbortController();
-            
+            setMaxListeners(32, this.abortController.signal);
             try {
                 await this.processMessageWithContext(input, undefined, undefined, isFloatingBall, restoreRef);
             } finally {
@@ -470,6 +486,7 @@ export class AgentRuntime {
         // 重置浏览器关闭意图检测（每次新消息时重置）
         this.userWantsCloseBrowser = false;
         this.runUsedKillProjectDevServer = false;
+        this.contextSwitchRetryCount = 0;
 
         try {
             await this.skillManager.loadSkills();
@@ -554,8 +571,9 @@ export class AgentRuntime {
                 return;
             }
 
-            // 上下文超限/可重试错误：自动创建新任务（新会话）并继续执行
-            if (this.isRetryableContextError(err, error)) {
+            // 上下文超限/可重试错误：自动创建新任务（新会话）并继续执行（最多重试 1 次，防止 400 死循环）
+            if (this.isRetryableContextError(err, error) && this.contextSwitchRetryCount < 1) {
+                this.contextSwitchRetryCount++;
                 try {
                     const lastUserMsg = this.history.length > 0 ? this.history[this.history.length - 1] : null;
                     const lastUserInput = lastUserMsg && lastUserMsg.role === 'user'
@@ -685,25 +703,133 @@ export class AgentRuntime {
         return '';
     }
 
-    private buildCondensedContext(history: Anthropic.MessageParam[], lastUserInput: string): Anthropic.MessageParam[] {
-        const older = history.slice(0, -1);
-        if (older.length === 0) {
+    /**
+     * 估算消息列表的 token 数量（字符级近似：中文约 1.5 字符/token，英文约 4 字符/token）
+     * 取两者平均折衷，使用 2.5 字符/token 作为通用估算系数
+     */
+    private estimateTokenCount(messages: Anthropic.MessageParam[]): number {
+        let charCount = 0;
+        for (const msg of messages) {
+            if (typeof msg.content === 'string') {
+                charCount += msg.content.length;
+            } else if (Array.isArray(msg.content)) {
+                for (const block of msg.content as any[]) {
+                    if (block.type === 'text' && block.text) {
+                        charCount += block.text.length;
+                    } else if (block.type === 'tool_result') {
+                        const content = typeof block.content === 'string' ? block.content : JSON.stringify(block.content ?? '');
+                        charCount += content.length;
+                    } else if (block.type === 'tool_use' && block.input) {
+                        charCount += JSON.stringify(block.input).length;
+                    }
+                }
+            }
+        }
+        return Math.ceil(charCount / 2.5);
+    }
+
+    /**
+     * 将单条消息内容截断为摘要形式（保留前 N 字符 + 末尾 M 字符）
+     */
+    private truncateMessageContent(content: string, headLen = 500, tailLen = 200): string {
+        if (content.length <= headLen + tailLen + 50) return content;
+        return `${content.slice(0, headLen)}\n...[已截断 ${content.length - headLen - tailLen} 字符]...\n${content.slice(-tailLen)}`;
+    }
+
+    /**
+     * 智能压缩历史记录，采用分级策略：
+     * - 保留第一条用户消息（任务目标）
+     * - 中间消息：assistant 消息保留摘要，工具结果压缩
+     * - 保留最近 KEEP_RECENT_ROUNDS 轮（6 条消息）完整内容
+     */
+    private smartCompressHistory(history: Anthropic.MessageParam[], lastUserInput: string): Anthropic.MessageParam[] {
+        const KEEP_RECENT_ROUNDS = 3;
+        const KEEP_RECENT_COUNT = KEEP_RECENT_ROUNDS * 2; // user + assistant 各一条
+
+        if (history.length === 0) {
             return [{ role: 'user', content: lastUserInput }];
         }
 
-        const bullets: string[] = [];
-        for (const msg of older) {
-            const text = this.extractTextFromMessage(msg);
+        // 历史较短时直接保留全部
+        if (history.length <= KEEP_RECENT_COUNT + 1) {
+            const summary = `[上一轮对话因上下文过长已自动切换]\n\n用户最新请求：\n`;
+            const lastMsg = history[history.length - 1];
+            const lastInput = lastMsg?.role === 'user' ? this.extractTextFromMessage(lastMsg) : lastUserInput;
+            return [{ role: 'user', content: summary + lastInput }];
+        }
+
+        const firstMsg = history[0];
+        const recentMessages = history.slice(-KEEP_RECENT_COUNT);
+        const middleMessages = history.slice(1, -KEEP_RECENT_COUNT);
+
+        // 压缩中间消息为摘要行
+        const middleSummaryLines: string[] = [];
+        for (const msg of middleMessages) {
+            const role = msg.role === 'user' ? '用户' : 'AI';
+            let text = '';
+            if (Array.isArray(msg.content)) {
+                for (const block of msg.content as any[]) {
+                    if (block.type === 'text' && block.text) {
+                        text += block.text;
+                    } else if (block.type === 'tool_use') {
+                        text += `[调用工具: ${block.name}]`;
+                    } else if (block.type === 'tool_result') {
+                        const resultText = typeof block.content === 'string' ? block.content : JSON.stringify(block.content ?? '');
+                        text += `[工具结果: ${resultText.slice(0, 100)}${resultText.length > 100 ? '...' : ''}]`;
+                    }
+                }
+            } else if (typeof msg.content === 'string') {
+                text = msg.content;
+            }
             if (text.trim()) {
-                bullets.push(text.slice(0, 80) + (text.length > 80 ? '...' : ''));
+                middleSummaryLines.push(`${role}: ${text.slice(0, 200)}${text.length > 200 ? '...' : ''}`);
             }
         }
 
-        const summary = bullets.length > 0
-            ? `[上一轮对话因上下文过长已自动切换]\n\n简要摘要：\n${bullets.join('\n')}\n\n---\n用户最新请求：\n`
-            : `[继续执行] 用户最新请求：\n`;
+        const firstUserText = this.extractTextFromMessage(firstMsg);
+        const summaryHeader = [
+            '[上一轮对话因上下文过长已自动切换，以下为压缩摘要]',
+            '',
+            `原始任务目标：${firstUserText.slice(0, 300)}${firstUserText.length > 300 ? '...' : ''}`,
+            '',
+            '中间过程摘要：',
+            ...middleSummaryLines,
+            '',
+            '--- 以下为最近对话（完整保留）---',
+        ].join('\n');
 
-        return [{ role: 'user', content: summary + lastUserInput }];
+        const contextSummaryMsg: Anthropic.MessageParam = {
+            role: 'user',
+            content: summaryHeader
+        };
+
+        // 最近消息中，对超长工具结果做二次截断
+        const trimmedRecent = recentMessages.map(msg => {
+            if (msg.role !== 'user' || !Array.isArray(msg.content)) return msg;
+            const trimmedContent = (msg.content as any[]).map(block => {
+                if (block.type === 'tool_result') {
+                    const resultText = typeof block.content === 'string' ? block.content : JSON.stringify(block.content ?? '');
+                    if (resultText.length > 3000) {
+                        return { ...block, content: this.truncateMessageContent(resultText, 1500, 500) };
+                    }
+                }
+                return block;
+            });
+            return { ...msg, content: trimmedContent };
+        });
+
+        // 确保最后一条是用户消息；若最近消息末尾是 assistant，则补充最新请求
+        const lastRecentMsg = trimmedRecent[trimmedRecent.length - 1];
+        if (lastRecentMsg?.role !== 'user' && lastUserInput) {
+            return [contextSummaryMsg, ...trimmedRecent, { role: 'user', content: lastUserInput }];
+        }
+
+        return [contextSummaryMsg, ...trimmedRecent];
+    }
+
+    /** 兼容旧调用，内部转发到 smartCompressHistory */
+    private buildCondensedContext(history: Anthropic.MessageParam[], lastUserInput: string): Anthropic.MessageParam[] {
+        return this.smartCompressHistory(history, lastUserInput);
     }
 
     private async runLoop(_taskId?: string) {
@@ -730,7 +856,8 @@ export class AgentRuntime {
 
             // Build working directory context (Project 模式下 Primary = 当前已选项目路径)
             const authorizedFolders = permissionManager.getAuthorizedFolders();
-            const currentProject = projectStore.getCurrentProject();
+            // 协作视图不注入项目模式约束，避免 AI 误以为处于项目模式而拒绝执行协作任务
+            const currentProject = this.currentViewContext === 'cowork' ? null : projectStore.getCurrentProject();
             const projectContext = currentProject 
                 ? `\n\nCURRENT PROJECT:\n- Project Name: "${currentProject.name}"\n- Project Path: ${currentProject.path}\n\n⚠️ CRITICAL: You are working INSIDE an existing project. When the user asks to create code, a website, or an application, you MUST create files directly in the current project directory (${currentProject.path}), NOT create a new project directory. Only create a NEW project if the user explicitly asks to "create a new project" or "新建项目".`
                 : '';
@@ -745,6 +872,7 @@ export class AgentRuntime {
             );
 
             const skillsDir = os.homedir() + '/.qa-cowork/skills';
+            const coworkOutputDir = directoryManager.getCoworkOutputDir();
             const systemPrompt = `
 # OpenCowork Assistant System
 
@@ -781,6 +909,7 @@ You are OpenCowork, an advanced AI desktop assistant designed for efficient task
 - **Primary Workspace**: User-authorized directories (your main deliverable location)
 - **Temporary Workspace**: System temp directories for intermediate processing
 - **Security**: Never access files outside authorized directories without explicit permission
+- **Cowork Mode Output Directory**: When in Cowork mode (not Project mode), all generated non-code files (Excel, PDF, images, CSV, JSON data files, etc.) MUST be saved to \`${coworkOutputDir}\` directory. This ensures generated files are easy to find and organized. Use this as the default output path for all file generation tasks unless the user explicitly specifies a different location.
 
 ### Project Creation & Default Technology Stack
 When creating new projects or generating code, if the user does NOT specify a technology stack, use the following **default stack**:
@@ -877,6 +1006,15 @@ When the user asks to close/stop a service **without specifying which one** (e.g
 - **Reason**: Using \`run_command\` with \`lsof -ti :5173 | xargs kill -9\` or \`pkill -f vite\` would kill the OpenCowork app's own Vite dev server (port 5173), causing the entire client to reload unexpectedly.
 - **Scope**: \`kill_project_dev_server\` only kills processes on port 3000 (user's project dev server) and explicitly excludes OpenCowork's processes. Do NOT ask "which one?"—assume the user means the current project's service.
 
+### Opening Meituan Intranet Pages (CRITICAL)
+When the user asks to open any URL on \`*.sankuai.com\`, \`*.meituan.com\`, or \`*.dianping.com\` domains:
+- **Use the system default browser** (not agent-browser / Google Chrome for Testing). Use \`run_command\` with:
+  - **macOS**: \`open "<url>"\` (e.g. \`open "https://km.sankuai.com/collabpage/123"\`)
+  - **Windows**: \`start "<url>"\`
+  - **Linux**: \`xdg-open "<url>"\`
+- **FORBIDDEN**: Do NOT use \`agent-browser open\` or Google Chrome for Testing for these URLs — 美团内网默认使用本地默认浏览器打开.
+- Login state is kept by the user's default browser (e.g. Safari/Chrome); no need for agent-browser session or cookie injection.
+
 ### Browser Automation Guidelines (chrome-agent scripts)
 When executing Playwright automation scripts:
 - **Default Behavior**: Keep the browser open after script completion unless the user explicitly requests to close it
@@ -899,8 +1037,35 @@ ${this.skillManager.getSkillMetadata().map(s => `- ${s.name}: ${s.description}`)
 
 **Active MCP Servers**: ${JSON.stringify(this.mcpService.getActiveServers())}
 ${workspaceContextSection}
+${this.language === 'zh' ? `
+## Language Requirement
+**CRITICAL**: You MUST respond in **Simplified Chinese (简体中文)** for ALL text output. This includes:
+- All conversational messages and explanations
+- Status updates and progress reports
+- Error messages and suggestions
+- Code comments (when writing code, comments should also be in Chinese unless the codebase convention requires English)
+Do NOT use English or any other language in your responses unless quoting code identifiers, technical terms that have no standard Chinese translation, or when the user explicitly asks for English.
+` : ''}
 ---
 Remember: Plan internally, execute visibly. Focus on results, not process.`;
+
+            // 主动 token 预估：超过上下文窗口 75% 时提前压缩，避免浪费一次真实请求
+            // claude-3.5-sonnet 上下文 200K tokens；其他模型保守估算 100K
+            const contextWindowTokens = this.model.includes('claude-3-5') || this.model.includes('claude-3.5')
+                ? 200000
+                : 100000;
+            const tokenThreshold = Math.floor(contextWindowTokens * 0.75);
+            const estimatedTokens = this.estimateTokenCount(this.history);
+            if (estimatedTokens > tokenThreshold && this.history.length > 4) {
+                console.log(`[AgentRuntime] Proactive context compression: estimated ${estimatedTokens} tokens > threshold ${tokenThreshold}`);
+                const lastUserMsg = this.history[this.history.length - 1];
+                const lastUserInput = lastUserMsg?.role === 'user'
+                    ? this.extractTextFromMessage(lastUserMsg)
+                    : '';
+                this.history = this.smartCompressHistory(this.history, lastUserInput);
+                this.notifyUpdate();
+                this.broadcast('agent:context-compressed', { estimatedTokens, threshold: tokenThreshold });
+            }
 
             console.log('Sending request to API...');
             console.log('Model:', this.model);
@@ -955,24 +1120,27 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                             break;
                         case 'content_block_stop':
                             if (currentToolUse) {
-                                try {
-                                    const parsedInput = JSON.parse(currentToolUse.input);
-                                    finalContent.push({
-                                        type: 'tool_use',
-                                        id: currentToolUse.id,
-                                        name: currentToolUse.name,
-                                        input: parsedInput
-                                    });
-                                } catch (e) {
-                                    console.error("Failed to parse tool input", e);
-                                    // Treat as a failed tool use so the model knows it messed up
-                                    finalContent.push({
-                                        type: 'tool_use',
-                                        id: currentToolUse.id,
-                                        name: currentToolUse.name,
-                                        input: { error: "Invalid JSON input", raw: currentToolUse.input }
-                                    });
+                                const rawInput = (currentToolUse.input ?? '').toString().trim();
+                                let parsedInput: Record<string, unknown>;
+                                if (rawInput === '') {
+                                    parsedInput = {};
+                                } else {
+                                    try {
+                                        parsedInput = JSON.parse(rawInput) as Record<string, unknown>;
+                                        if (parsedInput === null || typeof parsedInput !== 'object' || Array.isArray(parsedInput)) {
+                                            parsedInput = {};
+                                        }
+                                    } catch {
+                                        console.warn('[AgentRuntime] Tool input was not valid JSON, using empty object. Raw length:', rawInput.length);
+                                        parsedInput = {};
+                                    }
                                 }
+                                finalContent.push({
+                                    type: 'tool_use',
+                                    id: currentToolUse.id,
+                                    name: currentToolUse.name,
+                                    input: parsedInput
+                                });
                                 currentToolUse = null;
                             } else if (textBuffer) {
                                 // [Fix] Flush text buffer on block stop
@@ -1115,7 +1283,14 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     }
 
                                     if (approved) {
-                                        result = await this.fsTools.runCommand(args, defaultCwd);
+                                        if (this.isPkillAgentBrowserOrChromium(args.command)) {
+                                            result = '此命令会关闭 agent-browser 并清除已保存的登录态，导致下次访问美团内网仍需扫码。已拒绝执行。若需关闭浏览器请使用: agent-browser close';
+                                        } else {
+                                        const meituanUrl = this.tryGetMeituanUrlFromAgentBrowserCommand(args.command);
+                                        const commandToRun = meituanUrl != null
+                                            ? this.getOpenInDefaultBrowserCommand(meituanUrl.startsWith('http') ? meituanUrl : `https://${meituanUrl}`)
+                                            : this.rewriteAgentBrowserCommandForMeituan(args.command);
+                                        result = await this.fsTools.runCommand({ ...args, command: commandToRun }, defaultCwd);
                                         // 开发服务器启动后自动打开内置浏览器并导航到预览地址
                                         if (result.includes('[Dev server started in background]')) {
                                             const urlMatch = result.match(/Preview URL:\s*(https?:\/\/\S+)/);
@@ -1127,8 +1302,18 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                             await this.autoFixErrors(workingDir, previewUrl, 5);
                                         }
                                         // 打开本地应用命令（macOS: open -a / open /path; Windows: start /B）时，缩小主窗口至右下角
-                                        if (this.onShrinkWindow && this.isOpenLocalAppCommand(args.command)) {
+                                        if (this.onShrinkWindow && this.isOpenLocalAppCommand(commandToRun)) {
                                             this.onShrinkWindow();
+                                        }
+                                        // agent-browser --headed 时缩小/最大化（仅非美团内网；美团内网已改用默认浏览器）
+                                        if (meituanUrl == null && this.isAgentBrowserHeadedCommand(commandToRun)) {
+                                            if (this.onShrinkWindow) this.onShrinkWindow();
+                                            if (this.onMaximizeBrowserWindow) this.onMaximizeBrowserWindow();
+                                        }
+                                        // 仅对非美团内网的 agent-browser open 注入 SSO（美团内网已用默认浏览器，不经过 agent-browser）
+                                        if (meituanUrl == null && this.isAgentBrowserOpenCommand(commandToRun)) {
+                                            await this.injectMeituanSsoCookieIfNeeded(commandToRun);
+                                        }
                                         }
                                     } else {
                                         result = 'User denied the command execution.';
@@ -1157,8 +1342,23 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     const skillInfo = this.skillManager.getSkillInfo(toolUse.name);
                                     console.log(`[Runtime] Skill ${toolUse.name} info found? ${!!skillInfo} (len: ${skillInfo?.instructions?.length})`);
                                     if (skillInfo) {
-                                        // Return skill content following official Claude Code Skills pattern
-                                        // The model should create scripts and run them from the skill directory
+                                        // Detect CLI skills (agent-browser, etc.) vs Python-based skills
+                                        const isCliBrowserSkill = toolUse.name === 'agent-browser' || toolUse.name === 'agent_browser';
+                                        if (isCliBrowserSkill) {
+                                            result = `[SKILL LOADED: ${toolUse.name}]
+
+IMPORTANT: This is a CLI skill. Use run_command to execute agent-browser commands directly. 优先使用 agent-browser，可不使用 Playwright；Do NOT create Python or Playwright scripts.
+
+Correct usage examples:
+  run_command: agent-browser open "https://example.com" --headed --no-sandbox
+  run_command: agent-browser snapshot -i
+  run_command: agent-browser click @e1
+  run_command: agent-browser reload
+
+---
+${skillInfo.instructions}
+---`;
+                                        } else {
                                         result = `[SKILL LOADED: ${toolUse.name}]
 
 SKILL DIRECTORY: ${skillInfo.skillDir}
@@ -1173,6 +1373,7 @@ import sys; sys.path.insert(0, r"${skillInfo.skillDir}")
 ---
 ${skillInfo.instructions}
 ---`;
+                                        }
                                     } else if (toolUse.name.includes('__')) {
                                         result = await this.mcpService.callTool(toolUse.name, toolUse.input as Record<string, unknown>);
                                     } else if (toolUse.name.startsWith('mcp_')) {
@@ -1215,10 +1416,17 @@ ${skillInfo.instructions}
                                 result = `Error executing tool: ${(toolErr as Error).message}`;
                             }
 
+                            // 工具结果超过 2000 字符时自动截断，避免单次工具输出撑爆上下文
+                            const TOOL_RESULT_MAX_CHARS = 2000;
+                            const resultText = typeof result === 'string' ? result : JSON.stringify(result ?? '');
+                            const truncatedResult = resultText.length > TOOL_RESULT_MAX_CHARS
+                                ? this.truncateMessageContent(resultText, 1200, 600)
+                                : result;
+
                             toolResults.push({
                                 type: 'tool_result',
                                 tool_use_id: toolUse.id,
-                                content: result
+                                content: truncatedResult
                             });
                         }
 
@@ -1348,16 +1556,220 @@ ${skillInfo.instructions}
     }
 
     /**
-     * 检测命令是否为打开本地应用的命令。
-     * macOS: `open -a AppName` 或 `open /path/to/App.app`
+     * 检测命令是否为打开本地应用或本地文件的命令。
+     * macOS: `open -a AppName`、`open /path/to/App.app`、`open /path/to/file.xlsx`
      * Windows: `start "" "AppName.exe"` 或 `start /B ...`
      */
     private isOpenLocalAppCommand(command: string): boolean {
         const cmd = command.trim();
         // macOS: open -a <AppName> 或 open /Applications/...app 或 open ~/...app
         if (/^open\s+(-a\s+|.*\.app\b)/i.test(cmd)) return true;
-        // Windows: start 命令启动应用
+        // macOS: open <file> —— 打开本地文件（Excel、PDF、图片、CSV 等），排除 http/https URL
+        if (/^open\s+/i.test(cmd) && !/^open\s+https?:\/\//i.test(cmd)) return true;
+        // Windows: start 命令启动应用或文件
         if (/^start\s+/i.test(cmd) && !/^start\s+http/i.test(cmd)) return true;
+        return false;
+    }
+
+    /**
+     * 检测命令是否为 `agent-browser open <url>` 命令（含 headed/headless 变体）
+     */
+    private isAgentBrowserOpenCommand(command: string): boolean {
+        const cmd = command.trim();
+        return /\bagent-browser\b/.test(cmd) && /\bopen\b/.test(cmd);
+    }
+
+    /**
+     * 检测 URL 是否属于美团内网域名
+     */
+    private isMeituanIntranetUrl(url: string): boolean {
+        return /\.(sankuai|meituan|dianping)\.com(\/|$)/i.test(url);
+    }
+
+    /** 若命令为 agent-browser open <美团内网 URL>，返回该 URL；否则返回 null */
+    private tryGetMeituanUrlFromAgentBrowserCommand(command: string): string | null {
+        const urlMatch = command.trim().match(AgentRuntime.AGENT_BROWSER_OPEN_URL_REGEX);
+        if (!urlMatch) return null;
+        const url = urlMatch[1];
+        return this.isMeituanIntranetUrl(url) ? url : null;
+    }
+
+    /** 返回在系统默认浏览器中打开 URL 的命令（不使用 Google Chrome for Testing） */
+    private getOpenInDefaultBrowserCommand(url: string): string {
+        const quoted = url.includes('"') ? `'${url}'` : `"${url}"`;
+        const p = process.platform;
+        if (p === 'darwin') return `open ${quoted}`;
+        if (p === 'win32') return `start ${quoted}`;
+        return `xdg-open ${quoted}`;
+    }
+
+    /** 美团内网专用 session，agent-browser 会持久化到 ~/.agent-browser/meituan-sso/，首次扫码后后续免扫码 */
+    private static MEITUAN_SSO_SESSION = 'meituan-sso';
+
+    /**
+     * 若为 agent-browser open <美团内网 URL> 且未指定 --session，则改写为在 open <url> 之后插入 --session meituan-sso，
+     * 使登录态持久化到同一 profile，实现「只需第一次扫码」。
+     * 注意：--session 必须放在 open <url> 之后，否则 agent-browser 会误解析为未传子命令导致认为浏览器未启动。
+     */
+    /** 匹配 agent-browser [--flag [value]]* open <url>，允许 --session meituan-sso 等带值的选项 */
+    private static readonly AGENT_BROWSER_OPEN_URL_REGEX = /agent-browser(?:\s+--\S+(?:\s+\S+)?)*\s+open\s+["']?(\S+?)["']?(?:\s|$)/;
+
+    private rewriteAgentBrowserCommandForMeituan(command: string): string {
+        const trimmed = command.trim();
+        const urlMatch = trimmed.match(AgentRuntime.AGENT_BROWSER_OPEN_URL_REGEX);
+        if (!urlMatch) return command;
+        const url = urlMatch[1];
+        if (!this.isMeituanIntranetUrl(url)) return command;
+        const hasSession = /--session\s+\S+/.test(trimmed);
+        const hasSessionName = /--session-name\s+\S+/.test(trimmed);
+        if (hasSession && hasSessionName) return command;
+        // 在 open "<url>" 之后插入 --session 与 --session-name，使 agent-browser 将 cookies/localStorage 持久化到 ~/.agent-browser/sessions/，第二次打开时自动恢复免扫码
+        const prefix = urlMatch[0].replace(/\s*$/, '');
+        const rest = trimmed.slice(urlMatch[0].length);
+        const sessionPart = hasSession ? '' : ` --session ${AgentRuntime.MEITUAN_SSO_SESSION}`;
+        const sessionNamePart = hasSessionName ? '' : ` --session-name ${AgentRuntime.MEITUAN_SSO_SESSION}`;
+        return prefix + sessionPart + sessionNamePart + (rest ? ' ' + rest : '');
+    }
+
+    /**
+     * 通过 agent-browser 注入美团 SSO cookie，使 123.sankuai.com / ssosv.sankuai.com 等免扫码。
+     * 登录信息来自 .qa-cowork（SsoStore），关闭浏览器后仍能登录因为每次打开都会用 .qa-cowork 的 token 注入。
+     * 流程：解析 URL → getAccessToken()（必要时刷新）→ 等待 socket → cookies_set（含 ssosv.sankuai.com）→ reload。
+     */
+    private async injectMeituanSsoCookieIfNeeded(command: string): Promise<void> {
+        const urlMatch = command.match(AgentRuntime.AGENT_BROWSER_OPEN_URL_REGEX);
+        if (!urlMatch) return;
+
+        const url = urlMatch[1];
+        if (!this.isMeituanIntranetUrl(url)) return;
+
+        const accessToken = await ssoStore.getAccessToken();
+        if (!accessToken) {
+            console.log('[AgentRuntime] No valid SSO token (or refresh failed), skipping cookie injection');
+            return;
+        }
+
+        const sessionMatch = command.match(/--session\s+(\S+)/);
+        let session = sessionMatch?.[1] ?? 'default';
+        // 美团内网且命令中无 --session 时，agent-browser 可能通过环境变量 AGENT_BROWSER_SESSION=meituan-sso 使用该 session，优先尝试 meituan-sso socket
+        const sessionsToTry: string[] = session === 'default' ? [AgentRuntime.MEITUAN_SSO_SESSION, 'default'] : [session];
+
+        let socketPath: string = '';
+        let net: typeof import('net');
+        let fsModule: typeof import('fs');
+        let osTmpdir: string;
+        try {
+            const osMod = await import('node:os');
+            const netMod = await import('node:net');
+            const fsMod = await import('node:fs');
+            net = netMod.default ?? netMod;
+            fsModule = fsMod.default ?? fsMod;
+            osTmpdir = (osMod.default ?? osMod).tmpdir();
+        } catch (requireErr) {
+            console.warn('[AgentRuntime] import failed in injectMeituanSsoCookieIfNeeded:', requireErr);
+            return;
+        }
+
+        const waitForSocket = async (sockPath: string, maxRetries = 3, delayMs = 800, retryIntervalMs = 1000): Promise<boolean> => {
+            await new Promise(r => setTimeout(r, delayMs));
+            for (let i = 0; i < maxRetries; i++) {
+                if (fsModule.existsSync(sockPath)) return true;
+                if (i < maxRetries - 1) await new Promise(r => setTimeout(r, retryIntervalMs));
+            }
+            return false;
+        };
+
+        const sep = process.platform === 'win32' ? '\\' : '/';
+        let socketFound = false;
+        for (const s of sessionsToTry) {
+            const candidatePath = `${osTmpdir}${sep}agent-browser-${s}.sock`;
+            if (await waitForSocket(candidatePath)) {
+                socketPath = candidatePath;
+                session = s;
+                socketFound = true;
+                break;
+            }
+        }
+        if (!socketFound || !socketPath) {
+            console.log(`[AgentRuntime] agent-browser socket not found (tried: ${sessionsToTry.join(', ')}) after retries, skipping cookie injection`);
+            return;
+        }
+
+        const baseDomains = ['.sankuai.com', '.meituan.com', '.dianping.com'];
+        const ssoLoginDomain = 'ssosv.sankuai.com';
+        let hostDomain: string | null = null;
+        try {
+            const u = new URL(url.startsWith('http') ? url : `https://${url}`);
+            if (this.isMeituanIntranetUrl(u.hostname)) hostDomain = u.hostname;
+        } catch {
+            // ignore
+        }
+        const domains = hostDomain
+            ? [...new Set([hostDomain, ssoLoginDomain, ...baseDomains])]
+            : [ssoLoginDomain, ...baseDomains];
+
+        const cookieEntry = (domain: string) => [
+            { name: 'ssoid', value: accessToken, domain, path: '/', secure: true, sameSite: 'None' as const },
+            { name: 'SSOSESSIONID', value: accessToken, domain, path: '/', secure: true, sameSite: 'None' as const },
+        ];
+        const cookies = domains.flatMap(cookieEntry);
+
+        const cookiesSetMsg = JSON.stringify({
+            id: `inject-sso-${Date.now()}`,
+            action: 'cookies_set',
+            cookies,
+        });
+        const reloadMsg = JSON.stringify({
+            id: `reload-after-inject-${Date.now()}`,
+            action: 'reload',
+        });
+
+        const sendMessage = (msg: string): Promise<string> => new Promise((resolve) => {
+            let responseData = '';
+            const client = net!.createConnection(socketPath!, () => {
+                client.write(msg + '\n');
+            });
+            client.once('data', (data) => { responseData = data.toString(); client.end(); });
+            client.once('end', () => resolve(responseData));
+            client.once('error', (err) => {
+                console.warn('[AgentRuntime] SSO cookie injection socket error:', err.message);
+                resolve(`ERROR:${err.message}`);
+            });
+            setTimeout(() => { try { client.destroy(); } catch (_) { /* ignore */ } resolve('TIMEOUT'); }, 3000);
+        });
+
+        try {
+            console.log(`[AgentRuntime] Injecting SSO cookies for ${url} (session: ${session})`);
+            const r1 = await sendMessage(cookiesSetMsg);
+            await new Promise(r => setTimeout(r, 200));
+            const r2 = await sendMessage(reloadMsg);
+            const ok = !String(r1).startsWith('ERROR') && !String(r1).includes('TIMEOUT') && !String(r2).startsWith('ERROR') && !String(r2).includes('TIMEOUT');
+            if (ok) {
+                console.log('[AgentRuntime] SSO cookies injected and page reloaded');
+            } else {
+                console.warn('[AgentRuntime] SSO cookie injection socket failed (daemon may be down), response:', r1, r2);
+            }
+        } catch (err) {
+            console.warn('[AgentRuntime] SSO cookie injection failed:', err);
+        }
+    }
+
+    /** 检测是否为 pkill 掉 agent-browser 或 chromium 的命令；执行会清除 daemon 与 --session-name 持久化，导致下次访问仍需扫码，故需拦截 */
+    private isPkillAgentBrowserOrChromium(command: string): boolean {
+        const c = command.trim();
+        if (!/\bpkill\b/i.test(c)) return false;
+        return /\b(agent-browser|chromium)\b/i.test(c) || /-f\s+['"]?[^'"]*agent-browser|chromium/i.test(c);
+    }
+
+    /**
+     * 检测命令是否为通过 agent-browser 以 headed 模式打开浏览器的命令。
+     * 包括：`agent-browser open <url> --headed`、`agent-browser --headed open <url>` 等变体。
+     * 此类命令会启动 Google Chrome For Testing，需要缩小主窗口并最大化浏览器。
+     */
+    private isAgentBrowserHeadedCommand(command: string): boolean {
+        const cmd = command.trim();
+        // agent-browser open <url> --headed（任意位置含 --headed 即可）
+        if (/\bagent-browser\b/.test(cmd) && /\bopen\b/.test(cmd) && /--headed\b/.test(cmd)) return true;
         return false;
     }
 
@@ -1534,7 +1946,7 @@ async function readFileOptional(filePath: string): Promise<string | null> {
 
 /**
  * 构建工作空间上下文注入段落
- * 读取全局指引文件和用户偏好，以及项目级 CLAUDE.md（如存在）
+ * 读取全局指引文件、用户偏好、SSO 登录信息，以及项目级 CLAUDE.md（如存在）
  */
 async function buildWorkspaceContextSection(
     coworkWorkspaceDir: string,
@@ -1542,19 +1954,48 @@ async function buildWorkspaceContextSection(
 ): Promise<string> {
     const sections: string[] = [];
 
-    // 1. 全局行为指引 (~/.qa-cowork-workspace/CLAUDE.md)
+    // 1. 全局行为指引 (~/.qa-cowork/CLAUDE.md)
     const globalGuide = await readFileOptional(path.join(coworkWorkspaceDir, 'CLAUDE.md'));
     if (globalGuide) {
         sections.push(`## Assistant Guide\n${globalGuide.trim()}`);
     }
 
-    // 2. 用户偏好记忆 (~/.qa-cowork-workspace/user-preferences.md)
+    // 2. 用户偏好记忆 (~/.qa-cowork/user-preferences.md)
     const userPrefs = await readFileOptional(path.join(coworkWorkspaceDir, 'user-preferences.md'));
     if (userPrefs) {
         sections.push(`## User Preferences\n${userPrefs.trim()}`);
     }
 
-    // 3. 项目级指引（当前工作目录/CLAUDE.md，仅当与全局工作空间不同时）
+    // 3. 美团 SSO 登录信息（注入 access_token 供内网接口调用使用）
+    try {
+        const ssoToken = ssoStore.readToken();
+        const ssoUserInfo = ssoStore.readUserInfo();
+        if (ssoToken?.access_token && !ssoToken.error) {
+            const name = ssoUserInfo?.name || '';
+            const subject = ssoUserInfo?.subject || '';
+            const empId = ssoUserInfo?.mtEmpId || '';
+            const expireTs = ssoUserInfo?.expire
+                ? new Date(ssoUserInfo.expire * 1000).toLocaleString('zh-CN')
+                : '未知';
+
+            sections.push(`## 当前用户（美团 SSO 登录信息）
+
+- 姓名：${name}
+- MisID：${subject}
+- 工号：${empId}
+- Token 有效期：${expireTs}
+- Access Token：\`${ssoToken.access_token}\`
+
+**使用说明**：
+- 调用美团内网接口时，在请求头中携带：\`Authorization: Bearer ${ssoToken.access_token}\` 或 \`x-auth-token: ${ssoToken.access_token}\`
+- 访问大象（x.sankuai.com）相关接口时，同样使用此 token
+- 若接口返回 401/403，说明 token 已过期，请提示用户重新登录`);
+        }
+    } catch {
+        // SSO 信息读取失败不影响正常流程
+    }
+
+    // 4. 项目级指引（当前工作目录/CLAUDE.md，仅当与全局工作空间不同时）
     if (primaryWorkingDir && primaryWorkingDir !== coworkWorkspaceDir) {
         const projectGuide = await readFileOptional(path.join(primaryWorkingDir, 'CLAUDE.md'));
         if (projectGuide) {

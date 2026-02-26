@@ -6,6 +6,11 @@ allowed-tools: Bash(agent-browser:*)
 
 # Browser Automation with agent-browser
 
+**优先使用 agent-browser** 进行浏览器自动化；**可不使用 Playwright 脚本**。直接通过 CLI 命令即可打开浏览器并带鉴权（session/state/cookies），无需手写 Playwright 代码。
+
+- 命令参考：[agent-browser 官方命令](https://agent-browser.dev/commands)
+- 带鉴权打开：使用 `agent-browser open <url> --session <name>` 或由本应用自动添加 `--session meituan-sso` 并注入 SSO cookies，无需额外 Playwright 脚本。
+
 ## Browser close rule (important)
 
 To avoid losing freshly logged-in sessions (cookies / storage), **do not close the browser by default**.
@@ -16,6 +21,13 @@ To avoid losing freshly logged-in sessions (cookies / storage), **do not close t
   - You have confirmed the agent-browser process is stuck (zombie) and needs cleanup
   - You have confirmed the current browser is headless and must be relaunched in headed mode for QR login/CAPTCHA/manual interaction
 - If When Run browser and error out with "Looks Like Playwright Test or PlayWright was just iinstalled or updated", YOU NEED TO RUN "set PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright playwright install chromium" TO CONFIG PLAYWRIGHT.
+
+### If Chrome/Chromium never opens
+If `agent-browser open <url> --headed` runs but no browser window appears:
+1. Run the **same command in your system terminal** (outside the app) to see the real error (e.g. "Executable doesn't exist", "Chromium not found").
+2. Install Chromium for the Node that runs agent-browser: `npx playwright install chromium` (or `PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright npx playwright install chromium` in China). agent-browser 底层会使用 Chromium，仅需安装浏览器二进制，**无需编写 Playwright 脚本**。
+3. Ensure `agent-browser` is on your PATH and is the CLI you expect (e.g. `which agent-browser`).
+
 ## Quick start
 
 ```bash
@@ -36,6 +48,8 @@ Examples below use `agent-browser ...`.
 4. Re-snapshot after navigation or significant DOM changes
 
 ## Commands
+
+完整命令与全局选项见 [agent-browser 官方文档](https://agent-browser.dev/commands)。常用全局选项：`--session <name>` 隔离会话，`--headed` 显示窗口，`--session-name <name>` 自动保存/恢复登录态。
 
 ### Navigation
 ```bash
@@ -299,3 +313,19 @@ ps aux | grep "chromium" | grep -v grep | head -3
 - Completing CAPTCHAs
 - OAuth authentication flows
 - QR code scanning for login
+
+## 直接打开浏览器带鉴权（优先 agent-browser，可不使用 Playwright）
+
+- **普通站点**：`agent-browser open <url> --headed`；可选 `--session <name>` 隔离会话，或使用 `agent-browser state save/load` 持久化登录态（见官方 [Commands](https://agent-browser.dev/commands)）。
+- **美团内网**：不使用 agent-browser / Google Chrome for Testing；**默认使用本地默认浏览器**打开，见下方「Meituan Intranet」节。
+
+## Meituan Intranet (.sankuai.com / .meituan.com) — 使用本地默认浏览器
+
+**美团内网默认使用本地默认浏览器打开，不使用 Google Chrome for Testing（agent-browser）。**
+
+使用 `run_command` 执行系统打开 URL 命令即可，登录态由用户默认浏览器（如 Safari、Chrome）自行保存：
+- **macOS**: `open "https://km.sankuai.com/..."` 或 `open "https://123.sankuai.com/..."`
+- **Windows**: `start "https://..."`
+- **Linux**: `xdg-open "https://..."`
+
+即使你写了 `agent-browser open "https://km.sankuai.com/..."`，应用也会自动改为用默认浏览器打开，无需 agent-browser 或 Chromium。

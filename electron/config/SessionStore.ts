@@ -8,6 +8,8 @@ export interface Session {
     createdAt: number;
     updatedAt: number;
     workspaceDir?: string;
+    /** 区分会话来源：cowork（协作模式）| project（项目模式）。旧数据没有此字段视为 cowork */
+    mode?: 'cowork' | 'project';
     messages: Anthropic.MessageParam[];
 }
 
@@ -41,7 +43,8 @@ class SessionStore {
             title: s.title,
             createdAt: s.createdAt,
             updatedAt: s.updatedAt,
-            workspaceDir: s.workspaceDir
+            workspaceDir: s.workspaceDir,
+            mode: s.mode
         }));
     }
 
@@ -68,14 +71,22 @@ class SessionStore {
     }
 
     // Update session messages
-    updateSession(id: string, messages: Anthropic.MessageParam[], title?: string, workspaceDir?: string): void {
+    updateSession(id: string, messages: Anthropic.MessageParam[], title?: string, workspaceDir?: string, mode?: 'cowork' | 'project'): void {
+        const MAX_STORED_MESSAGES = 200;
         const sessions = this.store.get('sessions') || [];
         const index = sessions.findIndex(s => s.id === id);
         if (index >= 0) {
-            sessions[index].messages = messages;
+            // 超过上限时保留最新的消息，防止持久化数据无限增长
+            const storedMessages = messages.length > MAX_STORED_MESSAGES
+                ? messages.slice(messages.length - MAX_STORED_MESSAGES)
+                : messages;
+            sessions[index].messages = storedMessages;
             sessions[index].updatedAt = Date.now();
             if (workspaceDir) {
                 sessions[index].workspaceDir = workspaceDir;
+            }
+            if (mode) {
+                sessions[index].mode = mode;
             }
             if (title) {
                 sessions[index].title = title;
@@ -98,7 +109,7 @@ class SessionStore {
     }
 
     // Create or update session only if it has meaningful content
-    saveSession(id: string | null, messages: Anthropic.MessageParam[], workspaceDir?: string): string {
+    saveSession(id: string | null, messages: Anthropic.MessageParam[], workspaceDir?: string, mode?: 'cowork' | 'project'): string {
         // Check if there's real content (user or assistant messages with actual text)
         const hasRealContent = messages.some(m => {
             const content = m.content;
@@ -127,7 +138,7 @@ class SessionStore {
         }
 
         try {
-            this.updateSession(sessionId, messages, undefined, workspaceDir);
+            this.updateSession(sessionId, messages, undefined, workspaceDir, mode);
             console.log(`[SessionStore] Successfully saved session ${sessionId} with ${messages.length} messages`);
         } catch (error) {
             console.error(`[SessionStore] Error updating session ${sessionId}:`, error);
@@ -136,7 +147,7 @@ class SessionStore {
                 console.log('[SessionStore] Attempting recovery by creating new session...');
                 const newSession = this.createSession();
                 sessionId = newSession.id;
-                this.updateSession(sessionId, messages, undefined, workspaceDir);
+                this.updateSession(sessionId, messages, undefined, workspaceDir, mode);
                 console.log(`[SessionStore] Recovery successful, new session: ${sessionId}`);
             } else {
                 throw error; // Re-throw if we can't recover

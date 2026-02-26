@@ -1,7 +1,7 @@
 {
   "name": "qacowork",
   "private": true,
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "QACowork - 你的数字测试同事",
   "author": {
     "name": "shileima",
@@ -34,6 +34,7 @@
     "release:major": "node scripts/release.mjs major"
   },
   "dependencies": {
+    "@mtfe/sso-web-oidc-cli": "^1.3.1",
     "@anthropic-ai/sdk": "^0.71.2",
     "@modelcontextprotocol/sdk": "^1.25.2",
     "@monaco-editor/react": "^4.7.0",
@@ -93,6 +94,9 @@
     "onlyBuiltDependencies": [
       "electron",
       "node-pty"
-    ]
+    ],
+    "overrides": {
+      "proper-lockfile>signal-exit": "3.0.7"
+    }
   }
 }

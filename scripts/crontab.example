@@ -1,0 +1,10 @@
+# 定时发布 opencowork：每周一 10:00 执行 pnpm release patch
+# 使用前将 /path/to/opencowork 替换为仓库实际路径，然后执行: crontab -e 并粘贴下面一行
+#
+# 使用包装脚本（推荐，统一 PATH 与日志）：
+# 0 10 * * 1 /path/to/opencowork/scripts/scheduled-release.sh
+#
+# 或直接调用 pnpm（需保证 cron 环境能找到 pnpm，如用 bash -lc 或写 pnpm 绝对路径）：
+# 0 10 * * 1 cd /path/to/opencowork && /usr/bin/env bash -lc 'pnpm release patch' >> /path/to/opencowork/.release.log 2>&1
+
+0 10 * * 1 /path/to/opencowork/scripts/scheduled-release.sh
