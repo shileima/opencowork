@@ -88,6 +88,8 @@ jobs:
 
       -
         name: Install dependencies
+        env:
+          npm_config_registry: https://registry.npmjs.org
         run: pnpm install --frozen-lockfile
 
       -
