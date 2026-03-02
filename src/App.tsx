@@ -37,6 +37,7 @@ function App() {
   const [newProjectName, setNewProjectName] = useState('');
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
   const [deployStatus, setDeployStatus] = useState<'idle' | 'deploying' | 'success' | 'error'>('idle');
+  const [agentInitFailed, setAgentInitFailed] = useState<string | null>(null);
   const deployLogRef = useRef<string>('');
   const previewHandlerRef = useRef<(() => void) | null>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
@@ -398,11 +399,24 @@ ${err}
       setIsProcessing(false);
     });
 
+    const removeAgentReadyListener = window.ipcRenderer.on('agent:ready', () => {
+      setAgentInitFailed(null);
+    });
+
+    const removeAgentInitFailedListener = window.ipcRenderer.on('agent:init-failed', (_event, ...args) => {
+      const payload = args[0] as { reason?: string } | undefined;
+      const reason = payload?.reason || 'unknown';
+      console.warn('[App] Agent init failed, reason:', reason);
+      setAgentInitFailed(reason);
+    });
+
     return () => {
       removeListener();
       removeErrorListener();
       removeAbortListener();
       removeDoneListener();
+      removeAgentReadyListener();
+      removeAgentInitFailedListener();
     };
   }, []);
 
@@ -415,6 +429,9 @@ ${err}
       console.log('[Preview:Debug] agent:send-message returned:', result);
       if (result?.error) {
         console.error(result.error);
+        if (result.error === 'Agent not initialized') {
+          window.alert('AI 引擎尚未就绪，请稍候几秒后重试。\n\n如果问题持续，请检查 Settings 中的 API Key 是否已配置。');
+        }
         setIsProcessing(false);
       }
     } catch (err) {
@@ -799,6 +816,33 @@ ${err}
           )}
         </div>
       </header>
+
+      {/* Agent Init Failed Banner */}
+      {agentInitFailed && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2 bg-amber-50 dark:bg-amber-950/50 border-b border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="text-base">⚠️</span>
+            <span>
+              {agentInitFailed === 'no_api_key'
+                ? 'AI 引擎未启动：API Key 未配置。'
+                : `AI 引擎启动失败（${agentInitFailed}）。`}
+            </span>
+            <button
+              onClick={() => setShowSettings(true)}
+              className="underline font-medium hover:text-amber-900 dark:hover:text-amber-200 transition-colors"
+            >
+              前往 Settings 配置
+            </button>
+          </div>
+          <button
+            onClick={() => setAgentInitFailed(null)}
+            className="p-0.5 hover:text-amber-900 dark:hover:text-amber-200 transition-colors shrink-0"
+            aria-label="关闭"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden relative">

@@ -453,6 +453,13 @@ export function ProjectView({
         console.log('[Preview:Debug] handlePreview called, currentProject:', currentProject?.id, 'isProcessing:', isProcessing);
         if (!currentProject || isProcessing) return;
 
+        // 检查 Agent 是否已就绪，避免竞态条件
+        const agentStatus = await window.ipcRenderer.invoke('agent:is-ready') as { ready: boolean };
+        if (!agentStatus.ready) {
+            window.alert('AI 引擎尚未就绪，请稍候几秒后重试。\n\n如果问题持续，请检查 Settings 中的 API Key 是否已配置。');
+            return;
+        }
+
         setStreamingText('');
         setIsLoadingHistory(false);
 

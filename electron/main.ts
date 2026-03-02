@@ -515,7 +515,7 @@ ipcMain.handle('agent:send-message', async (event, message: string | { content: 
   const isFloatingBall = event.sender === floatingBallWin?.webContents
   const targetAgent = isFloatingBall ? floatingBallAgent : mainAgent
   console.log('[Preview:Debug] agent:send-message received, viewContext:', viewContext, 'isFloatingBall:', isFloatingBall, 'targetAgent exists:', !!targetAgent, 'currentTaskIdForSession:', currentTaskIdForSession)
-  if (!targetAgent) throw new Error('Agent not initialized')
+  if (!targetAgent) return { error: 'Agent not initialized' }
   // 仅在项目视图（非协作视图）下才传入当前任务 ID 与项目 ID
   const isCoworkView = viewContext === 'cowork' || isFloatingBall
   const currentProject = isCoworkView ? null : projectStore.getCurrentProject()
@@ -532,6 +532,11 @@ ipcMain.handle('agent:send-message', async (event, message: string | { content: 
   }
   const viewCtx: 'cowork' | 'project' = isCoworkView ? 'cowork' : 'project'
   return await targetAgent.processUserMessage(message, taskId, projectId, isFloatingBall, viewCtx)
+})
+
+ipcMain.handle('agent:is-ready', (event) => {
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  return { ready: !!targetAgent }
 })
 
 ipcMain.handle('agent:abort', (event) => {
@@ -1139,8 +1144,18 @@ ipcMain.handle('resource:perform-update', async () => {
       // 更新成功后延迟 1.5 秒自动重启，给前端时间展示完成提示
       setTimeout(() => {
         console.log('[Main] Auto-restarting after resource update...')
-        app.relaunch()
-        app.quit()
+        try {
+          app.relaunch()
+          app.quit()
+        } catch (restartError) {
+          console.error('[Main] app.relaunch() failed, trying alternative restart:', restartError)
+          try {
+            // 备用方案：直接退出，让用户手动重启
+            app.exit(0)
+          } catch (exitError) {
+            console.error('[Main] app.exit() also failed:', exitError)
+          }
+        }
       }, 1500)
       
       return { 
@@ -1177,8 +1192,13 @@ ipcMain.handle('resource:clear-hot-update', async () => {
 
 // 应用更新后重启
 ipcMain.handle('resource:restart-app', () => {
-  app.relaunch()
-  app.quit()
+  try {
+    app.relaunch()
+    app.quit()
+  } catch (error) {
+    console.error('[Main] resource:restart-app failed:', error)
+    app.exit(0)
+  }
 })
 
 // ========== Playwright 管理 ==========
@@ -3519,13 +3539,19 @@ async function deferredInitialization() {
 
     // Stage 4: 后台初始化 Agent（不阻塞 UI）
     initializeAgentAsync()
-      .then(() => {
+      .then((result) => {
         const total = Date.now() - startTime
-        console.log(`[Main] Agent initialization completed in ${total}ms`)
-        mainWin?.webContents.send('agent:ready')
+        if (result?.skipped) {
+          console.warn(`[Main] Agent initialization skipped: ${result.reason}`)
+          mainWin?.webContents.send('agent:init-failed', { reason: result.reason })
+        } else {
+          console.log(`[Main] Agent initialization completed in ${total}ms`)
+          mainWin?.webContents.send('agent:ready')
+        }
       })
       .catch((err) => {
         console.error('[Main] Agent initialization failed:', err)
+        mainWin?.webContents.send('agent:init-failed', { reason: err?.message || 'Unknown error' })
       })
   } catch (error) {
     console.error('[Main] Deferred initialization failed:', error)
@@ -3639,8 +3665,10 @@ async function initializeAgentAsync() {
     if (floatingBallWin && !floatingBallAgent) {
       initializeFloatingBallAgent()
     }
+    return { skipped: false }
   } else {
-    console.warn('No API Key found. Please configure in Settings.')
+    console.warn('[Main] No API Key found. Agent initialization skipped. Please configure API Key in Settings.')
+    return { skipped: true, reason: 'no_api_key' }
   }
 }
 
