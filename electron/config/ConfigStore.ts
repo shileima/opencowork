@@ -187,44 +187,37 @@ class ConfigStore {
             this.store.delete('model');
         }
 
-        // Ensure all defaultProviders exist in stored providers (handles new providers added in app updates)
-        // electron-store only fills missing top-level keys, not nested objects, so we must deep-merge manually.
+        // Combined migration pass: ensure all defaultProviders exist AND clear stale encrypted keys.
+        // electron-store only fills missing top-level keys, so we deep-merge defaultProviders manually.
         const storedProviders = this.store.get('providers');
         if (storedProviders) {
             let needsUpdate = false;
-            const mergedProviders = { ...storedProviders };
+            const updatedProviders = { ...storedProviders };
+
+            // 1. Add any new providers introduced in this app version
             for (const [id, defaultProvider] of Object.entries(defaultProviders)) {
-                if (!mergedProviders[id]) {
+                if (!updatedProviders[id]) {
                     console.log(`[ConfigStore] migrate: adding missing provider '${id}' from defaults`);
-                    mergedProviders[id] = { ...defaultProvider };
+                    updatedProviders[id] = { ...defaultProvider };
                     needsUpdate = true;
                 }
             }
-            if (needsUpdate) {
-                this.store.set('providers', mergedProviders);
-            }
-        }
 
-        // Migrate: clear API keys that were encrypted with old machine-based key (pre fixed-key scheme)
-        // If a stored key has ENCRYPTED: prefix but fails to decrypt, it was encrypted on another machine.
-        // Clear it so the user is prompted to re-enter, avoiding repeated ERR_OSSL_BAD_DECRYPT errors.
-        const storedProviders = this.store.get('providers');
-        if (storedProviders) {
-            let hasStaleKeys = false;
-            const cleanedProviders = { ...storedProviders };
-            for (const [id, provider] of Object.entries(cleanedProviders) as [string, ProviderConfig][]) {
+            // 2. Clear keys that were encrypted with an old machine-based key (pre fixed-key scheme)
+            for (const [id, provider] of Object.entries(updatedProviders) as [string, ProviderConfig][]) {
                 if (provider.apiKey && isEncrypted(provider.apiKey)) {
                     try {
                         decryptApiKey(extractEncryptedData(provider.apiKey));
                     } catch {
                         console.warn(`[ConfigStore] Clearing stale encrypted key for provider ${id} (encrypted with old machine key)`);
-                        cleanedProviders[id] = { ...provider, apiKey: '' };
-                        hasStaleKeys = true;
+                        updatedProviders[id] = { ...provider, apiKey: '' };
+                        needsUpdate = true;
                     }
                 }
             }
-            if (hasStaleKeys) {
-                this.store.set('providers', cleanedProviders);
+
+            if (needsUpdate) {
+                this.store.set('providers', updatedProviders);
             }
         }
 
