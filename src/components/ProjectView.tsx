@@ -328,16 +328,21 @@ export function ProjectView({
     }, [showToast, t]);
 
     // 监听任务创建事件，如果是当前项目的任务，自动选中
+    // 使用 ref 读取 currentTaskId 避免闭包陈旧，并跳过 handlePreview/handleCreateTask 等已自行切换的场景
     useEffect(() => {
         if (!currentProject) return;
 
         const removeTaskCreatedListener = window.ipcRenderer.on('project:task:created', async (_event, ...args) => {
             const task = args[0] as ProjectTask;
             if (currentProject && task && task.id) {
+                // 使用 ref 获取最新的 currentTaskId，避免闭包陈旧导致误判
+                const latestCurrentTaskId = currentTaskIdRef.current;
+                // 若已经是当前任务，跳过（handlePreview/handleCreateTask 已在 IPC 返回前调用 setCurrentTaskId）
+                if (latestCurrentTaskId === task.id) return;
                 // 验证任务是否属于当前项目
                 const tasks = await window.ipcRenderer.invoke('project:task:list', currentProject.id) as ProjectTask[];
                 const taskExists = tasks.some(t => t.id === task.id);
-                if (taskExists && currentTaskId !== task.id) {
+                if (taskExists && currentTaskIdRef.current !== task.id) {
                     // 自动选中新创建的任务
                     setCurrentTaskId(task.id);
                     await handleSelectTask(task.id);
@@ -348,7 +353,7 @@ export function ProjectView({
         return () => {
             removeTaskCreatedListener();
         };
-    }, [currentProject, currentTaskId]);
+    }, [currentProject]);
 
 
     const loadCurrentProject = async () => {
