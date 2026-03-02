@@ -1,13 +1,39 @@
 import fs from 'fs';
+import path from 'path';
+import { createRequire } from 'node:module';
+import { app } from 'electron';
 import { directoryManager } from './DirectoryManager';
 
-/** @mtfe/sso-web-oidc-cli 是美团内部包，CI 环境不可用，需动态加载 */
+/** @mtfe/sso-web-oidc-cli 是美团内部包，内置于 resources/node_modules/，动态加载 */
 type SsoClientCtor = new (opts: unknown) => { login: () => Promise<SsoToken>; whoami: () => Promise<unknown> };
 let SSOCliClient: SsoClientCtor | null = null;
 let SSOAccessEnvType: { product: string } | null = null;
+
+function loadSsoModule() {
+  // resources/node_modules 是内置的私有包目录，结构与标准 node_modules 相同
+  // createRequire 指向该目录下的虚拟入口，使 Node.js 解析器能在此目录内查找子依赖
+  const resourcesDir = app.isPackaged
+    ? process.resourcesPath                    // 生产：<app>/Contents/Resources
+    : path.join(process.cwd(), 'resources');   // 开发：项目根/resources
+
+  const builtinNodeModules = path.join(resourcesDir, 'node_modules');
+  const builtinCliPkg = path.join(builtinNodeModules, '@mtfe', 'sso-web-oidc-cli');
+
+  if (fs.existsSync(builtinCliPkg)) {
+    // 虚拟入口文件：让 createRequire 的解析起点在 builtinNodeModules 内，
+    // 这样包内部的 require() 会沿标准路径向上找到 resources/node_modules/
+    const builtinRequire = createRequire(path.join(builtinNodeModules, '_entry.js'));
+    console.log('[SsoStore] Loading @mtfe/sso-web-oidc-cli from builtin resources/node_modules');
+    return builtinRequire('@mtfe/sso-web-oidc-cli');
+  }
+
+  // 回退：从项目 node_modules 加载（本地开发已安装的情况）
+  console.log('[SsoStore] Loading @mtfe/sso-web-oidc-cli from node_modules');
+  return createRequire(import.meta.url)('@mtfe/sso-web-oidc-cli');
+}
+
 try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const mod = require('@mtfe/sso-web-oidc-cli');
+  const mod = loadSsoModule();
   SSOCliClient = mod.SSOCliClient as SsoClientCtor;
   SSOAccessEnvType = mod.SSOAccessEnvType;
 } catch {
