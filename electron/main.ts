@@ -2176,6 +2176,18 @@ ipcMain.handle('project:rename-current-task', (event, title: string) => {
 // ═══════════════════════════════════════
 // Deploy Handler: generate deploy.sh, execute, stream logs
 // ═══════════════════════════════════════
+
+/** 部署结束时更新当前任务状态，并广播 project:task:updated */
+function updateDeployTaskStatus(status: 'completed' | 'failed', senderContents: Electron.WebContents) {
+  const project = projectStore.getCurrentProject();
+  if (!project || !currentTaskIdForSession) return;
+  projectStore.updateTask(project.id, currentTaskIdForSession, { status });
+  const targetWindow = senderContents === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.webContents.send('project:task:updated', { projectId: project.id, taskId: currentTaskIdForSession, updates: { status } });
+  }
+}
+
 ipcMain.handle('deploy:start', async (event, projectPath: string) => {
   try {
     const sender = event.sender;
@@ -2183,6 +2195,7 @@ ipcMain.handle('deploy:start', async (event, projectPath: string) => {
     // Step 1: Read package.json to get name and version
     const pkgPath = path.join(projectPath, 'package.json');
     if (!fs.existsSync(pkgPath)) {
+      updateDeployTaskStatus('failed', sender);
       sender.send('deploy:error', 'package.json not found in project root');
       return { success: false, error: 'package.json not found' };
     }
@@ -2365,6 +2378,7 @@ export default defineConfig({
       sender.send('deploy:log', `  plugins: web-only (electron excluded to avoid "Class extends value undefined")\n`);
       sender.send('deploy:log', `  Backup: ${path.basename(viteConfigPath)}.deploy-backup\n\n`);
     } else {
+      updateDeployTaskStatus('failed', sender);
       sender.send('deploy:error', 'No vite.config found, cannot proceed with deployment');
       return { success: false, error: 'No vite.config found' };
     }
@@ -2430,6 +2444,7 @@ export default defineConfig({
     runBuildWithNode().then((buildOk) => {
       if (!buildOk) {
         restoreViteConfig();
+        updateDeployTaskStatus('failed', sender);
         sender.send('deploy:error', `Build failed.\n\n${allOutput.slice(-800)}`);
         return;
       }
@@ -2487,6 +2502,7 @@ export default defineConfig({
           const hint = isNodeInstallDirError
             ? '\n\n💡 提示：Node 环境解析失败。请确保项目已执行 pnpm install 安装依赖。'
             : '';
+          updateDeployTaskStatus('failed', sender);
           sender.send('deploy:error', `Upload script exited with code ${code}\n\n${errSnippet}${hint}`);
           return;
         }
@@ -2502,6 +2518,7 @@ export default defineConfig({
           sender.send('deploy:log', `⚠ 构建产物在 dist/，预期为 dist/code/${projectName}/vite/${version}\n`);
         }
         if (!buildPath || !fs.existsSync(path.join(buildPath, 'index.html'))) {
+          updateDeployTaskStatus('failed', sender);
           sender.send('deploy:error', `Build output missing: ${expectedBuildPath}\n请检查 vite.config.ts 中 outDir 配置`);
           return;
         }
@@ -2531,14 +2548,17 @@ export default defineConfig({
           if (proxyRes === 200) {
             sender.send('deploy:log', `✓ Proxy registered\n\n✓ Deploy successful!\n  URL: ${expectedDeployUrl}\n`);
           } else {
+            updateDeployTaskStatus('failed', sender);
             sender.send('deploy:error', `Proxy registration failed (HTTP ${proxyRes})`);
             return;
           }
         } catch (err) {
+          updateDeployTaskStatus('failed', sender);
           sender.send('deploy:error', `Proxy registration failed: ${err instanceof Error ? err.message : String(err)}`);
           return;
         }
 
+        updateDeployTaskStatus('completed', sender);
         sender.send('deploy:done', expectedDeployUrl);
         if (mainWin && !mainWin.isDestroyed()) {
           mainWin.webContents.send('agent:open-browser-preview', expectedDeployUrl);
@@ -2551,12 +2571,14 @@ export default defineConfig({
         const hint = isNpxEnovent
           ? '\n\n💡 未找到 npx（DMG 安装后 GUI 启动时 PATH 可能不含 Node）。请：\n  • 安装 Node.js（https://nodejs.org）或使用 nvm/fnm；或\n  • 从终端执行 open -a QACowork 启动应用后再试部署。'
           : '';
+        updateDeployTaskStatus('failed', sender);
         sender.send('deploy:error', `Failed to execute deploy: ${err.message}${hint}`);
       });
     });
 
     return { success: true };
   } catch (error) {
+    updateDeployTaskStatus('failed', event.sender);
     event.sender.send('deploy:error', error instanceof Error ? error.message : String(error));
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }

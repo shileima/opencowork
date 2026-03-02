@@ -29,6 +29,12 @@
       "from": "public/icon.png",
       "to": "icon.png"
     },
+    // 美团内部私有包（@mtfe/sso-web-oidc-cli 及其依赖），内置以免外部安装
+    {
+      "from": "resources/node_modules",
+      "to": "node_modules",
+      "filter": "**/*"
+    },
     {
       "from": "resources/skills",
       "to": "skills",
