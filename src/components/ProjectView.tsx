@@ -27,6 +27,10 @@ interface ProjectViewProps {
     appCurrentProject?: Project | null;
     /** 注册预览处理函数，供父组件（App.tsx 预览按钮）调用 */
     onRegisterPreviewHandler?: (handler: () => void) => void;
+    /** 注册部署处理函数，供父组件（App.tsx 部署按钮）调用 */
+    onRegisterDeployHandler?: (handler: () => void) => void;
+    /** 部署状态变更回调，供父组件更新按钮样式 */
+    onDeployStatusChange?: (status: 'idle' | 'deploying' | 'success' | 'error') => void;
 }
 
 // 跟踪新任务的第一条消息，用于重命名
@@ -69,7 +73,9 @@ export function ProjectView({
     onToggleExplorerPanel,
     isNarrowWindow = false,
     appCurrentProject,
-    onRegisterPreviewHandler
+    onRegisterPreviewHandler,
+    onRegisterDeployHandler,
+    onDeployStatusChange,
 }: ProjectViewProps) {
     const { t } = useI18n();
     const { showToast } = useToast();
@@ -492,6 +498,112 @@ export function ProjectView({
             });
         }
     }, [onRegisterPreviewHandler]);
+
+    // ─── 部署逻辑 ────────────────────────────────────────────────────────────────
+    const deployLogRef = useRef<string>('');
+    const deployHandlerRef = useRef<() => Promise<void>>();
+
+    const stripAnsi = (text: string): string =>
+        text
+            .replace(/\x1B\]8;;[^\x1B]*\x1B\\([^\x1B]*)\x1B\]8;;\x1B\\/g, '$1')
+            .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '');
+
+    const buildDeployLog = (rawLog: string): string => {
+        const clean = stripAnsi(rawLog).trimEnd();
+        return `**🚀 ${t('deployLogTitle')}**\n\n\`\`\`deploy-log\n${clean}\n\`\`\``;
+    };
+
+    /** 把部署日志同步到 Agent history，并触发 session:save 持久化 */
+    const saveDeployHistory = useCallback((messages: Anthropic.MessageParam[]) => {
+        if (messages.length > 0) {
+            window.ipcRenderer.invoke('session:save', messages).catch((err: unknown) =>
+                console.error('[ProjectView] Failed to save deploy session:', err)
+            );
+        }
+    }, []);
+
+    const handleDeploy = useCallback(async () => {
+        if (!currentProject || isProcessing) return;
+
+        onDeployStatusChange?.('deploying');
+        deployLogRef.current = '';
+
+        // 创建独立任务（与预览逻辑一致）
+        const result = await window.ipcRenderer.invoke('project:task:create', currentProject.id, t('deploy') || '部署') as { success: boolean; task?: ProjectTask };
+        if (!result.success || !result.task) {
+            onDeployStatusChange?.('error');
+            return;
+        }
+
+        setCurrentTaskId(result.task.id);
+        setStreamingText('');
+        setIsLoadingHistory(false);
+
+        // 写入"部署开始"消息到 Agent history（通过主进程），使其可被 session:save 持久化
+        const startMsg: Anthropic.MessageParam = { role: 'assistant', content: buildDeployLog(t('deployStarting')) };
+        await window.ipcRenderer.invoke('agent:inject-history', [startMsg]).catch(() => {});
+
+        try {
+            await window.ipcRenderer.invoke('deploy:start', currentProject.path);
+        } catch (err) {
+            console.error('[ProjectView] Deploy invoke error:', err);
+            onDeployStatusChange?.('error');
+        }
+    }, [currentProject, isProcessing, t, onDeployStatusChange]);
+
+    deployHandlerRef.current = handleDeploy;
+
+    useEffect(() => {
+        if (onRegisterDeployHandler) {
+            onRegisterDeployHandler(() => {
+                deployHandlerRef.current?.();
+            });
+        }
+    }, [onRegisterDeployHandler]);
+
+    // 监听部署事件，把日志实时更新到 history 并保存 session
+    useEffect(() => {
+        const removeDeployLog = window.ipcRenderer.on('deploy:log', (_event, ...args) => {
+            const chunk = args[0] as string;
+            deployLogRef.current += chunk;
+            const logContent = buildDeployLog(deployLogRef.current);
+            // 直接通知主进程更新 Agent history 中的最后一条 assistant 消息
+            window.ipcRenderer.invoke('agent:update-last-assistant', logContent).catch(() => {});
+        });
+
+        const removeDeployDone = window.ipcRenderer.on('deploy:done', (_event, ...args) => {
+            const url = args[0] as string;
+            onDeployStatusChange?.('success');
+            const successContent = `**✅ ${t('deploySuccessMessage')}**\n\n[${url}](${url})`;
+            window.ipcRenderer.invoke('agent:append-assistant', successContent).then(() => {
+                // 部署完成后获取最新 history 并保存
+                window.ipcRenderer.invoke('agent:get-history').then((msgs: unknown) => {
+                    saveDeployHistory(msgs as Anthropic.MessageParam[]);
+                }).catch(() => {});
+            }).catch(() => {});
+            setTimeout(() => onDeployStatusChange?.('idle'), 3000);
+        });
+
+        const removeDeployError = window.ipcRenderer.on('deploy:error', (_event, ...args) => {
+            const errMsg = args[0] as string;
+            onDeployStatusChange?.('error');
+            const cleanErr = stripAnsi(errMsg || 'Unknown error');
+            const errorContent = `**❌ ${t('deployFailedMessage')}**\n\n\`\`\`deploy-log\n${cleanErr}\n\`\`\``;
+            window.ipcRenderer.invoke('agent:append-assistant', errorContent).then(() => {
+                window.ipcRenderer.invoke('agent:get-history').then((msgs: unknown) => {
+                    saveDeployHistory(msgs as Anthropic.MessageParam[]);
+                }).catch(() => {});
+            }).catch(() => {});
+            setTimeout(() => onDeployStatusChange?.('idle'), 3000);
+        });
+
+        return () => {
+            removeDeployLog();
+            removeDeployDone();
+            removeDeployError();
+        };
+    }, [t, onDeployStatusChange, saveDeployHistory]);
+    // ─────────────────────────────────────────────────────────────────────────────
 
     // 发送消息；新任务在聊天完成后（agent:done）根据首条用户消息自动重命名
     const handleSendMessageWithRename = useCallback((message: string | { content: string, images: string[] }) => {

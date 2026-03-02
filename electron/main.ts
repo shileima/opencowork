@@ -567,6 +567,56 @@ ipcMain.handle('agent:new-session', (event) => {
   return { success: true, sessionId: null }
 })
 
+/** 部署专用：向 Agent history 注入初始消息（不触发 AI 处理） */
+ipcMain.handle('agent:inject-history', (event, messages: Anthropic.MessageParam[]) => {
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  if (!targetAgent || !Array.isArray(messages)) return { success: false }
+  targetAgent.loadHistory(messages)
+  return { success: true }
+})
+
+/** 部署专用：更新 history 中最后一条 assistant 消息的内容（用于实时刷新部署日志） */
+ipcMain.handle('agent:update-last-assistant', (event, content: string) => {
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
+  if (!targetAgent) return { success: false }
+  const history = targetAgent.getHistory()
+  const updated = [...history]
+  for (let i = updated.length - 1; i >= 0; i--) {
+    if (updated[i].role === 'assistant') {
+      updated[i] = { role: 'assistant', content }
+      break
+    }
+  }
+  targetAgent.loadHistory(updated)
+  const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.webContents.send('agent:history-update', updated)
+  }
+  return { success: true }
+})
+
+/** 部署专用：向 Agent history 追加一条 assistant 消息 */
+ipcMain.handle('agent:append-assistant', (event, content: string) => {
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
+  if (!targetAgent) return { success: false }
+  const history = targetAgent.getHistory()
+  const updated = [...history, { role: 'assistant' as const, content }]
+  targetAgent.loadHistory(updated)
+  const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.webContents.send('agent:history-update', updated)
+  }
+  return { success: true }
+})
+
+/** 部署专用：获取 Agent 当前 history */
+ipcMain.handle('agent:get-history', (event) => {
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  return targetAgent?.getHistory() ?? []
+})
+
 // Session Management
 ipcMain.handle('session:list', () => {
   return sessionStore.getSessions()
@@ -925,7 +975,7 @@ ipcMain.handle('permissions:clear', () => {
   return { success: true }
 })
 
-// Get chrome-agent scripts directory path
+// Get automation scripts root directory path (~/.qa-cowork/scripts/)
 ipcMain.handle('agent:get-scripts-dir', () => {
   return directoryManager.getScriptsDir()
 })

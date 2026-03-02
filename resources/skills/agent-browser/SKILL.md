@@ -11,6 +11,40 @@ allowed-tools: Bash(agent-browser:*)
 - 命令参考：[agent-browser 官方命令](https://agent-browser.dev/commands)
 - 带鉴权打开：使用 `agent-browser open <url> --session <name>` 或由本应用自动添加 `--session meituan-sso` 并注入 SSO cookies，无需额外 Playwright 脚本。
 
+## 脚本自动固化（Script Persistence）
+
+每次执行浏览器自动化任务后，**必须**将本次使用的脚本或命令序列固化保存，方便后续复用。
+
+### 存储规则
+
+- **存储路径**：`~/.qa-cowork/scripts/<chat-id>/`
+- `<chat-id>` 取当前聊天任务的唯一标识（如对话 ID、任务短标题的 slug，例如 `2026-03-02-search-bigmodel`）
+- 每个聊天目录下可保存多个脚本文件，按执行顺序命名，如 `01_open_page.sh`、`02_fill_form.sh`，或对于 Playwright 脚本使用 `.js` 扩展名
+
+### 固化内容
+
+对于 **agent-browser CLI** 任务，将命令序列写入 shell 脚本：
+
+```bash
+#!/usr/bin/env bash
+# Task: <任务描述>
+# Chat: <chat-id>
+# Date: <YYYY-MM-DD>
+
+agent-browser open "https://example.com" --headed
+agent-browser snapshot -i
+agent-browser fill @e1 "search text"
+agent-browser click @e2
+```
+
+对于 **Playwright JS** 脚本，直接保存 `.js` 文件。
+
+### 执行时机
+
+1. 任务执行**成功后**，立即将本次脚本写入 `~/.qa-cowork/scripts/<chat-id>/` 目录
+2. 若目录不存在，先创建目录：`mkdir -p ~/.qa-cowork/scripts/<chat-id>/`
+3. 告知用户脚本已保存的完整路径，方便下次直接运行
+
 ## Browser close rule (important)
 
 To avoid losing freshly logged-in sessions (cookies / storage), **do not close the browser by default**.
@@ -20,12 +54,12 @@ To avoid losing freshly logged-in sessions (cookies / storage), **do not close t
   - The user explicitly asks to close/cleanup
   - You have confirmed the agent-browser process is stuck (zombie) and needs cleanup
   - You have confirmed the current browser is headless and must be relaunched in headed mode for QR login/CAPTCHA/manual interaction
-- If When Run browser and error out with "Looks Like Playwright Test or PlayWright was just iinstalled or updated", YOU NEED TO RUN "set PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright playwright install chromium" TO CONFIG PLAYWRIGHT.
+- If When Run browser and error out with "Looks Like Playwright Test or PlayWright was just installed or updated", YOU NEED TO RUN "set PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright playwright install chromium" TO CONFIG PLAYWRIGHT.
 
 ### If Chrome/Chromium never opens
 If `agent-browser open <url> --headed` runs but no browser window appears:
 1. Run the **same command in your system terminal** (outside the app) to see the real error (e.g. "Executable doesn't exist", "Chromium not found").
-2. Install Chromium for the Node that runs agent-browser: `npx playwright install chromium` (or `PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright npx playwright install chromium` in China). agent-browser 底层会使用 Chromium，仅需安装浏览器二进制，**无需编写 Playwright 脚本**。
+2. agent-browser 优先使用系统已安装的 Chrome（macOS：`/Applications/Google Chrome.app`），无需下载 Chromium。若系统 Chrome 不存在，Chromium 会自动下载到 `~/.qa-cowork/skills/agent-browser/browsers/`（**仅首次安装**，后续复用）。
 3. Ensure `agent-browser` is on your PATH and is the CLI you expect (e.g. `which agent-browser`).
 
 ## Quick start

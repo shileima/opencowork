@@ -40,7 +40,7 @@ const DANGEROUS_PATTERNS = [
  */
 function isAutomationScriptCommand(command: string): boolean {
     const cmd = command.trim().toLowerCase();
-    // 检查是否包含 node 执行 .js 文件，或者包含 chrome-agent、自动化等关键词
+    // 检查是否包含 node 执行 .js 文件，或者包含自动化相关关键词
     const automationKeywords = [
         'chrome-agent',
         'automation',
@@ -54,11 +54,11 @@ function isAutomationScriptCommand(command: string): boolean {
     // 检查是否执行 .js 文件
     const jsFilePattern = /node\s+.*\.js|\.js\s*$/;
     
-    // 检查是否在 chrome-agent 目录下执行
-    const chromeAgentPathPattern = /chrome-agent/;
+    // 检查是否在 scripts/ 目录下执行（新路径）或旧的 chrome-agent 目录下执行
+    const scriptsPathPattern = /\.qa-cowork[/\\]scripts[/\\]|chrome-agent/;
     
     return jsFilePattern.test(cmd) && 
-           (chromeAgentPathPattern.test(cmd) || automationKeywords.some(keyword => cmd.includes(keyword)));
+           (scriptsPathPattern.test(cmd) || automationKeywords.some(keyword => cmd.includes(keyword)));
 }
 
 /**
@@ -87,13 +87,13 @@ function validateAutomationScript(command: string, cwd: string): { valid: boolea
         // 规范化路径
         scriptPath = path.normalize(scriptPath);
         
-        // 获取标准脚本目录
+        // 获取标准脚本根目录（脚本按 sessionId 存放在子文件夹下）
         const scriptsDir = directoryManager.getScriptsDir();
         const normalizedScriptsDir = path.normalize(scriptsDir);
         
-        // 检查1: 文件是否在正确的目录下
+        // 检查1: 文件是否在正确的目录下（允许任意深度子文件夹，如 scripts/<sessionId>/xxx.js）
         if (!scriptPath.startsWith(normalizedScriptsDir)) {
-            errors.push(`脚本文件不在正确的目录下\n  当前路径: ${scriptPath}\n  应该位于: ${scriptsDir}`);
+            errors.push(`脚本文件不在正确的目录下\n  当前路径: ${scriptPath}\n  应该位于: ${scriptsDir}/<sessionId>/ 下`);
         }
         
         // 检查2: 文件扩展名是否为 .js
@@ -1222,14 +1222,27 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                 if (toolUse.name === 'read_file') {
                                     const args = toolUse.input as { path: string };
                                     if (!permissionManager.isPathAuthorized(args.path)) {
-                                        result = `Error: Path ${args.path} is not in an authorized folder.`;
+                                        const authorized = await this.requestFolderAuthorization(args.path);
+                                        if (!authorized) {
+                                            result = `Error: Path ${args.path} is not in an authorized folder.`;
+                                        } else {
+                                            result = await this.fsTools.readFile(args);
+                                        }
                                     } else {
                                         result = await this.fsTools.readFile(args);
                                     }
                                 } else if (toolUse.name === 'write_file') {
                                     const args = toolUse.input as { path: string, content: string };
                                     if (!permissionManager.isPathAuthorized(args.path)) {
-                                        result = `Error: Path ${args.path} is not in an authorized folder.`;
+                                        const authorized = await this.requestFolderAuthorization(args.path);
+                                        if (!authorized) {
+                                            result = `Error: Path ${args.path} is not in an authorized folder.`;
+                                        } else {
+                                            result = await this.fsTools.writeFile(args);
+                                            const fileName = args.path.split(/[\\/]/).pop() || 'file';
+                                            this.artifacts.push({ path: args.path, name: fileName, type: 'file' });
+                                            this.broadcast('agent:artifact-created', { path: args.path, name: fileName, type: 'file' });
+                                        }
                                     } else {
                                         // 如果路径在已授权的文件夹中，直接写入，无需确认（定制化：简化写入流程）
                                         result = await this.fsTools.writeFile(args);
@@ -1240,7 +1253,12 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                 } else if (toolUse.name === 'list_dir') {
                                     const args = toolUse.input as { path: string };
                                     if (!permissionManager.isPathAuthorized(args.path)) {
-                                        result = `Error: Path ${args.path} is not in an authorized folder.`;
+                                        const authorized = await this.requestFolderAuthorization(args.path);
+                                        if (!authorized) {
+                                            result = `Error: Path ${args.path} is not in an authorized folder.`;
+                                        } else {
+                                            result = await this.fsTools.listDir(args);
+                                        }
                                     } else {
                                         result = await this.fsTools.listDir(args);
                                     }
@@ -1264,7 +1282,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         // 验证自动化脚本规范
                                         const validationResult = validateAutomationScript(args.command, args.cwd || defaultCwd);
                                         if (!validationResult.valid) {
-                                            result = `❌ 自动化脚本规范检查失败：\n\n${validationResult.errors.map((e: string) => `• ${e}`).join('\n')}\n\n请确保：\n✅ 脚本文件在 ~/.qa-cowork/skills/chrome-agent/ 目录下\n✅ 文件扩展名为 .js\n✅ 文件有读取权限\n✅ 只使用 Playwright 进行浏览器自动化（禁止使用 Selenium 和 Puppeteer）\n✅ 在自动化脚本列表中点击刷新按钮或等待自动刷新`;
+                                            result = `❌ 自动化脚本规范检查失败：\n\n${validationResult.errors.map((e: string) => `• ${e}`).join('\n')}\n\n请确保：\n✅ 脚本文件在 ~/.qa-cowork/scripts/<sessionId>/ 目录下\n✅ 文件扩展名为 .js\n✅ 文件有读取权限\n✅ 只使用 Playwright 进行浏览器自动化（禁止使用 Selenium 和 Puppeteer）\n✅ 在自动化脚本列表中点击刷新按钮或等待自动刷新`;
                                             return;
                                         }
                                     }
@@ -1834,6 +1852,32 @@ ${skillInfo.instructions}
             this.pendingConfirmations.set(id, { resolve });
             this.broadcast('agent:confirm-request', { id, tool, description, args });
         });
+    }
+
+    /**
+     * 当工具访问未授权路径时，弹出授权确认对话框。
+     * 用户确认后自动将该目录（取文件所在文件夹或目录本身）加入授权列表。
+     */
+    private async requestFolderAuthorization(filePath: string): Promise<boolean> {
+        // 取文件所在目录（如果是文件路径）或目录本身
+        const folderToAuthorize = path.resolve(filePath);
+
+        const id = `authorize-folder-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+        const approved = await new Promise<boolean>((resolve) => {
+            this.pendingConfirmations.set(id, { resolve });
+            this.broadcast('agent:confirm-request', {
+                id,
+                tool: 'authorize_folder',
+                description: `AI 需要访问以下目录，是否授权？\n\n${folderToAuthorize}`,
+                args: { path: folderToAuthorize },
+            });
+        });
+
+        if (approved) {
+            permissionManager.authorizeFolder(folderToAuthorize);
+            console.log(`[AgentRuntime] Folder authorized by user: ${folderToAuthorize}`);
+        }
+        return approved;
     }
 
     public handleConfirmResponseWithRemember(id: string, approved: boolean, remember: boolean): void {

@@ -1,12 +1,16 @@
 /**
  * Playwright 安装管理器
  * 检查、安装和管理 Playwright 及浏览器
+ *
+ * 安装目录固定为 ~/.qa-cowork/skills/agent-browser/
+ * 首次安装完成后写入 .installed 标记文件，后续直接复用无需重复安装
  */
 
 import { exec, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { app } from 'electron'
 import { getBuiltinNodePath, getBuiltinNodeDir, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars, getBuiltinPnpmPath } from './NodePath'
 
@@ -15,31 +19,20 @@ const execAsync = promisify(exec)
 /** Chromium 安装超时时间（约 15 分钟，避免网络慢时一直卡住） */
 const CHROMIUM_INSTALL_TIMEOUT_MS = 15 * 60 * 1000
 
+/** 固定安装目录：~/.qa-cowork/skills/agent-browser/ */
+const AGENT_BROWSER_SKILL_DIR = path.join(os.homedir(), '.qa-cowork', 'skills', 'agent-browser')
+
+/** 已完成安装的标记文件（存在即表示 playwright + 浏览器均已安装完毕，跳过后续检测） */
+const INSTALLED_MARKER = path.join(AGENT_BROWSER_SKILL_DIR, '.playwright-installed')
+
 export class PlaywrightManager {
   private playwrightPath: string
   private browsersPath: string
 
   constructor() {
-    // 打包后：playwright 包在 Resources，浏览器优先用 Resources 内置，否则 userData
-    this.playwrightPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'playwright')
-      : path.join(app.getAppPath(), 'resources', 'playwright')
-
-    if (app.isPackaged) {
-      const resourcesBrowsers = path.join(process.resourcesPath, 'playwright', 'browsers')
-      if (fs.existsSync(resourcesBrowsers)) {
-        const files = fs.readdirSync(resourcesBrowsers)
-        if (files.some((f) => f.startsWith('chromium-'))) {
-          this.browsersPath = resourcesBrowsers
-        } else {
-          this.browsersPath = path.join(app.getPath('userData'), 'playwright', 'browsers')
-        }
-      } else {
-        this.browsersPath = path.join(app.getPath('userData'), 'playwright', 'browsers')
-      }
-    } else {
-      this.browsersPath = path.join(this.playwrightPath, 'browsers')
-    }
+    // 统一使用 ~/.qa-cowork/skills/agent-browser/ 作为安装根目录
+    this.playwrightPath = AGENT_BROWSER_SKILL_DIR
+    this.browsersPath = path.join(AGENT_BROWSER_SKILL_DIR, 'browsers')
   }
 
   /**
@@ -65,21 +58,61 @@ export class PlaywrightManager {
   }
 
   /**
-   * 检查浏览器是否已安装
+   * 检查浏览器是否可用（优先系统 Chrome，其次 Playwright 内置 Chromium）
    */
   async isBrowserInstalled(): Promise<boolean> {
     try {
-      // 检查 Chromium 是否存在
+      // 优先：系统已安装 Chrome/Chromium，无需下载 Chromium
+      const systemChrome = this.getSystemChromePath()
+      if (systemChrome) return true
+
+      // 兜底：检查 Playwright 管理的 Chromium
       if (!fs.existsSync(this.browsersPath)) {
         return false
       }
-
       const files = fs.readdirSync(this.browsersPath)
-      const hasChromium = files.some(file => file.startsWith('chromium-'))
-      return hasChromium
+      return files.some(file => file.startsWith('chromium-'))
     } catch (error) {
       return false
     }
+  }
+
+  /**
+   * 获取系统已安装的 Chrome 可执行路径
+   */
+  private getSystemChromePath(): string | null {
+    if (process.platform === 'darwin') {
+      const candidates = [
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+      ]
+      for (const p of candidates) {
+        if (fs.existsSync(p)) return p
+      }
+    } else if (process.platform === 'linux') {
+      const candidates = [
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/snap/bin/chromium',
+      ]
+      for (const p of candidates) {
+        if (fs.existsSync(p)) return p
+      }
+    } else if (process.platform === 'win32') {
+      const candidates = [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        path.join(os.homedir(), 'AppData', 'Local', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      ]
+      for (const p of candidates) {
+        if (fs.existsSync(p)) return p
+      }
+    }
+    return null
   }
 
   /**
@@ -102,14 +135,41 @@ export class PlaywrightManager {
 
   /**
    * 自动化执行前调用：若未安装则静默安装，不弹窗。安装失败时抛出。
+   * 安装完成后写入 .playwright-installed 标记文件，后续直接跳过，无需重复检测。
    */
   async ensureInstalled(): Promise<void> {
+    // 快速路径：标记文件存在，说明之前已安装完毕，直接复用
+    if (fs.existsSync(INSTALLED_MARKER)) {
+      console.log('[PlaywrightManager] Already installed (marker exists), skipping.')
+      return
+    }
     const status = await this.getInstallStatus()
-    if (!status.needsInstall) return
+    if (!status.needsInstall) {
+      // 安装完整但还没有标记文件（老版本升级场景），补写标记
+      this.writeInstalledMarker()
+      return
+    }
     const onProgress = (msg: string) => console.log('[PlaywrightManager]', msg)
     const result = await this.installAll(onProgress)
     if (!result.success) {
       throw new Error(result.error || 'Playwright/Chromium 安装失败')
+    }
+    // 安装成功，写入标记文件
+    this.writeInstalledMarker()
+  }
+
+  /** 写入安装完成标记文件 */
+  private writeInstalledMarker(): void {
+    try {
+      fs.mkdirSync(path.dirname(INSTALLED_MARKER), { recursive: true })
+      fs.writeFileSync(INSTALLED_MARKER, JSON.stringify({
+        installedAt: new Date().toISOString(),
+        playwrightPath: this.playwrightPath,
+        browsersPath: this.browsersPath,
+      }, null, 2))
+      console.log('[PlaywrightManager] Wrote installed marker:', INSTALLED_MARKER)
+    } catch (err) {
+      console.warn('[PlaywrightManager] Failed to write installed marker:', err)
     }
   }
 
@@ -260,27 +320,34 @@ export class PlaywrightManager {
 
   /**
    * 安装浏览器
+   * 如果系统已安装 Chrome/Chromium，直接跳过 Chromium 下载（优先使用系统浏览器）
    * @param onProgress 进度回调
    */
   async installBrowser(
     onProgress?: (message: string) => void
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      onProgress?.('开始安装 Chromium 浏览器...')
+      // 优先：系统已有 Chrome，跳过 Chromium 下载
+      const systemChrome = this.getSystemChromePath()
+      if (systemChrome) {
+        onProgress?.(`检测到系统 Chrome，跳过 Chromium 下载 ✓ (${systemChrome})`)
+        return { success: true }
+      }
 
-      // 确保 userData 下的 playwright 目录存在（打包后浏览器安装到此目录）
-      const browsersDir = path.dirname(this.browsersPath)
-      if (!fs.existsSync(browsersDir)) {
-        fs.mkdirSync(browsersDir, { recursive: true })
+      onProgress?.('未检测到系统 Chrome，开始下载 Chromium...')
+
+      // 确保浏览器目录存在
+      if (!fs.existsSync(this.browsersPath)) {
+        fs.mkdirSync(this.browsersPath, { recursive: true })
       }
 
       const nodePath = getBuiltinNodePath()
       
       // 尝试多个可能的 Playwright CLI 路径
       const possibleCliPaths = [
-        path.join(this.playwrightPath, 'node_modules', '@playwright', 'browser-chromium', 'cli.js'),
         path.join(this.playwrightPath, 'node_modules', 'playwright', 'cli.js'),
         path.join(this.playwrightPath, 'node_modules', 'playwright-core', 'cli.js'),
+        path.join(this.playwrightPath, 'node_modules', '@playwright', 'browser-chromium', 'cli.js'),
       ]
       
       let playwrightCli: string | null = null
@@ -292,7 +359,7 @@ export class PlaywrightManager {
       }
 
       if (!playwrightCli) {
-        throw new Error('Playwright CLI 不存在,请先安装 Playwright')
+        throw new Error('Playwright CLI 不存在，请先安装 Playwright')
       }
 
       onProgress?.('正在下载 Chromium...(可能需要几分钟)')

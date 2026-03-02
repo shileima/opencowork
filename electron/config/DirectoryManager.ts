@@ -115,10 +115,21 @@ export class DirectoryManager {
     }
 
     /**
-     * 获取自动化脚本目录路径 (~/.qa-cowork/skills/chrome-agent/)
+     * 获取自动化脚本根目录路径 (~/.qa-cowork/scripts/)
+     * 每次聊天的脚本产物按 sessionId 存储在子文件夹下：~/.qa-cowork/scripts/<sessionId>/
      */
     public getScriptsDir(): string {
-        return path.join(this.baseDir, 'skills', 'chrome-agent');
+        return path.join(this.baseDir, 'scripts');
+    }
+
+    /**
+     * 获取指定会话的脚本目录路径 (~/.qa-cowork/scripts/<sessionId>/)
+     * 自动创建目录（如不存在）
+     */
+    public getSessionScriptsDir(sessionId: string): string {
+        const sessionDir = path.join(this.getScriptsDir(), sessionId);
+        this.ensureDirectory(sessionDir);
+        return sessionDir;
     }
 
     /**
