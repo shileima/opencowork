@@ -90,6 +90,7 @@ jobs:
         name: Install dependencies
         env:
           npm_config_registry: https://registry.npmjs.org
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
         run: pnpm install --frozen-lockfile
 
       -
