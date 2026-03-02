@@ -1102,9 +1102,18 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     textBuffer = "";
                                 }
                                 const initialInput = chunk.content_block.input;
-                                const inputStr = (typeof initialInput === 'object' && initialInput !== null)
-                                    ? JSON.stringify(initialInput)
-                                    : "";
+                                // 标准 Anthropic 流式协议：content_block_start 的 input 是空对象 {}，
+                                // 实际参数通过后续 input_json_delta 增量传输。
+                                // 若代理在此处提前注入非空对象，直接序列化后与 delta 拼接会产生无效 JSON（如 "{}{"command":...}"）。
+                                // 修复：只有当 input 包含实际内容（非空对象）时才序列化，否则用空字符串，让 delta 完整填充。
+                                const isEmptyObject = (
+                                    typeof initialInput === 'object' &&
+                                    initialInput !== null &&
+                                    Object.keys(initialInput).length === 0
+                                );
+                                const inputStr = (!initialInput || isEmptyObject)
+                                    ? ""
+                                    : JSON.stringify(initialInput);
                                 currentToolUse = { ...chunk.content_block, input: inputStr };
                             }
                             break;
@@ -1139,7 +1148,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                             parsedInput = {};
                                         }
                                     } catch {
-                                        console.warn('[AgentRuntime] Tool input was not valid JSON, using empty object. Raw length:', rawInput.length);
+                                        console.warn('[AgentRuntime] Tool input was not valid JSON, using empty object. Raw length:', rawInput.length, 'Raw content:', rawInput.substring(0, 300));
                                         parsedInput = {};
                                     }
                                 }
@@ -1237,6 +1246,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     }
                                 } else if (toolUse.name === 'run_command') {
                                     const args = toolUse.input as { command: string, cwd?: string };
+                                    console.log('[Preview:Debug] run_command args:', JSON.stringify(args));
                                     const defaultCwd = authorizedFolders[0] || process.cwd();
 
                                     // 检查是否为自动化脚本相关命令
@@ -1306,9 +1316,11 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                             : this.rewriteAgentBrowserCommandForMeituan(args.command);
                                         result = await this.fsTools.runCommand({ ...args, command: commandToRun }, defaultCwd);
                                         // 开发服务器启动后自动打开内置浏览器并导航到预览地址
+                                        console.log('[Preview:Debug] run_command result includes [Dev server]:', result.includes('[Dev server started in background]'));
                                         if (result.includes('[Dev server started in background]')) {
                                             const urlMatch = result.match(/Preview URL:\s*(https?:\/\/\S+)/);
                                             const previewUrl = urlMatch?.[1]?.trim() || 'http://localhost:3000';
+                                            console.log('[Preview:Debug] Broadcasting agent:open-browser-preview with url:', previewUrl);
                                             this.broadcast('agent:open-browser-preview', previewUrl);
                                             
                                             // 自动错误检测和修复循环
@@ -1335,12 +1347,14 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                 } else if (toolUse.name === 'open_browser_preview') {
                                     const args = toolUse.input as { url: string };
                                     let url = (args?.url || '').trim();
+                                    console.log('[Preview:Debug] open_browser_preview called with url:', url);
                                     if (!url) {
                                         result = 'Error: url is required. Example: http://localhost:3000';
                                     } else {
                                         if (!/^https?:\/\//i.test(url)) {
                                             url = `http://${url}`;
                                         }
+                                        console.log('[Preview:Debug] Broadcasting agent:open-browser-preview:', url);
                                         this.broadcast('agent:open-browser-preview', url);
                                         result = `Opened browser preview tab with URL: ${url}`;
                                     }
@@ -1790,6 +1804,9 @@ ${skillInfo.instructions}
             payload = typeof data === 'object' && data !== null
                 ? { ...(data as object), taskId }
                 : { message: data, taskId };
+        }
+        if (channel === 'agent:open-browser-preview') {
+            console.log('[Preview:Debug] broadcast agent:open-browser-preview, payload:', payload, 'windows count:', this.windows.length);
         }
         for (const win of this.windows) {
             if (!win.isDestroyed()) {
