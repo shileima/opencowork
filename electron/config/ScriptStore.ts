@@ -153,7 +153,81 @@ class ScriptStore {
         return path.resolve(filePath).replace(/\\/g, '/');
     }
 
-    // 扫描目录并同步脚本列表
+    /**
+     * 递归收集目录下所有 .js 脚本文件
+     * scripts/ 下按 <sessionId>/ 子文件夹组织，每个子文件夹对应一次聊天
+     */
+    private collectScriptFiles(
+        dir: string,
+        existingScripts: Array<Script & { normalizedPath: string }>,
+        results: Script[]
+    ): void {
+        const excludedDirs = ['node_modules', '.git', 'session', 'fonts'];
+        const excludedFiles = ['.gitignore', 'package.json', 'package-lock.json', 'requirements.txt'];
+
+        let entries: fs.Dirent[];
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+            return;
+        }
+
+        entries.forEach(dirent => {
+            if (dirent.isDirectory()) {
+                if (!excludedDirs.includes(dirent.name)) {
+                    // 递归进入子文件夹（即 <sessionId>/ 目录）
+                    this.collectScriptFiles(path.join(dir, dirent.name), existingScripts, results);
+                }
+                return;
+            }
+
+            if (excludedFiles.includes(dirent.name) || !dirent.name.endsWith('.js')) {
+                return;
+            }
+
+            const filePath = path.join(dir, dirent.name);
+            const normalizedPath = this.normalizePath(filePath);
+
+            if (!fs.existsSync(filePath)) {
+                console.warn(`[ScriptStore] File does not exist: ${filePath}`);
+                return;
+            }
+
+            try {
+                const stats = fs.statSync(filePath);
+                if (!stats.isFile()) {
+                    return;
+                }
+
+                const scriptName = path.basename(dirent.name, '.js');
+                const existing = existingScripts.find(s => s.normalizedPath === normalizedPath);
+                const isOfficial = this.isOfficialScript(scriptName) ||
+                                   this.isOfficialScript(dirent.name.replace('.js', ''));
+
+                if (existing) {
+                    existing.updatedAt = stats.mtimeMs;
+                    existing.isOfficial = isOfficial;
+                    existing.filePath = filePath;
+                    results.push(existing);
+                } else {
+                    const newScript: Script = {
+                        id: uuidv4(),
+                        name: scriptName,
+                        filePath,
+                        createdAt: stats.birthtimeMs || Date.now(),
+                        updatedAt: stats.mtimeMs,
+                        isOfficial,
+                    };
+                    results.push(newScript);
+                    console.log(`[ScriptStore] Found new script: ${scriptName} (${filePath})`);
+                }
+            } catch (error: any) {
+                console.error(`[ScriptStore] Error processing file ${dirent.name}:`, error.message);
+            }
+        });
+    }
+
+    // 扫描目录并同步脚本列表（递归扫描 scripts/<sessionId>/ 子文件夹）
     syncScriptsFromDirectory(): Script[] {
         // 先同步官方脚本
         this.syncOfficialScripts();
@@ -166,89 +240,15 @@ class ScriptStore {
         }
 
         try {
-            const files = fs.readdirSync(this.scriptsDir, { withFileTypes: true });
             const existingScripts = this.store.get('scripts') || [];
-            
-            // 需要排除的目录和文件
-            const excludedDirs = ['node_modules', '.git', 'session', 'fonts'];
-            const excludedFiles = ['.gitignore', 'package.json', 'package-lock.json', 'requirements.txt'];
-            
-            // 规范化现有脚本的路径用于比较
             const normalizedExistingScripts = existingScripts.map(s => ({
                 ...s,
                 normalizedPath: this.normalizePath(s.filePath)
             }));
+
+            this.collectScriptFiles(this.scriptsDir, normalizedExistingScripts, scripts);
             
-            files.forEach(dirent => {
-                // 跳过排除的目录
-                if (dirent.isDirectory() && excludedDirs.includes(dirent.name)) {
-                    return;
-                }
-                
-                // 跳过排除的文件
-                if (!dirent.isDirectory() && excludedFiles.includes(dirent.name)) {
-                    return;
-                }
-                
-                // 跳过目录和非 .js 文件
-                if (dirent.isDirectory() || !dirent.name.endsWith('.js')) {
-                    return;
-                }
-                
-                const filePath = path.join(this.scriptsDir, dirent.name);
-                const normalizedPath = this.normalizePath(filePath);
-                
-                // 跳过不存在的文件（可能已被删除）
-                if (!fs.existsSync(filePath)) {
-                    console.warn(`[ScriptStore] File does not exist: ${filePath}`);
-                    return;
-                }
-                
-                try {
-                    const stats = fs.statSync(filePath);
-                    
-                    // 跳过非文件（如符号链接指向目录）
-                    if (!stats.isFile()) {
-                        console.warn(`[ScriptStore] Skipping non-file: ${filePath}`);
-                        return;
-                    }
-                    
-                    const scriptName = path.basename(dirent.name, '.js');
-                    
-                    // 使用规范化路径查找现有脚本
-                    const existing = normalizedExistingScripts.find(s => s.normalizedPath === normalizedPath);
-                    
-                    // 判断是否为官方脚本（同时检查文件名和脚本名）
-                    const isOfficial = this.isOfficialScript(scriptName) || 
-                                      this.isOfficialScript(dirent.name.replace('.js', ''));
-                    
-                    if (existing) {
-                        // 更新修改时间和官方标记
-                        existing.updatedAt = stats.mtimeMs;
-                        existing.isOfficial = isOfficial;
-                        // 确保文件路径是最新的（可能路径格式有变化）
-                        existing.filePath = filePath;
-                        scripts.push(existing);
-                    } else {
-                        // 创建新脚本记录
-                        const newScript: Script = {
-                            id: uuidv4(),
-                            name: scriptName,
-                            filePath: filePath,
-                            createdAt: stats.birthtimeMs || Date.now(),
-                            updatedAt: stats.mtimeMs,
-                            isOfficial: isOfficial
-                        };
-                        scripts.push(newScript);
-                        console.log(`[ScriptStore] Found new script: ${scriptName} (${filePath})`);
-                    }
-                } catch (error: any) {
-                    console.error(`[ScriptStore] Error processing file ${dirent.name}:`, error.message);
-                    // 继续处理其他文件，不中断整个扫描过程
-                }
-            });
-            
-            // 清理已不存在的脚本记录（使用规范化路径检查）
+            // 清理已不存在的脚本记录
             const validScripts = scripts.filter(s => {
                 const exists = fs.existsSync(s.filePath);
                 if (!exists) {
@@ -259,14 +259,11 @@ class ScriptStore {
             
             // 按更新时间排序（最新的在前），官方脚本优先
             validScripts.sort((a, b) => {
-                // 官方脚本排在前面
                 if (a.isOfficial && !b.isOfficial) return -1;
                 if (!a.isOfficial && b.isOfficial) return 1;
-                // 然后按更新时间排序
                 return b.updatedAt - a.updatedAt;
             });
             
-            // 保存到 store
             this.store.set('scripts', validScripts);
             
             console.log(`[ScriptStore] Synced ${validScripts.length} scripts from ${this.scriptsDir}`);

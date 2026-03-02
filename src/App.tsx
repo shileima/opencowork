@@ -38,8 +38,8 @@ function App() {
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
   const [deployStatus, setDeployStatus] = useState<'idle' | 'deploying' | 'success' | 'error'>('idle');
   const [agentInitFailed, setAgentInitFailed] = useState<string | null>(null);
-  const deployLogRef = useRef<string>('');
   const previewHandlerRef = useRef<(() => void) | null>(null);
+  const deployHandlerRef = useRef<(() => void) | null>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
   const projectButtonRef = useRef<HTMLButtonElement>(null);
   const { pendingRequest, handleConfirm, handleDeny } = useConfirmations();
@@ -445,92 +445,15 @@ ${err}
     setIsProcessing(false);
   };
 
-  // Strip ANSI escape codes from terminal output
-  const stripAnsi = (text: string): string =>
-    text
-      .replace(/\x1B\]8;;[^\x1B]*\x1B\\([^\x1B]*)\x1B\]8;;\x1B\\/g, '$1') // OSC 8 hyperlinks -> display text
-      .replace(/\x1B\[[0-9;]*[A-Za-z]/g, ''); // SGR sequences
-
-  // Build deploy log markdown: title + code block (DEPLOY_LOG marker for CSS targeting)
-  const buildDeployLog = (rawLog: string): string => {
-    const clean = stripAnsi(rawLog).trimEnd();
-    return `**🚀 ${t('deployLogTitle')}**\n\n\`\`\`deploy-log\n${clean}\n\`\`\``;
-  };
-
   // Preview handler: delegates to ProjectView's internal handlePreview via ref
   const handlePreview = () => {
     previewHandlerRef.current?.();
   };
 
-  // Deploy handler
-  const handleDeploy = async () => {
-    if (!currentProject?.path || deployStatus === 'deploying') return;
-    setDeployStatus('deploying');
-    deployLogRef.current = '';
-    // 将当前任务标题改为「部署」，便于在任务列表中识别
-    window.ipcRenderer.invoke('project:rename-current-task', t('deploy')).catch(() => {});
-
-    const deployStartMsg: Anthropic.MessageParam = {
-      role: 'assistant',
-      content: buildDeployLog(t('deployStarting'))
-    };
-    setHistory(prev => [...prev, deployStartMsg]);
-
-    try {
-      await window.ipcRenderer.invoke('deploy:start', currentProject.path);
-    } catch (err) {
-      console.error('Deploy invoke error:', err);
-      setDeployStatus('error');
-    }
+  // Deploy handler: delegates to ProjectView's internal handleDeploy via ref
+  const handleDeploy = () => {
+    deployHandlerRef.current?.();
   };
-
-  // Deploy event listeners
-  useEffect(() => {
-    const removeDeployLog = window.ipcRenderer.on('deploy:log', (_event, ...args) => {
-      const chunk = args[0] as string;
-      deployLogRef.current += chunk;
-      const logContent = buildDeployLog(deployLogRef.current);
-      setHistory(prev => {
-        const updated = [...prev];
-        for (let i = updated.length - 1; i >= 0; i--) {
-          if (updated[i].role === 'assistant') {
-            updated[i] = { role: 'assistant', content: logContent };
-            break;
-          }
-        }
-        return updated;
-      });
-    });
-
-    const removeDeployDone = window.ipcRenderer.on('deploy:done', (_event, ...args) => {
-      const url = args[0] as string;
-      setDeployStatus('success');
-      const successMsg: Anthropic.MessageParam = {
-        role: 'assistant',
-        content: `**✅ ${t('deploySuccessMessage')}**\n\n[${url}](${url})`
-      };
-      setHistory(prev => [...prev, successMsg]);
-      setTimeout(() => setDeployStatus('idle'), 3000);
-    });
-
-    const removeDeployError = window.ipcRenderer.on('deploy:error', (_event, ...args) => {
-      const errMsg = args[0] as string;
-      setDeployStatus('error');
-      const cleanErr = stripAnsi(errMsg || 'Unknown error');
-      const errorContent: Anthropic.MessageParam = {
-        role: 'assistant',
-        content: `**❌ ${t('deployFailedMessage')}**\n\n\`\`\`deploy-log\n${cleanErr}\n\`\`\``
-      };
-      setHistory(prev => [...prev, errorContent]);
-      setTimeout(() => setDeployStatus('idle'), 3000);
-    });
-
-    return () => {
-      removeDeployLog();
-      removeDeployDone();
-      removeDeployError();
-    };
-  }, [t]);
 
   // If this is the floating ball window, render only the floating ball
   if (isFloatingBall) {
@@ -869,6 +792,8 @@ ${err}
             isNarrowWindow={isNarrowWindow}
             appCurrentProject={currentProject}
             onRegisterPreviewHandler={(handler) => { previewHandlerRef.current = handler; }}
+            onRegisterDeployHandler={(handler) => { deployHandlerRef.current = handler; }}
+            onDeployStatusChange={(status) => setDeployStatus(status)}
           />
         )}
         {showSettings && (
