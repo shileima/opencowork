@@ -26,6 +26,7 @@ export function UpdateNotification({
     const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
     const [updateDone, setUpdateDone] = useState(false);
     const [countdown, setCountdown] = useState(3);
+    const [restartTimeout, setRestartTimeout] = useState(false);
 
     useEffect(() => {
         // 监听更新进度
@@ -53,6 +54,26 @@ export function UpdateNotification({
 
         return () => clearTimeout(timer);
     }, [updateDone, countdown]);
+
+    // 如果主进程 10 秒内未重启，显示手动重启按钮
+    useEffect(() => {
+        if (!updateDone) return;
+
+        const timer = setTimeout(() => {
+            setRestartTimeout(true);
+        }, 10000);
+
+        return () => clearTimeout(timer);
+    }, [updateDone]);
+
+    const handleManualRestart = async () => {
+        try {
+            await window.ipcRenderer?.invoke('resource:restart-app');
+        } catch {
+            // 如果 IPC 调用失败，提示用户手动重启
+            alert('请手动关闭并重新打开应用以完成更新。');
+        }
+    };
 
     const handleUpdate = async () => {
         setIsUpdating(true);
@@ -174,12 +195,28 @@ export function UpdateNotification({
                     )}
 
                     {/* Restart countdown */}
-                    {updateDone && (
+                    {updateDone && !restartTimeout && (
                         <div className="flex items-center justify-center gap-2 text-green-600 dark:text-green-400 py-1">
                             <Loader2 size={14} className="animate-spin" />
                             <span className="text-sm font-medium">
                                 正在重启应用，请稍候...
                             </span>
+                        </div>
+                    )}
+
+                    {/* Manual restart fallback */}
+                    {updateDone && restartTimeout && (
+                        <div className="flex flex-col items-center gap-3 py-1">
+                            <p className="text-sm text-orange-600 dark:text-orange-400 text-center">
+                                更新已完成，但应用未能自动重启。
+                            </p>
+                            <button
+                                onClick={handleManualRestart}
+                                className="px-4 py-2 text-sm font-semibold text-white bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 rounded-lg transition-all shadow-sm hover:shadow-md flex items-center gap-2"
+                            >
+                                <Loader2 size={14} />
+                                立即重启应用
+                            </button>
                         </div>
                     )}
 

@@ -187,6 +187,24 @@ class ConfigStore {
             this.store.delete('model');
         }
 
+        // Ensure all defaultProviders exist in stored providers (handles new providers added in app updates)
+        // electron-store only fills missing top-level keys, not nested objects, so we must deep-merge manually.
+        const storedProviders = this.store.get('providers');
+        if (storedProviders) {
+            let needsUpdate = false;
+            const mergedProviders = { ...storedProviders };
+            for (const [id, defaultProvider] of Object.entries(defaultProviders)) {
+                if (!mergedProviders[id]) {
+                    console.log(`[ConfigStore] migrate: adding missing provider '${id}' from defaults`);
+                    mergedProviders[id] = { ...defaultProvider };
+                    needsUpdate = true;
+                }
+            }
+            if (needsUpdate) {
+                this.store.set('providers', mergedProviders);
+            }
+        }
+
         // Migrate: clear API keys that were encrypted with old machine-based key (pre fixed-key scheme)
         // If a stored key has ENCRYPTED: prefix but fails to decrypt, it was encrypted on another machine.
         // Clear it so the user is prompted to re-enter, avoiding repeated ERR_OSSL_BAD_DECRYPT errors.
@@ -288,6 +306,14 @@ class ConfigStore {
             return {
                 ...stored,
                 apiKey: resolveApiKey(rawKey),
+            };
+        }
+        // Fallback: provider not in store yet (e.g. new provider added in app update), use default
+        if (def) {
+            console.log(`[ConfigStore] getProvider: '${id}' not in store, falling back to default`);
+            return {
+                ...def,
+                apiKey: resolveApiKey(def.apiKey),
             };
         }
         return undefined;
