@@ -2114,7 +2114,6 @@ ipcMain.handle('project:task:switch', async (event, projectId: string, taskId: s
     }
     const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
     const isFloatingBall = event.sender === floatingBallWin?.webContents;
-    
     if (!targetAgent) {
       return { success: false, error: 'Agent not initialized' };
     }

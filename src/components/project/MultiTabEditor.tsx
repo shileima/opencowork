@@ -116,13 +116,13 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
             type: 'terminal',
             cwd: projectPath.trim(),
         };
-        setTabs([...tabs, newTab]);
+        setTabs(prev => [...prev, newTab]);
         setActiveTabId(newTab.id);
     };
 
     /** 智能体只保留一个：已有则定位激活并更新内容，否则新建 */
     const openAgentTab = () => {
-        const existingAgentTab = tabs.find(tab => tab.type === 'agent') as AgentTab | undefined;
+        const existingAgentTab = tabsRef.current.find(tab => tab.type === 'agent') as AgentTab | undefined;
         if (existingAgentTab) {
             setActiveTabId(existingAgentTab.id);
             setTabs(prev =>
@@ -139,15 +139,16 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
             type: 'agent',
             content: agentContent || ''
         };
-        setTabs([...tabs, newTab]);
+        setTabs(prev => [...prev, newTab]);
         setActiveTabId(newTab.id);
     };
 
-    /** 打开或切换到浏览器 tab。已有浏览器 tab 时仅切换并可选更新 URL，不关闭其他 tab。 */
-    const openBrowserTab = (initialUrl?: string) => {
+    /** 打开或切换到浏览器 tab。已有浏览器 tab 时仅切换并可选更新 URL，不关闭其他 tab。
+     * 使用 tabsRef.current 避免闭包过期（通过 onRef 暴露给外部后，state 快照会陈旧）。 */
+    const openBrowserTab = useCallback((initialUrl?: string) => {
         const url = initialUrl ?? ''; // 默认为空，避免启动时立即尝试连接
-        console.log('[Preview:Debug] openBrowserTab called, initialUrl:', initialUrl, 'existing tabs:', tabs.map(t => `${t.type}:${t.id}`));
-        const existingBrowserTab = tabs.find(tab => tab.type === 'browser') as BrowserTabData | undefined;
+        console.log('[Preview:Debug] openBrowserTab called, initialUrl:', initialUrl, 'existing tabs:', tabsRef.current.map(t => `${t.type}:${t.id}`));
+        const existingBrowserTab = tabsRef.current.find(tab => tab.type === 'browser') as BrowserTabData | undefined;
         if (existingBrowserTab) {
             console.log('[Preview:Debug] Found existing browser tab:', existingBrowserTab.id, 'current url:', existingBrowserTab.url, '-> new url:', url);
             setActiveTabId(existingBrowserTab.id);
@@ -167,9 +168,9 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
             type: 'browser',
             url
         };
-        setTabs([...tabs, newTab]);
+        setTabs(prev => [...prev, newTab]);
         setActiveTabId(newTab.id);
-    };
+    }, []);
 
     const refreshBrowserTab = () => {
         setBrowserRefreshTrigger(prev => prev + 1);
@@ -307,7 +308,7 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
     }, [projectPath, onFileChange]);
 
     // 暴露 openEditorTab、openBrowserTab、refreshBrowserTab、closeBrowserTab、closeAllTabs、closeTabByFilePath 给父组件；若有待打开文件则打开并消费
-    // 依赖仅保留 onRef 与 pendingOpenFile，避免 closeAllTabs/closeTabByFilePath/onConsumePendingOpenFile 每次渲染新引用导致无限循环
+    // openBrowserTab/closeBrowserTab/closeAllTabs/closeTabByFilePath 均为 useCallback 稳定引用，不会导致无限循环
     useEffect(() => {
         if (onRef) {
             onRef({ openEditorTab, openBrowserTab, refreshBrowserTab, closeBrowserTab, closeAllTabs, closeTabByFilePath });
@@ -316,7 +317,7 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
             openEditorTab(pendingOpenFile.filePath, pendingOpenFile.content);
             onConsumePendingOpenFileRef.current?.();
         }
-    }, [onRef, closeBrowserTab, closeAllTabs, closeTabByFilePath, pendingOpenFile]);
+    }, [onRef, openBrowserTab, closeBrowserTab, closeAllTabs, closeTabByFilePath, pendingOpenFile]);
 
     // 激活 tab 时滚动到可视区域最右侧（参考 Cursor）
     useEffect(() => {
