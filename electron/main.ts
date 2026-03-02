@@ -514,12 +514,14 @@ ipcMain.handle('agent:send-message', async (event, message: string | { content: 
   // Determine which agent to use based on sender window
   const isFloatingBall = event.sender === floatingBallWin?.webContents
   const targetAgent = isFloatingBall ? floatingBallAgent : mainAgent
+  console.log('[Preview:Debug] agent:send-message received, viewContext:', viewContext, 'isFloatingBall:', isFloatingBall, 'targetAgent exists:', !!targetAgent, 'currentTaskIdForSession:', currentTaskIdForSession)
   if (!targetAgent) throw new Error('Agent not initialized')
   // 仅在项目视图（非协作视图）下才传入当前任务 ID 与项目 ID
   const isCoworkView = viewContext === 'cowork' || isFloatingBall
   const currentProject = isCoworkView ? null : projectStore.getCurrentProject()
   const taskId = isCoworkView ? undefined : (currentProject && currentTaskIdForSession ? currentTaskIdForSession : undefined)
   const projectId = currentProject?.id
+  console.log('[Preview:Debug] agent:send-message params, isCoworkView:', isCoworkView, 'projectId:', projectId, 'taskId:', taskId)
   // 开始处理时立即将任务状态设为进行中，左侧任务卡片显示正确图标
   if (projectId && taskId) {
     projectStore.updateTask(projectId, taskId, { status: 'active' })

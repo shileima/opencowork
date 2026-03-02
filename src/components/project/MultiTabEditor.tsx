@@ -48,6 +48,7 @@ interface MultiTabEditorProps {
         openEditorTab: (filePath: string, content: string) => void;
         openBrowserTab: (url?: string) => void;
         refreshBrowserTab: () => void;
+        closeBrowserTab: () => void;
         closeAllTabs: () => void;
         /** 根据文件路径关闭对应的编辑器 tab（如资源管理器中删除文件时调用） */
         closeTabByFilePath: (filePath: string) => void;
@@ -145,8 +146,10 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
     /** 打开或切换到浏览器 tab。已有浏览器 tab 时仅切换并可选更新 URL，不关闭其他 tab。 */
     const openBrowserTab = (initialUrl?: string) => {
         const url = initialUrl ?? ''; // 默认为空，避免启动时立即尝试连接
+        console.log('[Preview:Debug] openBrowserTab called, initialUrl:', initialUrl, 'existing tabs:', tabs.map(t => `${t.type}:${t.id}`));
         const existingBrowserTab = tabs.find(tab => tab.type === 'browser') as BrowserTabData | undefined;
         if (existingBrowserTab) {
+            console.log('[Preview:Debug] Found existing browser tab:', existingBrowserTab.id, 'current url:', existingBrowserTab.url, '-> new url:', url);
             setActiveTabId(existingBrowserTab.id);
             // 仅当显式传入 URL 且与当前不同时才更新（如本地启动成功后打开 localhost:3000）
             if (initialUrl !== undefined && existingBrowserTab.url !== url) {
@@ -158,6 +161,7 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
             }
             return;
         }
+        console.log('[Preview:Debug] Creating new browser tab with url:', url);
         const newTab: BrowserTabData = {
             id: `browser-${Date.now()}`,
             type: 'browser',
@@ -191,6 +195,20 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
     const closeAllTabs = useCallback(() => {
         setTabs([]);
         setActiveTabId(null);
+    }, []);
+
+    /** 关闭内置浏览器 tab（停止本地服务后调用） */
+    const closeBrowserTab = useCallback(() => {
+        const currentTabs = tabsRef.current;
+        const browserTab = currentTabs.find(tab => tab.type === 'browser');
+        if (!browserTab) return;
+        const nextTabs = currentTabs.filter(tab => tab.id !== browserTab.id);
+        setTabs(nextTabs);
+        setActiveTabId(prev =>
+            prev === browserTab.id
+                ? (nextTabs.length > 0 ? nextTabs[nextTabs.length - 1].id : null)
+                : prev
+        );
     }, []);
 
     /** 根据文件路径关闭对应的编辑器 tab，用于资源管理器删除文件时同步关闭已打开的 tab */
@@ -288,17 +306,17 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
         };
     }, [projectPath, onFileChange]);
 
-    // 暴露 openEditorTab、openBrowserTab、refreshBrowserTab、closeAllTabs、closeTabByFilePath 给父组件；若有待打开文件则打开并消费
+    // 暴露 openEditorTab、openBrowserTab、refreshBrowserTab、closeBrowserTab、closeAllTabs、closeTabByFilePath 给父组件；若有待打开文件则打开并消费
     // 依赖仅保留 onRef 与 pendingOpenFile，避免 closeAllTabs/closeTabByFilePath/onConsumePendingOpenFile 每次渲染新引用导致无限循环
     useEffect(() => {
         if (onRef) {
-            onRef({ openEditorTab, openBrowserTab, refreshBrowserTab, closeAllTabs, closeTabByFilePath });
+            onRef({ openEditorTab, openBrowserTab, refreshBrowserTab, closeBrowserTab, closeAllTabs, closeTabByFilePath });
         }
         if (pendingOpenFile) {
             openEditorTab(pendingOpenFile.filePath, pendingOpenFile.content);
             onConsumePendingOpenFileRef.current?.();
         }
-    }, [onRef, closeAllTabs, closeTabByFilePath, pendingOpenFile]);
+    }, [onRef, closeBrowserTab, closeAllTabs, closeTabByFilePath, pendingOpenFile]);
 
     // 激活 tab 时滚动到可视区域最右侧（参考 Cursor）
     useEffect(() => {

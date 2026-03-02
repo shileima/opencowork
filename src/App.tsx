@@ -38,6 +38,7 @@ function App() {
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
   const [deployStatus, setDeployStatus] = useState<'idle' | 'deploying' | 'success' | 'error'>('idle');
   const deployLogRef = useRef<string>('');
+  const previewHandlerRef = useRef<(() => void) | null>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
   const projectButtonRef = useRef<HTMLButtonElement>(null);
   const { pendingRequest, handleConfirm, handleDeny } = useConfirmations();
@@ -406,15 +407,18 @@ ${err}
   }, []);
 
   const handleSendMessage = async (msg: string | { content: string, images: string[] }) => {
+    console.log('[Preview:Debug] handleSendMessage called, activeView:', activeView, 'msg type:', typeof msg);
     setIsProcessing(true);
     try {
+      console.log('[Preview:Debug] invoking agent:send-message...');
       const result = await window.ipcRenderer.invoke('agent:send-message', msg, activeView) as { error?: string } | undefined;
+      console.log('[Preview:Debug] agent:send-message returned:', result);
       if (result?.error) {
         console.error(result.error);
         setIsProcessing(false);
       }
     } catch (err) {
-      console.error(err);
+      console.error('[Preview:Debug] agent:send-message threw:', err);
       setIsProcessing(false);
     }
   };
@@ -436,16 +440,9 @@ ${err}
     return `**🚀 ${t('deployLogTitle')}**\n\n\`\`\`deploy-log\n${clean}\n\`\`\``;
   };
 
-  // Preview handler: creates a new task and sends a message to run the local service and open browser
-  const handlePreview = async () => {
-    if (!currentProject?.id || isProcessing) return;
-
-    // Create a new task for preview
-    const result = await window.ipcRenderer.invoke('project:task:create', currentProject.id, t('preview') || '预览') as { success: boolean; task?: { id: string } };
-    if (!result.success) return;
-
-    // Send message to start local service and open browser at localhost:3000
-    await handleSendMessage('请运行本地开发服务（npm run dev 或类似命令），启动成功后自动打开内置浏览器 localhost:3000 进行预览。');
+  // Preview handler: delegates to ProjectView's internal handlePreview via ref
+  const handlePreview = () => {
+    previewHandlerRef.current?.();
   };
 
   // Deploy handler
@@ -827,6 +824,7 @@ ${err}
             onToggleExplorerPanel={() => setIsExplorerPanelHidden(!isExplorerPanelHidden)}
             isNarrowWindow={isNarrowWindow}
             appCurrentProject={currentProject}
+            onRegisterPreviewHandler={(handler) => { previewHandlerRef.current = handler; }}
           />
         )}
         {showSettings && (

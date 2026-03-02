@@ -25,6 +25,8 @@ interface ProjectViewProps {
     isNarrowWindow?: boolean;
     /** App 已加载的当前项目，用于尽早渲染资源管理器，不等 ProjectView 自身 loadCurrentProject 完成 */
     appCurrentProject?: Project | null;
+    /** 注册预览处理函数，供父组件（App.tsx 预览按钮）调用 */
+    onRegisterPreviewHandler?: (handler: () => void) => void;
 }
 
 // 跟踪新任务的第一条消息，用于重命名
@@ -66,7 +68,8 @@ export function ProjectView({
     isExplorerPanelHidden,
     onToggleExplorerPanel,
     isNarrowWindow = false,
-    appCurrentProject
+    appCurrentProject,
+    onRegisterPreviewHandler
 }: ProjectViewProps) {
     const { t } = useI18n();
     const { showToast } = useToast();
@@ -87,6 +90,7 @@ export function ProjectView({
         openEditorTab: (filePath: string, content: string) => void;
         openBrowserTab?: (url?: string) => void;
         refreshBrowserTab?: () => void;
+        closeBrowserTab?: () => void;
         closeAllTabs?: () => void;
         closeTabByFilePath?: (filePath: string) => void;
     } | null>(null);
@@ -249,6 +253,7 @@ export function ProjectView({
         // 同时自动收起右侧资源管理器，让浏览器预览获得更多空间
         const removeBrowserPreviewListener = window.ipcRenderer.on('agent:open-browser-preview', (_event, ...args) => {
             const url = args[0] as string;
+            console.log('[Preview:Debug] ProjectView received agent:open-browser-preview, url:', url, 'multiTabEditorRef:', !!multiTabEditorRefRef.current);
             multiTabEditorRefRef.current?.openBrowserTab?.(url);
             if (!isExplorerPanelHiddenRef.current) {
                 onToggleExplorerPanelRef.current();
@@ -293,8 +298,12 @@ export function ProjectView({
                 pendingTaskRename = null;
             }
             const ref = multiTabEditorRefRef.current;
-            ref?.openBrowserTab?.(); // 无参：新建用默认 URL，已有则保留当前 URL
-            if (!payload?.skipBrowserRefresh) {
+            if (payload?.skipBrowserRefresh) {
+                // 停止本地服务后：关闭内置浏览器 tab，不刷新
+                ref?.closeBrowserTab?.();
+            } else {
+                // 正常完成：打开/保留浏览器 tab 并刷新
+                ref?.openBrowserTab?.();
                 ref?.refreshBrowserTab?.();
             }
         });
@@ -438,6 +447,39 @@ export function ProjectView({
             // 任务列表会在 TaskListPanel 中通过 project:task:created 自动刷新
         }
     };
+
+    const handlePreviewRef = useRef<() => Promise<void>>();
+    const handlePreview = useCallback(async () => {
+        console.log('[Preview:Debug] handlePreview called, currentProject:', currentProject?.id, 'isProcessing:', isProcessing);
+        if (!currentProject || isProcessing) return;
+
+        setStreamingText('');
+        setIsLoadingHistory(false);
+
+        const result = await window.ipcRenderer.invoke('project:task:create', currentProject.id, t('preview') || '预览') as { success: boolean; task?: ProjectTask };
+        console.log('[Preview:Debug] project:task:create result:', result);
+        if (!result.success || !result.task) return;
+
+        setCurrentTaskId(result.task.id);
+        setStreamingText('');
+        pendingTaskRename = {
+            taskId: result.task.id,
+            projectId: currentProject.id
+        };
+
+        console.log('[Preview:Debug] Sending preview message, taskId:', result.task.id);
+        onSendMessage('请运行本地开发服务（npm run dev 或类似命令），启动成功后自动打开内置浏览器进行预览。');
+    }, [currentProject, isProcessing, t, onSendMessage]);
+
+    handlePreviewRef.current = handlePreview;
+
+    useEffect(() => {
+        if (onRegisterPreviewHandler) {
+            onRegisterPreviewHandler(() => {
+                handlePreviewRef.current?.();
+            });
+        }
+    }, [onRegisterPreviewHandler]);
 
     // 发送消息；新任务在聊天完成后（agent:done）根据首条用户消息自动重命名
     const handleSendMessageWithRename = useCallback((message: string | { content: string, images: string[] }) => {

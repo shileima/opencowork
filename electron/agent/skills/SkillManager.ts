@@ -251,14 +251,26 @@ export class SkillManager {
         try {
             // 静默读取（减少日志噪音）
             const content = await fs.readFile(filePath, 'utf-8');
-            const parts = content.split('---');
-            if (parts.length < 3) {
+
+            // 严格检测：必须以 `---` 开头才视为有 frontmatter
+            if (!content.trimStart().startsWith('---')) {
+                console.warn(`[SkillManager] No frontmatter found in ${filePath}, skipping`);
+                return;
+            }
+
+            // 从第一个 `---` 之后开始分割，避免文件中其他 `---` 水平线干扰
+            const firstDash = content.indexOf('---');
+            const afterFirst = content.slice(firstDash + 3);
+            const secondDash = afterFirst.indexOf('\n---');
+            if (secondDash === -1) {
                 console.warn(`[SkillManager] Invalid frontmatter structure in ${filePath}`);
                 return;
             }
 
-            const frontmatter = yaml.load(parts[1]) as { name?: string; description?: string; input_schema?: Record<string, unknown> } | undefined;
-            const instructions = parts.slice(2).join('---').trim();
+            const frontmatterStr = afterFirst.slice(0, secondDash);
+            const instructions = afterFirst.slice(secondDash + 4).trim();
+
+            const frontmatter = yaml.load(frontmatterStr) as { name?: string; description?: string; input_schema?: Record<string, unknown> } | undefined;
 
             if (frontmatter && frontmatter.name && frontmatter.description) {
                 // Sanitize name for API usage
