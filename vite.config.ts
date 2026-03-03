@@ -1,7 +1,21 @@
 import { defineConfig } from 'vite'
 import path from 'node:path'
+import { cpSync, existsSync } from 'node:fs'
 import electron from 'vite-plugin-electron/simple'
 import react from '@vitejs/plugin-react'
+
+function copyPlaywrightWrapper() {
+  return {
+    name: 'copy-playwright-wrapper',
+    closeBundle() {
+      const src = path.join(__dirname, 'electron', 'playwright-maximize-wrapper')
+      const dest = path.join(__dirname, 'dist-electron', 'playwright-maximize-wrapper')
+      if (existsSync(src)) {
+        cpSync(src, dest, { recursive: true })
+      }
+    },
+  }
+}
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -20,6 +34,7 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    copyPlaywrightWrapper(),
     electron({
       main: {
         // Shortcut of `build.lib.entry`.

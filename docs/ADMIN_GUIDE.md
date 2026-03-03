@@ -128,26 +128,13 @@ OpenCowork 提供了超级管理员权限系统，允许管理员管理脚本、
 3. 输入新名称，按 Enter 确认或 Esc 取消
 4. 脚本文件将自动重命名
 
-#### 标记脚本为官方
-1. 在"自动化"标签页中，找到要标记的脚本
-2. 鼠标悬停在脚本上，点击星标图标（⭐）
-3. 确认标记操作
-4. 脚本将被复制到 `resources/skills/chrome-agent/` 目录
-5. 脚本信息将被添加到 `official-scripts.json` 清单文件
-6. 脚本将同步到所有用户的目录
-
-**官方脚本特性**：
-- 不能被普通用户删除
-- 随应用分发给所有用户
-- 显示"官方"标识
-
 #### 删除脚本
 1. 在"自动化"标签页中，找到要删除的脚本
 2. 鼠标悬停在脚本上，点击删除图标（垃圾桶图标）
 3. 确认删除操作
 4. 脚本文件将被永久删除
 
-**注意**：官方脚本不能被删除。
+**说明**：自动化脚本存放在 `~/.qa-cowork/scripts/<sessionId>/`，按会话隔离。
 
 ### 2. 技能管理
 
@@ -211,12 +198,6 @@ OpenCowork 提供了超级管理员权限系统，允许管理员管理脚本、
 
 ## 资源标记流程
 
-### 脚本标记为官方
-1. 读取脚本文件内容
-2. 将脚本文件复制到 `resources/skills/chrome-agent/`
-3. 更新 `official-scripts.json` 添加脚本信息
-4. 同步到用户目录（通过 `syncOfficialScripts()`）
-
 ### 技能标记为内置
 1. 读取技能目录内容
 2. 将技能目录复制到 `resources/skills/`
@@ -275,12 +256,12 @@ A: 应用在首次启动时会：
 3. 检查用户名是否在 `adminUsers` 列表中（不区分大小写）
 4. 如果在列表中，自动设置为管理员；否则默认为普通用户
 
-### Q: 标记为官方/内置后，如何撤销？
+### Q: 标记为内置后，如何撤销？
 A: 目前不支持直接撤销。需要手动从 `resources/` 目录中删除文件，并更新相应的清单文件。
 
-### Q: 官方脚本和内置技能有什么区别？
+### Q: 自动化脚本和内置技能有什么区别？
 A: 
-- **官方脚本**：存储在 `resources/skills/chrome-agent/`，通过 `official-scripts.json` 管理
+- **自动化脚本**：存储在 `~/.qa-cowork/scripts/<sessionId>/`，按会话隔离
 - **内置技能**：存储在 `resources/skills/`，随应用分发
 
 ### Q: 标记操作失败怎么办？
@@ -301,7 +282,7 @@ A: 在设置页面的"管理员"标签页中查看"当前角色"。
 - 通过 IPC 与前端通信
 
 ### 权限检查点
-- 脚本操作：删除、重命名、标记官方
+- 脚本操作：删除、重命名
 - 技能操作：编辑、删除、标记内置
 - MCP 操作：删除、标记内置
 
@@ -310,27 +291,24 @@ A: 在设置页面的"管理员"标签页中查看"当前角色"。
 - `permission:set-role`：设置用户角色
 - `permission:is-admin`：检查是否为管理员
 - `script:rename`：重命名脚本（需要管理员权限）
-- `script:mark-official`：标记脚本为官方（需要管理员权限）
 - `skill:mark-builtin`：标记技能为内置（需要管理员权限）
 - `mcp:mark-builtin`：标记 MCP 为内置（需要管理员权限）
 
 ## 最佳实践
 
-1. **谨慎标记**：标记为官方/内置的资源将分发给所有用户，请确保资源质量
-2. **定期审查**：定期审查官方脚本和内置资源，确保它们仍然有用
-3. **文档完善**：为官方脚本和内置资源提供清晰的文档和说明
-4. **版本管理**：在 `official-scripts.json` 中维护脚本版本信息
-5. **测试验证**：标记前充分测试，确保资源正常工作
+1. **谨慎标记**：标记为内置的资源将分发给所有用户，请确保资源质量
+2. **定期审查**：定期审查内置资源，确保它们仍然有用
+3. **文档完善**：为内置资源提供清晰的文档和说明
+4. **测试验证**：标记前充分测试，确保资源正常工作
 
 ## 相关文件
 
 - `electron/config/PermissionService.ts`：权限管理服务（包含预设管理员逻辑）
 - `electron/config/ConfigStore.ts`：配置存储（包含用户角色）
-- `electron/config/ScriptStore.ts`：脚本管理（包含标记官方逻辑）
+- `electron/config/ScriptStore.ts`：脚本管理
 - `electron/main.ts`：IPC handlers 和权限检查
 - `electron/agent/mcp/MCPClientService.ts`：MCP 管理（包含标记内置逻辑）
 - `resources/admin-users.json`：预设管理员配置文件
-- `resources/skills/chrome-agent/official-scripts.json`：官方脚本清单
 - `resources/mcp/builtin-mcp.json`：内置 MCP 配置
 
 ## 更新日志

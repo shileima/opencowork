@@ -18,6 +18,29 @@ import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 
+/** 发送给 AI 前压缩图片：缩小尺寸 + JPEG，减少 token/延迟；无 sharp 时返回原图 */
+const IMAGE_COMPRESS_MAX_WIDTH = 1280;
+const IMAGE_COMPRESS_JPEG_QUALITY = 82;
+
+async function compressImageForAI(base64Data: string, mediaType: string): Promise<{ data: string; media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }> {
+    try {
+        const sharp = (await import('sharp')).default;
+        const buf = Buffer.from(base64Data, 'base64');
+        const pipeline = sharp(buf);
+        const meta = await pipeline.metadata();
+        const w = meta.width ?? 0;
+        const h = meta.height ?? 0;
+        const needResize = w > IMAGE_COMPRESS_MAX_WIDTH || h > IMAGE_COMPRESS_MAX_WIDTH;
+        const resized = needResize
+            ? pipeline.resize(IMAGE_COMPRESS_MAX_WIDTH, IMAGE_COMPRESS_MAX_WIDTH, { fit: 'inside', withoutEnlargement: true })
+            : pipeline;
+        const out = await resized.jpeg({ quality: IMAGE_COMPRESS_JPEG_QUALITY }).toBuffer();
+        return { data: out.toString('base64'), media_type: 'image/jpeg' };
+    } catch {
+        return { data: base64Data, media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' };
+    }
+}
+
 // Safe commands that can be auto-approved in standard/trust modes
 const SAFE_COMMANDS = [
     'python', 'python3', 'node', 'npm', 'pip', 'pip3', 'git', 'ls', 'cat', 'head', 'tail',
@@ -42,7 +65,6 @@ function isAutomationScriptCommand(command: string): boolean {
     const cmd = command.trim().toLowerCase();
     // 检查是否包含 node 执行 .js 文件，或者包含自动化相关关键词
     const automationKeywords = [
-        'chrome-agent',
         'automation',
         '自动化',
         'ui自动化',
@@ -54,8 +76,8 @@ function isAutomationScriptCommand(command: string): boolean {
     // 检查是否执行 .js 文件
     const jsFilePattern = /node\s+.*\.js|\.js\s*$/;
     
-    // 检查是否在 scripts/ 目录下执行（新路径）或旧的 chrome-agent 目录下执行
-    const scriptsPathPattern = /\.qa-cowork[/\\]scripts[/\\]|chrome-agent/;
+    // 检查是否在 .qa-cowork/scripts/ 目录下执行
+    const scriptsPathPattern = /\.qa-cowork[/\\]scripts[/\\]/;
     
     return jsFilePattern.test(cmd) && 
            (scriptsPathPattern.test(cmd) || automationKeywords.some(keyword => cmd.includes(keyword)));
@@ -498,19 +520,15 @@ export class AgentRuntime {
                 userContent = input;
             } else {
                 const blocks: Anthropic.ContentBlockParam[] = [];
-                // Process images
+                // Process images（可选压缩后送 AI，加快识别与响应）
                 if (input.images && input.images.length > 0) {
                     for (const img of input.images) {
-                        // format: data:image/png;base64,......
                         const match = img.match(/^data:(image\/[a-zA-Z]+);base64,(.+)$/);
                         if (match) {
+                            const { data, media_type } = await compressImageForAI(match[2], match[1]);
                             blocks.push({
                                 type: 'image',
-                                source: {
-                                    type: 'base64',
-                                    media_type: match[1] as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-                                    data: match[2]
-                                }
+                                source: { type: 'base64', media_type, data }
                             });
                         }
                     }
@@ -525,7 +543,7 @@ export class AgentRuntime {
                 userContent = blocks;
             }
 
-            // 检测用户输入中是否包含"关闭浏览器"的意图（用于 chrome-agent 脚本）
+            // 检测用户输入中是否包含"关闭浏览器"的意图（用于自动化脚本）
             const userInputText = typeof userContent === 'string' ? userContent : 
                 (Array.isArray(userContent) ? userContent.filter(b => b.type === 'text').map(b => (b as any).text).join(' ') : '');
             this.userWantsCloseBrowser = this.detectCloseBrowserIntent(userInputText);
@@ -548,8 +566,7 @@ export class AgentRuntime {
                         if (block.type === 'tool_result') {
                             const result = typeof block.content === 'string' ? block.content : '';
                             // 检查是否是脚本执行成功的结果（包含成功标识或没有错误信息）
-                            return result.includes('chrome-agent') || 
-                                   result.includes('自动化') ||
+                            return result.includes('自动化') ||
                                    (result.length > 0 && !result.toLowerCase().includes('error') && !result.toLowerCase().includes('失败'));
                         }
                         return false;
@@ -953,7 +970,7 @@ When creating new projects or generating code, if the user does NOT specify a te
 ### Tool Usage Protocol
 ${currentProject ? `⚠️ **PROJECT MODE - STRICT CONSTRAINTS**:
 You are in **Project Mode**. Your ONLY purpose is to generate code files for the user's project.
-- **FORBIDDEN**: Do NOT use browser automation skills (agent-browser, chrome-agent, webapp-testing, etc.)
+- **FORBIDDEN**: Do NOT use browser automation skills (agent-browser, webapp-testing, etc.)
 - **FORBIDDEN**: Do NOT use web search or information retrieval skills
 - **FORBIDDEN**: Do NOT attempt to search the internet or access external URLs
 - **ALLOWED**: Only use \`write_file\`, \`read_file\`, \`list_dir\`, \`run_command\` (for pnpm install/dev), \`open_browser_preview\`, \`kill_project_dev_server\`
@@ -1015,8 +1032,11 @@ When the user asks to open any URL on \`*.sankuai.com\`, \`*.meituan.com\`, or \
 - **FORBIDDEN**: Do NOT use \`agent-browser open\` or Google Chrome for Testing for these URLs — 美团内网默认使用本地默认浏览器打开.
 - Login state is kept by the user's default browser (e.g. Safari/Chrome); no need for agent-browser session or cookie injection.
 
-### Browser Automation Guidelines (chrome-agent scripts)
+### Browser Automation Guidelines (Playwright scripts)
 When executing Playwright automation scripts:
+- **Maximized window (headed mode)**: When launching a visible browser (\`headless: false\`), always use:
+  - \`chromium.launch({ headless: false, args: ['--start-maximized'] }\`)
+  - \`browser.newContext({ viewport: null })\` (and create pages from this context). Without \`viewport: null\`, Playwright's default viewport overrides the window size and can cause the window to not be maximized or content to be clipped on the right.
 - **Default Behavior**: Keep the browser open after script completion unless the user explicitly requests to close it
 - **Browser Closing**: Only call \`browser.close()\`, \`context.close()\`, or \`page.close()\` if:
   - The user's message explicitly contains keywords like "关闭浏览器", "close browser", "关闭窗口", etc.
@@ -1542,8 +1562,7 @@ ${skillInfo.instructions}
                             if (block.type === 'tool_result') {
                                 const result = typeof block.content === 'string' ? block.content : '';
                                 // 检查是否是脚本执行成功的结果
-                                const isScriptExecution = result.includes('chrome-agent') || 
-                                                         result.includes('自动化') ||
+                                const isScriptExecution = result.includes('自动化') ||
                                                          result.includes('node ') ||
                                                          result.includes('.js');
                                 // 检查是否成功（没有错误信息）

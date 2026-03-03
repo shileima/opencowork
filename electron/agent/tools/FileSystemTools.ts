@@ -8,7 +8,7 @@ import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from '../../utils/NodePath';
 import { getCommonPackageManagerPaths } from '../../utils/PathUtils';
-import { getPlaywrightEnvVars } from '../../utils/PlaywrightPath';
+import { getPlaywrightEnvVars, getBuiltinPlaywrightPath } from '../../utils/PlaywrightPath';
 import { ensurePlaywrightForAutomation } from '../../utils/PlaywrightEnsure';
 import { nodeVersionManager } from '../../utils/NodeVersionManager';
 import { ErrorDetector, DetectedError } from './ErrorDetector';
@@ -875,6 +875,22 @@ export class FileSystemTools {
                 ...(isDevServerCommand ? { PORT: '3000', VITE_PORT: '3000' } : {})
             };
 
+            // 自动化脚本：注入 Playwright 包装层，使 headed 浏览器默认最大化（--start-maximized + viewport:null）
+            const isAutomationScript = this.isAutomationScriptCommand(command, workingDir);
+            if (isAutomationScript) {
+                const wrapperRoot = this.getPlaywrightMaximizeWrapperRoot();
+                const builtinPlaywright = getBuiltinPlaywrightPath();
+                if (fsSync.existsSync(wrapperRoot) && builtinPlaywright) {
+                    const realPlaywrightDir = path.join(builtinPlaywright, 'node_modules', 'playwright');
+                    if (fsSync.existsSync(realPlaywrightDir)) {
+                        const delim = process.platform === 'win32' ? ';' : ':';
+                        env.NODE_PATH = `${wrapperRoot}${delim}${env.NODE_PATH || ''}`;
+                        env.PLAYWRIGHT_REAL_PATH = realPlaywrightDir;
+                        console.log('[FileSystemTools] Injected Playwright maximize wrapper for automation script');
+                    }
+                }
+            }
+
             // macOS/Linux：用假命令劫持 open/xdg-open，阻止 webpack-dev-server / vite preview 等打开外部浏览器
             if ((isDevServerCommand || isPreviewServerCommand) && (process.platform === 'darwin' || process.platform === 'linux')) {
                 const noBrowserDir = this.ensureNoBrowserScriptDir();
@@ -1259,14 +1275,39 @@ export class FileSystemTools {
         return '当前平台不支持此操作。';
     }
 
+    /** 执行自动化脚本时使用的 Playwright 包装目录（注入 --start-maximized + viewport:null） */
+    private getPlaywrightMaximizeWrapperRoot(): string {
+        const fromDist = path.join(__dirname, '..', '..', 'playwright-maximize-wrapper');
+        if (fsSync.existsSync(fromDist)) return fromDist;
+        const appRoot = process.env.APP_ROOT || path.join(__dirname, '..', '..', '..');
+        const fromElectron = path.join(appRoot, 'electron', 'playwright-maximize-wrapper');
+        if (fsSync.existsSync(fromElectron)) return fromElectron;
+        return fromDist;
+    }
+
+    /**
+     * 检测命令是否在运行 ~/.qa-cowork/scripts/ 下的脚本（需要注入默认最大化）
+     */
+    private isAutomationScriptCommand(command: string, cwd: string): boolean {
+        const scriptsDir = path.join(os.homedir(), '.qa-cowork', 'scripts');
+        const normalized = command.trim().replace(/^["']|["']$/g, '');
+        if (normalized.includes(scriptsDir)) return true;
+        const nodeScriptMatch = normalized.match(/node\s+([^\s]+\.js)/);
+        if (nodeScriptMatch) {
+            const scriptArg = nodeScriptMatch[1].trim().replace(/^["']|["']$/g, '');
+            const scriptPath = path.isAbsolute(scriptArg) ? scriptArg : path.resolve(cwd, scriptArg);
+            return scriptPath.includes(scriptsDir) || scriptPath.startsWith(scriptsDir);
+        }
+        return false;
+    }
+
     /**
      * 检测命令是否为自动化测试命令（可能启动 Chrome for Testing）
      */
     private isAutomationTestCommand(command: string): boolean {
         const cmdLower = command.toLowerCase();
-        // 检测是否包含 playwright、chrome-agent、自动化测试相关关键词
+        // 检测是否包含 playwright、自动化测试相关关键词
         return cmdLower.includes('playwright') ||
-               cmdLower.includes('chrome-agent') ||
                cmdLower.includes('chromium') ||
                (cmdLower.includes('node') && cmdLower.includes('.js') && cmdLower.includes('chrome'));
     }

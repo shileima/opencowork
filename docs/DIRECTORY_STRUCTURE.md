@@ -27,13 +27,14 @@ OpenCowork 使用统一的目录管理系统（`DirectoryManager`）来管理所
 ├── config/                    # 配置目录（electron-store 自动管理）
 │   ├── qa-cowork-config.json    # 应用配置（API Keys、模型选择等）
 │   ├── qa-cowork-sessions.json   # 会话历史
-│   └── qa-cowork-scripts.json    # 脚本索引
-├── skills/                    # 用户技能目录
-│   ├── chrome-agent/          # 自动化脚本目录
-│   │   ├── login_xgpt.js     # 用户脚本
-│   │   └── ...
-│   └── [user-custom-skills]/  # 其他用户自定义技能
-├── mcp/                       # MCP 配置目录
+│   └── qa-cowork-scripts.json   # 脚本索引
+├── scripts/                    # 自动化脚本根目录
+│   └── <sessionId>/            # 按会话隔离的脚本目录
+│       ├── xxx.js
+│       └── ...
+├── skills/                     # 用户技能目录
+│   └── [user-custom-skills]/   # 用户自定义技能
+├── mcp/                        # MCP 配置目录
 │   ├── mcp.json               # MCP 服务器配置（用户级）
 │   └── mcp_storage.json       # MCP 存储数据（用户级）
 ├── cache/                     # 缓存目录（可清理）
@@ -59,12 +60,8 @@ OpenCowork 使用统一的目录管理系统（`DirectoryManager`）来管理所
 ```
 resources/
 ├── skills/                    # 内置技能目录
-│   ├── chrome-agent/          # 官方自动化脚本
-│   │   ├── official-scripts.json  # 官方脚本清单
-│   │   ├── login_xgpt.js     # 官方脚本示例
-│   │   └── ...
-│   └── [builtin-skills]/      # 其他内置技能
-└── mcp/                       # 内置 MCP 配置
+│   └── [builtin-skills]/      # 内置技能（如 agent-browser 等）
+└── mcp/                        # 内置 MCP 配置
     └── builtin-mcp.json       # 内置 MCP 服务器配置模板
 ```
 
@@ -100,8 +97,8 @@ const configDir = directoryManager.getConfigDir(); // ~/.qa-cowork/config/
 // 获取技能目录
 const skillsDir = directoryManager.getSkillsDir(); // ~/.qa-cowork/skills/
 
-// 获取脚本目录
-const scriptsDir = directoryManager.getScriptsDir(); // ~/.qa-cowork/skills/chrome-agent/
+// 获取脚本根目录（按会话子目录存储：~/.qa-cowork/scripts/<sessionId>/）
+const scriptsDir = directoryManager.getScriptsDir(); // ~/.qa-cowork/scripts/
 
 // 获取 MCP 目录
 const mcpDir = directoryManager.getMcpDir(); // ~/.qa-cowork/mcp/
@@ -154,21 +151,22 @@ app.whenReady().then(() => {
 - `qa-cowork-sessions.json`：会话历史，由 `SessionStore` 管理
 - `qa-cowork-scripts.json`：脚本索引，由 `ScriptStore` 管理
 
+### scripts/ 目录
+
+**存储内容**：自动化脚本（按会话隔离）
+
+**管理方式**：
+- 路径：`~/.qa-cowork/scripts/<sessionId>/`，每次会话的脚本存放在对应 sessionId 子目录下
+- 脚本列表会递归扫描该目录下所有 `.js` 文件
+
 ### skills/ 目录
 
-**存储内容**：
-- 用户自定义技能
-- 自动化脚本（chrome-agent）
+**存储内容**：用户自定义技能
 
 **管理方式**：
 - 内置技能首次运行时从 `resources/skills/` 复制到 `~/.qa-cowork/skills/`
 - 用户自定义技能直接创建在此目录
 - 更新应用时，新增的内置技能会自动添加，但不会覆盖用户修改的技能
-
-**chrome-agent/ 子目录**：
-- 存储自动化脚本（.js 文件）
-- 官方脚本从 `resources/skills/chrome-agent/` 同步
-- 用户脚本直接创建在此目录
 
 ### mcp/ 目录
 
