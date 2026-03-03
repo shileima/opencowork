@@ -88,13 +88,14 @@ function App() {
     }
   }, [activeView]);
 
-  // 从 localStorage 加载任务面板与资源管理器隐藏状态
+  // 从 localStorage 加载任务面板与资源管理器隐藏状态；切换 project 模式后默认展开右侧资源管理器
   useEffect(() => {
     if (activeView === 'project') {
       const savedTask = localStorage.getItem('projectView:taskPanelHidden');
       if (savedTask === 'true') setIsTaskPanelHidden(true);
       const savedExplorer = localStorage.getItem('projectView:explorerPanelHidden');
-      if (savedExplorer === 'true') setIsExplorerPanelHidden(true);
+      // 默认展开资源管理器，仅当用户曾保存为收起时才设为收起
+      setIsExplorerPanelHidden(savedExplorer === 'true');
     }
   }, [activeView]);
 
@@ -401,6 +402,10 @@ ${err}
 
     const removeAgentReadyListener = window.ipcRenderer.on('agent:ready', () => {
       setAgentInitFailed(null);
+      // Agent 就绪后，若当前处于 cowork 模式，自动加载最近一次历史会话
+      window.ipcRenderer.invoke('session:auto-load').catch((err) => {
+        console.warn('[App] session:auto-load on agent:ready failed:', err);
+      });
     });
 
     const removeAgentInitFailedListener = window.ipcRenderer.on('agent:init-failed', (_event, ...args) => {

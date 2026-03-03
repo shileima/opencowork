@@ -22,6 +22,7 @@ import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { setPlaywrightManager } from './utils/PlaywrightEnsure'
+import { ensureAgentBrowserCanFindChromium } from './utils/PlaywrightPath'
 import { registerContextSwitchHandler } from './contextSwitchCoordinator'
 import Anthropic from '@anthropic-ai/sdk'
 
@@ -454,7 +455,6 @@ app.whenReady().then(() => {
 
   // 3. Quick synchronous setup (non-blocking, fast)
   ensureBuiltinMcpConfig()
-  scriptStore.syncOfficialScripts()
   permissionService.getUserRole()
   sessionStore.cleanupEmptySessions()
 
@@ -479,6 +479,9 @@ app.whenReady().then(() => {
   // 7.5 Initialize Playwright manager（不再弹窗提示安装；自动化执行时自动判断并静默安装）
   playwrightManager = new PlaywrightManager()
   setPlaywrightManager(playwrightManager)
+
+  // 确保 agent-browser 0.15.x 能在 Electron 环境中找到 chromium headless shell
+  ensureAgentBrowserCanFindChromium()
 
   // 4. Create system tray
   createTray()
@@ -749,46 +752,6 @@ ipcMain.handle('script:rename', (_, id: string, newName: string) => {
   return { success, error: success ? undefined : 'Failed to rename script' }
 })
 
-ipcMain.handle('script:mark-official', (_, id: string) => {
-  const script = scriptStore.getScript(id)
-  if (!script) {
-    return { success: false, error: 'Script not found' }
-  }
-
-  // 权限检查：只有管理员可以标记脚本为官方
-  if (!permissionService.canMarkScriptOfficial(id)) {
-    return { success: false, error: 'Permission denied: Only administrators can mark scripts as official' }
-  }
-
-  // 如果已经是官方脚本，直接返回成功
-  if (script.isOfficial) {
-    return { success: true }
-  }
-
-  const success = scriptStore.markAsOfficial(id)
-  return { success, error: success ? undefined : 'Failed to mark script as official' }
-})
-
-ipcMain.handle('script:unmark-official', (_, id: string) => {
-  const script = scriptStore.getScript(id)
-  if (!script) {
-    return { success: false, error: 'Script not found' }
-  }
-
-  // 权限检查：只有管理员可以将官方脚本标记为非官方
-  if (!permissionService.canUnmarkScriptOfficial(id)) {
-    return { success: false, error: 'Permission denied: Only administrators can unmark official scripts' }
-  }
-
-  // 如果不是官方脚本，直接返回成功
-  if (!script.isOfficial) {
-    return { success: true }
-  }
-
-  const success = scriptStore.unmarkAsOfficial(id)
-  return { success, error: success ? undefined : 'Failed to unmark script as official' }
-})
-
 /**
  * 检测用户输入中是否包含"关闭浏览器"的意图
  */
@@ -870,7 +833,7 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
     const shouldClose = shouldCloseBrowser(userInput);
     
     // 构建执行消息
-    let executeMessage = `请执行以下 chrome-agent 脚本：\n\n\`\`\`bash\n${command}\n\`\`\`\n\n脚本路径：${script.filePath}`;
+    let executeMessage = `请执行以下自动化脚本：\n\n\`\`\`bash\n${command}\n\`\`\`\n\n脚本路径：${script.filePath}`;
     
     // 如果没有明确要求关闭浏览器，添加提示保持浏览器打开
     if (!shouldClose) {

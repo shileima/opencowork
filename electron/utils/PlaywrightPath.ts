@@ -114,3 +114,68 @@ export function getPlaywrightEnvVars(): Record<string, string> {
 
   return env;
 }
+
+/**
+ * 确保 agent-browser 0.15.x 能找到正确的浏览器。
+ *
+ * agent-browser 0.15.x 使用 playwright-core 内置逻辑确定浏览器路径，在 Electron 环境中
+ * 会将 Application Support/<appName>/playwright/browsers/ 作为默认路径。
+ * 此函数在该路径下为 chromium_headless_shell-1200 创建指向已安装的 headless shell 的 symlink。
+ */
+export function ensureAgentBrowserCanFindChromium(): void {
+  try {
+    const sourceBrowsersPath = path.join(AGENT_BROWSER_SKILL_DIR, 'browsers');
+    if (!fs.existsSync(sourceBrowsersPath)) return;
+
+    // 找到可用的 headless shell 目录（按版本号降序，优先取最新）
+    const available = fs.readdirSync(sourceBrowsersPath).filter((d) =>
+      d.startsWith('chromium_headless_shell-')
+    );
+    if (available.length === 0) return;
+    available.sort().reverse();
+    const headlessShellSource = path.join(sourceBrowsersPath, available[0]);
+
+    // agent-browser 0.15.x 使用的目标目录（Electron userData 下的 playwright/browsers）
+    // macOS: ~/Library/Application Support/<appName>/playwright/browsers/
+    const appSupportBase =
+      process.platform === 'darwin'
+        ? path.join(os.homedir(), 'Library', 'Application Support')
+        : process.platform === 'win32'
+          ? process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
+          : path.join(os.homedir(), '.local', 'share');
+
+    // agent-browser 0.15.x 要求的固定版本目录名
+    const TARGET_HEADLESS_VERSION = 'chromium_headless_shell-1200';
+
+    // 尝试多个可能的 appName（qacowork 及其他可能名称）
+    const appNames = ['qacowork', 'QACowork'];
+    for (const appName of appNames) {
+      const targetBrowsersDir = path.join(appSupportBase, appName, 'playwright', 'browsers');
+      const targetLink = path.join(targetBrowsersDir, TARGET_HEADLESS_VERSION);
+
+      if (!fs.existsSync(targetBrowsersDir)) {
+        fs.mkdirSync(targetBrowsersDir, { recursive: true });
+      }
+
+      // 若链接已正确指向源目录，跳过
+      try {
+        const stat = fs.lstatSync(targetLink);
+        if (stat.isSymbolicLink()) {
+          const linkTarget = fs.readlinkSync(targetLink);
+          if (linkTarget === headlessShellSource) continue;
+          fs.unlinkSync(targetLink);
+        } else if (stat.isDirectory()) {
+          // 真实目录，不替换
+          continue;
+        }
+      } catch {
+        // targetLink 不存在，继续创建
+      }
+
+      fs.symlinkSync(headlessShellSource, targetLink);
+    }
+  } catch (err) {
+    // 非关键路径，不打断主流程
+    console.warn('[PlaywrightPath] ensureAgentBrowserCanFindChromium error:', err);
+  }
+}

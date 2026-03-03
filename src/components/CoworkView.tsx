@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
-import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, MessageCircle, Download, Play, Edit2, Star, RefreshCw, FolderOpen, Terminal, FileText, Search, Globe, Code2, Cpu, FolderSearch, Wrench, Copy, RotateCcw } from 'lucide-react';
+import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, MessageCircle, Download, Play, Edit2, RefreshCw, FolderOpen, Terminal, FileText, Search, Globe, Code2, Cpu, FolderSearch, Wrench, Copy, RotateCcw } from 'lucide-react';
 import { ChatInput } from './ChatInput';
 import { useI18n } from '../i18n/I18nContext';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -730,17 +730,11 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                 </button>
                                 <button
                                     onClick={async () => {
-                                        // 打开脚本目录（chrome-agent 子目录）
+                                        // 打开脚本目录（.qa-cowork/scripts/）
                                         const paths = await window.ipcRenderer.invoke('directory:get-all-paths') as Record<string, string>;
                                         const scriptsPath = paths?.scriptsDir;
                                         if (scriptsPath) {
                                             await window.ipcRenderer.invoke('directory:open-path', scriptsPath);
-                                        } else {
-                                            // 如果没有 scriptsDir，尝试使用 skillsDir + chrome-agent
-                                            const skillsPath = paths?.skillsDir;
-                                            if (skillsPath) {
-                                                await window.ipcRenderer.invoke('directory:open-path', skillsPath);
-                                            }
                                         }
                                     }}
                                     className="p-1 text-stone-400 hover:text-blue-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-blue-400 dark:hover:bg-zinc-700 rounded-lg transition-colors"
@@ -780,11 +774,6 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                         <p className="text-xs font-medium text-stone-700 dark:text-zinc-300 line-clamp-2 leading-relaxed">
                                                             {script.name}
                                                         </p>
-                                                        {script.isOfficial && (
-                                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                                                                官方
-                                                            </span>
-                                                        )}
                                                     </div>
                                                     <p className="text-[10px] text-stone-400 mt-1 flex items-center gap-1.5">
                                                         <span>
@@ -900,52 +889,11 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                                     setEditingScriptName(script.name);
                                                                 }}
                                                                 className="p-1 text-stone-400 hover:text-blue-500 transition-colors"
-                                                                title={script.isOfficial ? "重命名脚本（官方脚本，仅管理员）" : "重命名脚本"}
+                                                                title="重命名脚本"
                                                             >
                                                                 <Edit2 size={12} />
                                                             </button>
-                                                            {!script.isOfficial && (
-                                                                <button
-                                                                    onClick={async (e) => {
-                                                                        e.stopPropagation();
-                                                                        if (window.confirm(`确定要将脚本 "${script.name}" 标记为官方吗？\n\n标记后，该脚本将同步给所有用户。`)) {
-                                                                            const result = await window.ipcRenderer.invoke('script:mark-official', script.id) as { success: boolean; error?: string };
-                                                                            if (result.success) {
-                                                                                setScripts(await window.ipcRenderer.invoke('script:list') as Script[]);
-                                                                            } else {
-                                                                                setError(result.error || '标记失败');
-                                                                            }
-                                                                        }
-                                                                    }}
-                                                                    className="p-1 text-stone-400 hover:text-yellow-500 transition-colors"
-                                                                    title="标记为官方"
-                                                                >
-                                                                    <Star size={12} />
-                                                                </button>
-                                                            )}
-                                                            {script.isOfficial && (
-                                                                <button
-                                                                    onClick={async (e) => {
-                                                                        e.stopPropagation();
-                                                                        if (window.confirm(`确定要将脚本 "${script.name}" 取消官方标记吗？\n\n取消后，该脚本将不再作为官方脚本。`)) {
-                                                                            const result = await window.ipcRenderer.invoke('script:unmark-official', script.id) as { success: boolean; error?: string };
-                                                                            if (result.success) {
-                                                                                setScripts(await window.ipcRenderer.invoke('script:list') as Script[]);
-                                                                            } else {
-                                                                                setError(result.error || '取消官方标记失败');
-                                                                            }
-                                                                        }
-                                                                    }}
-                                                                    className="p-1 text-stone-400 hover:text-orange-500 transition-colors"
-                                                                    title="取消官方标记"
-                                                                >
-                                                                    <Star size={12} className="fill-current" />
-                                                                </button>
-                                                            )}
-                                                        </>
-                                                    )}
-                                                    {!script.isOfficial && (
-                                                        <button
+                                                            <button
                                                             onClick={async (e) => {
                                                                 e.stopPropagation();
                                                                 // 确认删除
@@ -967,6 +915,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                                         >
                                                             <Trash2 size={12} />
                                                         </button>
+                                                        </>
                                                     )}
                                                 </>
                                             )}
