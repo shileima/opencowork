@@ -4,8 +4,11 @@ import { ChatPanel } from './project/ChatPanel';
 import { MultiTabEditor } from './project/MultiTabEditor';
 import { FileExplorer } from './project/FileExplorer';
 import { ProjectCreateDialog } from './project/ProjectCreateDialog';
+import { ResizableSplitPane } from './project/ResizableSplitPane';
+import { UpdateNotification } from './project/UpdateNotification';
 import Anthropic from '@anthropic-ai/sdk';
 import { useI18n } from '../i18n/I18nContext';
+import { useToast } from './Toast';
 import type { Project, ProjectTask } from '../../electron/config/ProjectStore';
 
 interface ProjectViewProps {
@@ -13,44 +16,168 @@ interface ProjectViewProps {
     onSendMessage: (message: string | { content: string, images: string[] }) => void;
     onAbort: () => void;
     isProcessing: boolean;
+    isDeploying?: boolean;
     onOpenSettings: () => void;
     isTaskPanelHidden: boolean;
     onToggleTaskPanel: () => void;
+    isExplorerPanelHidden: boolean;
+    onToggleExplorerPanel: () => void;
+    isNarrowWindow?: boolean;
+    /** App 已加载的当前项目，用于尽早渲染资源管理器，不等 ProjectView 自身 loadCurrentProject 完成 */
+    appCurrentProject?: Project | null;
+    /** 注册预览处理函数，供父组件（App.tsx 预览按钮）调用 */
+    onRegisterPreviewHandler?: (handler: () => void) => void;
+    /** 注册部署处理函数，供父组件（App.tsx 部署按钮）调用 */
+    onRegisterDeployHandler?: (handler: () => void) => void;
+    /** 部署状态变更回调，供父组件更新按钮样式 */
+    onDeployStatusChange?: (status: 'idle' | 'deploying' | 'success' | 'error') => void;
 }
 
 // 跟踪新任务的第一条消息，用于重命名
 let pendingTaskRename: { taskId: string; projectId: string } | null = null;
+
+/** 根据用户输入生成更有寓意的任务名称：取首句/首行、去噪、限制长度 */
+const deriveTaskTitleFromMessage = (messageText: string, maxLen = 28): string => {
+    if (!messageText || typeof messageText !== 'string') return '';
+    let text = messageText;
+    // 上下文切换格式：提取 "用户最新请求：" 后的内容作为标题
+    const latestRequestMatch = text.match(/用户最新请求[：:]\s*([^\n]+)/);
+    if (latestRequestMatch) {
+        text = latestRequestMatch[1].trim();
+    }
+    // 去掉 Markdown 符号，换行统一为空格，合并多余空白
+    text = text
+        .replace(/[#*_`\[\]()]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!text) return '';
+    // 取首句（以。！？\n 为界）或整段
+    const firstSentence = text.split(/[。！？\n]/)[0]?.trim() || text;
+    // 去掉常见口语前缀，让标题更贴近“做什么”
+    const trimmed = firstSentence
+        .replace(/^(请帮我|帮我|我想|请|能否|可以)?\s*/i, '')
+        .trim() || firstSentence;
+    return trimmed.slice(0, maxLen).trim() || text.slice(0, maxLen).trim();
+};
 
 export function ProjectView({
     history,
     onSendMessage,
     onAbort,
     isProcessing,
+    isDeploying = false,
     onOpenSettings: _onOpenSettings,
     isTaskPanelHidden,
-    onToggleTaskPanel
+    onToggleTaskPanel,
+    isExplorerPanelHidden,
+    onToggleExplorerPanel,
+    isNarrowWindow = false,
+    appCurrentProject,
+    onRegisterPreviewHandler,
+    onRegisterDeployHandler,
+    onDeployStatusChange,
 }: ProjectViewProps) {
     const { t } = useI18n();
+    const { showToast } = useToast();
     const [currentProject, setCurrentProject] = useState<Project | null>(null);
     const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
     const [showCreateDialog, setShowCreateDialog] = useState(false);
     const [streamingText, setStreamingText] = useState('');
     const [config, setConfig] = useState<any>(null);
     const [fileContents, setFileContents] = useState<Record<string, string>>({});
+    const [splitRatio, setSplitRatio] = useState<number>(50);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+    const [resourceUpdateAvailable, setResourceUpdateAvailable] = useState<{
+        currentVersion: string;
+        latestVersion: string;
+        updateSize?: number;
+    } | null>(null);
     const [multiTabEditorRef, setMultiTabEditorRef] = useState<{
         openEditorTab: (filePath: string, content: string) => void;
         openBrowserTab?: (url?: string) => void;
         refreshBrowserTab?: () => void;
+        closeBrowserTab?: () => void;
+        closeAllTabs?: () => void;
+        closeTabByFilePath?: (filePath: string) => void;
     } | null>(null);
+    const [pendingOpenFile, setPendingOpenFile] = useState<{ filePath: string; content: string } | null>(null);
     const multiTabEditorRefRef = useRef<typeof multiTabEditorRef>(null);
     const currentTaskIdRef = useRef<string | null>(null);
+    const currentProjectRef = useRef<Project | null>(null);
+    const historyRef = useRef<Anthropic.MessageParam[]>([]);
+    const defaultTaskTitleRef = useRef(t('newTask'));
+    defaultTaskTitleRef.current = t('newTask');
+    const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const hoverRightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const isExplorerPanelHiddenRef = useRef(isExplorerPanelHidden);
+    const onToggleExplorerPanelRef = useRef(onToggleExplorerPanel);
     currentTaskIdRef.current = currentTaskId;
+    currentProjectRef.current = currentProject;
+    historyRef.current = history;
     multiTabEditorRefRef.current = multiTabEditorRef;
+    isExplorerPanelHiddenRef.current = isExplorerPanelHidden;
+    onToggleExplorerPanelRef.current = onToggleExplorerPanel;
+
+    // 用 App 的 currentProject 尽早驱动渲染；删除项目后 App 置为 null 时也同步清空，避免资源管理器仍显示已删项目
+    useEffect(() => {
+        setCurrentProject(appCurrentProject ?? null);
+    }, [appCurrentProject?.id, appCurrentProject?.path]);
+
+    // 处理左侧悬停展开侧栏
+    const handleLeftEdgeMouseEnter = useCallback(() => {
+        if (isTaskPanelHidden) {
+            // 清除之前的定时器
+            if (hoverTimeoutRef.current) {
+                clearTimeout(hoverTimeoutRef.current);
+            }
+            // 设置 1 秒后展开侧栏
+            hoverTimeoutRef.current = setTimeout(() => {
+                onToggleTaskPanel();
+            }, 1000);
+        }
+    }, [isTaskPanelHidden, onToggleTaskPanel]);
+
+    const handleLeftEdgeMouseLeave = useCallback(() => {
+        // 清除定时器
+        if (hoverTimeoutRef.current) {
+            clearTimeout(hoverTimeoutRef.current);
+            hoverTimeoutRef.current = null;
+        }
+    }, []);
+
+    // 右侧悬停展开资源管理器
+    const handleRightEdgeMouseEnter = useCallback(() => {
+        if (isExplorerPanelHidden) {
+            if (hoverRightTimeoutRef.current) clearTimeout(hoverRightTimeoutRef.current);
+            hoverRightTimeoutRef.current = setTimeout(() => {
+                onToggleExplorerPanel();
+            }, 1000);
+        }
+    }, [isExplorerPanelHidden, onToggleExplorerPanel]);
+
+    const handleRightEdgeMouseLeave = useCallback(() => {
+        if (hoverRightTimeoutRef.current) {
+            clearTimeout(hoverRightTimeoutRef.current);
+            hoverRightTimeoutRef.current = null;
+        }
+    }, []);
+
+    // 清理定时器
+    useEffect(() => {
+        return () => {
+            if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+            if (hoverRightTimeoutRef.current) clearTimeout(hoverRightTimeoutRef.current);
+        };
+    }, []);
 
     useEffect(() => {
+        console.log('[ProjectView] Component mounted, registering event listeners...');
         // 加载配置
         window.ipcRenderer.invoke('config:get-all').then((cfg) => {
             setConfig(cfg as any);
+            // 加载分割比例配置
+            const ratio = (cfg as any)?.chatEditorSplitRatio ?? 50;
+            setSplitRatio(ratio);
         });
         // 监听配置更新
         const removeConfigListener = window.ipcRenderer.on('config:updated', (_event, newConfig) => {
@@ -61,14 +188,37 @@ export function ProjectView({
             const token = args[0] as string;
             setStreamingText(prev => prev + token);
         });
+        // 监听资源更新通知
+        const removeUpdateListener = window.ipcRenderer.on('resource:update-available', (_event, ...args) => {
+            const updateInfo = args[0] as { currentVersion: string; latestVersion: string; updateSize?: number };
+            console.log('[ProjectView] Resource update available:', updateInfo);
+            setResourceUpdateAvailable({
+                currentVersion: updateInfo.currentVersion,
+                latestVersion: updateInfo.latestVersion,
+                updateSize: updateInfo.updateSize
+            });
+        });
+        // 组件挂载时主动检查一次更新
+        window.ipcRenderer.invoke('resource:check-update').then((result: unknown) => {
+            const updateInfo = result as { success: boolean; hasUpdate: boolean; currentVersion: string; latestVersion: string; updateSize?: number };
+            console.log('[ProjectView] Manual update check result:', updateInfo);
+            if (updateInfo && updateInfo.hasUpdate) {
+                setResourceUpdateAvailable({
+                    currentVersion: updateInfo.currentVersion,
+                    latestVersion: updateInfo.latestVersion,
+                    updateSize: updateInfo.updateSize
+                });
+            }
+        }).catch((err: unknown) => {
+            console.error('[ProjectView] Failed to check for updates:', err);
+        });
         // 监听历史更新
         const removeHistoryListener = window.ipcRenderer.on('agent:history-update', async (_event, ...args) => {
             const newHistory = args[0] as Anthropic.MessageParam[];
             setStreamingText('');
-            // 如果历史不为空，说明任务已经有消息了，清除待重命名标记
-            if (newHistory.length > 0 && pendingTaskRename) {
-                pendingTaskRename = null;
-            }
+            setIsLoadingHistory(false); // 历史加载完成
+            // 不在此处清除 pendingTaskRename：用户发送首条消息后 agent:history-update 会立即触发，
+            // 若此时清除则 agent:done 时无法根据首条消息重命名。清除逻辑已在 handleSelectTask（切换任务）和 agent:done（重命名完成）中处理。
             // 保存 session 并关联到当前任务（这样切换任务后能加载对应历史）
             if (newHistory && newHistory.length > 0) {
                 const hasRealContent = newHistory.some(msg => {
@@ -89,22 +239,79 @@ export function ProjectView({
             }
         });
 
-        // 监听项目切换事件
+        // 监听项目切换事件：清空聊天/流式文本、关闭所有 tab，待任务列表加载后再加载最近一条任务
         const removeProjectSwitchListener = window.ipcRenderer.on('project:switched', () => {
+            setStreamingText('');
+            multiTabEditorRefRef.current?.closeAllTabs?.();
+            loadCurrentProject(); // 内部会加载任务列表，再选中最近一条
+        });
+
+        // 监听项目创建事件：先同步当前项目（保证路径正确），再延迟加载任务列表
+        const removeProjectCreatedListener = window.ipcRenderer.on('project:created', async () => {
+            const project = await window.ipcRenderer.invoke('project:get-current') as Project | null;
+            if (project?.path) setCurrentProject(project);
+            setTimeout(async () => {
+                await loadCurrentProject();
+            }, 300);
+        });
+
+        // 监听 Agent 触发打开浏览器预览（本地启动成功后）：已有浏览器 tab 则仅切换到该 tab 并打开 URL，不关闭其他 tab
+        // 同时自动收起右侧资源管理器，让浏览器预览获得更多空间
+        const removeBrowserPreviewListener = window.ipcRenderer.on('agent:open-browser-preview', (_event, ...args) => {
+            const url = args[0] as string;
+            console.log('[Preview:Debug] ProjectView received agent:open-browser-preview, url:', url, 'multiTabEditorRef:', !!multiTabEditorRefRef.current);
+            multiTabEditorRefRef.current?.openBrowserTab?.(url);
+            if (!isExplorerPanelHiddenRef.current) {
+                onToggleExplorerPanelRef.current();
+            }
+        });
+
+        const removeContextSwitchedListener = window.ipcRenderer.on('agent:context-switched', async (_event, ...args) => {
+            const payload = args[0] as { newSessionId?: string; newTaskId?: string; taskId?: string; projectId?: string };
+            showToast(t('contextSwitchedToNewSession'), 'info');
+            if (payload?.newTaskId && payload.projectId) {
+                pendingTaskRename = {
+                    taskId: payload.newTaskId,
+                    projectId: payload.projectId
+                };
+                setCurrentTaskId(payload.newTaskId);
+                await window.ipcRenderer.invoke('project:task:switch', payload.projectId, payload.newTaskId);
+                const project = await window.ipcRenderer.invoke('project:get-current') as Project | null;
+                if (project) setCurrentProject(project);
+            }
+        });
+
+        // 监听 Agent 就绪：启动时若曾因 Agent 未就绪导致 project:task:switch 失败，此处重新执行加载以拉取最新任务历史
+        const removeAgentReadyListener = window.ipcRenderer.on('agent:ready', () => {
             loadCurrentProject();
         });
 
-        // 监听 Agent 触发打开浏览器预览（启动 dev 服务器后自动打开）
-        const removeBrowserPreviewListener = window.ipcRenderer.on('agent:open-browser-preview', (_event, ...args) => {
-            const url = args[0] as string;
-            multiTabEditorRefRef.current?.openBrowserTab?.(url);
-        });
-
-        // 监听对话完成：Project 模式下自动打开内置浏览器并刷新（不改变已有 Tab 的 URL）
-        const removeAgentDoneListener = window.ipcRenderer.on('agent:done', () => {
+        // 监听对话完成：Project 模式下自动打开内置浏览器并刷新；新任务根据首条用户消息重命名
+        const removeAgentDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
+            const payload = args[0] as { taskId?: string; skipBrowserRefresh?: boolean } | undefined;
+            if (payload?.taskId && pendingTaskRename && pendingTaskRename.taskId === payload.taskId) {
+                const messages = historyRef.current || [];
+                const firstUser = messages.find((m) => m.role === 'user');
+                const firstContent = firstUser && typeof firstUser.content === 'string'
+                    ? firstUser.content
+                    : Array.isArray(firstUser?.content)
+                        ? (firstUser.content.find((b: any) => b.type === 'text') as any)?.text ?? ''
+                        : '';
+                const cleanTitle = deriveTaskTitleFromMessage(firstContent) || defaultTaskTitleRef.current;
+                window.ipcRenderer.invoke('project:task:update', pendingTaskRename.projectId, pendingTaskRename.taskId, { title: cleanTitle }).catch((err) => {
+                    console.error('[ProjectView] Failed to rename task on done:', err);
+                });
+                pendingTaskRename = null;
+            }
             const ref = multiTabEditorRefRef.current;
-            ref?.openBrowserTab?.(); // 无参：新建用默认 URL，已有则保留当前 URL
-            ref?.refreshBrowserTab?.();
+            if (payload?.skipBrowserRefresh) {
+                // 停止本地服务后：关闭内置浏览器 tab，不刷新
+                ref?.closeBrowserTab?.();
+            } else {
+                // 正常完成：打开/保留浏览器 tab 并刷新
+                ref?.openBrowserTab?.();
+                ref?.refreshBrowserTab?.();
+            }
         });
 
         // 加载当前项目（延迟执行，确保组件已挂载）
@@ -116,11 +323,43 @@ export function ProjectView({
             removeConfigListener();
             removeStreamListener();
             removeHistoryListener();
+            removeAgentReadyListener();
+            removeContextSwitchedListener();
             removeProjectSwitchListener();
+            removeProjectCreatedListener();
             removeBrowserPreviewListener();
             removeAgentDoneListener();
+            removeUpdateListener();
         };
-    }, []);
+    }, [showToast, t]);
+
+    // 监听任务创建事件，如果是当前项目的任务，自动选中
+    // 使用 ref 读取 currentTaskId 避免闭包陈旧，并跳过 handlePreview/handleCreateTask 等已自行切换的场景
+    useEffect(() => {
+        if (!currentProject) return;
+
+        const removeTaskCreatedListener = window.ipcRenderer.on('project:task:created', async (_event, ...args) => {
+            const task = args[0] as ProjectTask;
+            if (currentProject && task && task.id) {
+                // 使用 ref 获取最新的 currentTaskId，避免闭包陈旧导致误判
+                const latestCurrentTaskId = currentTaskIdRef.current;
+                // 若已经是当前任务，跳过（handlePreview/handleCreateTask 已在 IPC 返回前调用 setCurrentTaskId）
+                if (latestCurrentTaskId === task.id) return;
+                // 验证任务是否属于当前项目
+                const tasks = await window.ipcRenderer.invoke('project:task:list', currentProject.id) as ProjectTask[];
+                const taskExists = tasks.some(t => t.id === task.id);
+                if (taskExists && currentTaskIdRef.current !== task.id) {
+                    // 自动选中新创建的任务
+                    setCurrentTaskId(task.id);
+                    await handleSelectTask(task.id);
+                }
+            }
+        });
+
+        return () => {
+            removeTaskCreatedListener();
+        };
+    }, [currentProject]);
 
 
     const loadCurrentProject = async () => {
@@ -128,9 +367,11 @@ export function ProjectView({
         const projects = await window.ipcRenderer.invoke('project:list') as Project[];
         
         if (projects.length === 0) {
-            // 如果没有项目，显示创建项目对话框
-            setCurrentProject(null);
-            setShowCreateDialog(true);
+            // 仅当 App 未传入当前项目时才清空并弹出创建对话框，避免覆盖 app:init-complete 下发的 project
+            if (!appCurrentProject) {
+                setCurrentProject(null);
+                setShowCreateDialog(true);
+            }
             return;
         }
 
@@ -143,21 +384,42 @@ export function ProjectView({
             await window.ipcRenderer.invoke('project:open', project.id);
         }
         
+        // 确保项目路径已加入授权列表，资源管理器才能加载文件（fs:list-dir 依赖 authorizedFolders）
+        if (project) {
+            await window.ipcRenderer.invoke('project:ensure-working-dir');
+        }
+        
         setCurrentProject(project);
         
         if (project) {
-            // 获取任务列表
-            const tasks = await window.ipcRenderer.invoke('project:task:list', project.id) as ProjectTask[];
+            // 获取任务列表，过滤掉 400 错误导致的 failed 任务
+            const tasks = (await window.ipcRenderer.invoke('project:task:list', project.id) as ProjectTask[]).filter((t) => t.status !== 'failed');
             if (tasks.length > 0) {
                 // 按更新时间排序，最新的在前
                 const sortedTasks = [...tasks].sort((a, b) => b.updatedAt - a.updatedAt);
                 const latestTask = sortedTasks[0];
                 setCurrentTaskId(latestTask.id);
-                // 切换到最新任务的聊天
-                await handleSelectTask(latestTask.id);
+                // 用本地 project/latestTask 直接切换，不依赖 currentProject state，避免首屏或 agent:ready 时闭包中 currentProject 仍为 null 导致不加载历史
+                setIsLoadingHistory(true);
+                const result = await window.ipcRenderer.invoke('project:task:switch', project.id, latestTask.id) as { success?: boolean };
+                if (!result?.success) {
+                    setIsLoadingHistory(false);
+                } else {
+                    // 兜底：若 agent:history-update 延迟或未触发，短延迟后关闭「历史加载中」，避免新任务/空历史一直显示「历史会话加载中...」
+                    const fallbackTimer = setTimeout(() => {
+                        setIsLoadingHistory(false);
+                    }, 400);
+                    const removeFallback = () => clearTimeout(fallbackTimer);
+                    const removeHistoryListener = window.ipcRenderer.on('agent:history-update', () => {
+                        removeFallback();
+                        removeHistoryListener();
+                    });
+                    setTimeout(removeFallback, 500);
+                }
             } else {
-                // 如果有项目但没有任务，不显示对话框，等待用户点击"新建任务"
+                // 如果有项目但没有任务，清空聊天区域并等待用户点击"新建任务"
                 setCurrentTaskId(null);
+                window.ipcRenderer.invoke('project:clear-chat').catch(() => {});
             }
         }
     };
@@ -167,12 +429,11 @@ export function ProjectView({
         // 这个 effect 会在组件挂载时执行，loadCurrentProject 已经在上面处理了
     }, []);
 
-    const handleCreateProject = async (name: string, projectPath: string) => {
-        const result = await window.ipcRenderer.invoke('project:create', { name, path: projectPath }) as { success: boolean; project?: Project; error?: string };
+    const handleCreateProject = async (name: string) => {
+        const result = await window.ipcRenderer.invoke('project:create-new', name) as { success: boolean; project?: Project; error?: string };
         if (result.success && result.project) {
             setCurrentProject(result.project);
             setShowCreateDialog(false);
-            // 创建项目后，加载项目（这会检查任务）
             await loadCurrentProject();
         }
     };
@@ -180,49 +441,177 @@ export function ProjectView({
     const handleCreateTask = async () => {
         if (!currentProject) return;
         
-        // 先清空当前显示的历史和流式文本
+        // 先清空当前显示的历史和流式文本，新任务不显示「历史会话加载中」
         setStreamingText('');
+        setIsLoadingHistory(false);
         
-        // 创建任务，使用默认名称"新任务"（会在第一条消息时重命名）
+        // 创建任务（主进程会清空历史并发送 agent:history-update []，无需再调用 handleSelectTask 避免出现加载中）
         const result = await window.ipcRenderer.invoke('project:task:create', currentProject.id, t('newTask')) as { success: boolean; task?: ProjectTask };
         if (result.success && result.task) {
-            // 设置当前任务ID
             setCurrentTaskId(result.task.id);
-            
-            // 确保清空流式文本
             setStreamingText('');
-            
-            // 标记这个任务等待第一条消息来重命名
             pendingTaskRename = {
                 taskId: result.task.id,
                 projectId: currentProject.id
             };
-            
-            // 切换到新任务（这会确保历史被清空，因为新任务没有 sessionId）
-            await handleSelectTask(result.task.id);
-            
-            // 任务列表会在 TaskListPanel 中自动刷新（通过 useEffect 监听 project:task:created 事件）
+            // 不调用 handleSelectTask：主进程已在 project:task:create 中设置 currentTaskIdForSession 并下发空历史，直接展示「开始一段对话」
+            // 任务列表会在 TaskListPanel 中通过 project:task:created 自动刷新
         }
     };
 
-    // 包装 onSendMessage：发送第一条消息时用消息内容重命名任务（用 ref 避免闭包导致 currentTaskId 陈旧）
-    const handleSendMessageWithRename = useCallback(async (message: string | { content: string, images: string[] }) => {
-        const taskIdNow = currentTaskIdRef.current;
-        const shouldRename = pendingTaskRename && currentProject && taskIdNow === pendingTaskRename.taskId;
-        if (shouldRename && pendingTaskRename) {
-            const toRename = pendingTaskRename;
-            pendingTaskRename = null;
-            const messageText = typeof message === 'string' ? message : message.content;
-            const cleanText = (messageText || '').replace(/[#*_`\[\]()]/g, '').trim().slice(0, 50) || t('newTask');
-            try {
-                await window.ipcRenderer.invoke('project:task:update', toRename.projectId, toRename.taskId, { title: cleanText });
-            } catch (error) {
-                console.error('Failed to rename task:', error);
-                pendingTaskRename = toRename;
-            }
+    const handlePreviewRef = useRef<() => Promise<void>>();
+    const handlePreview = useCallback(async () => {
+        console.log('[Preview:Debug] handlePreview called, currentProject:', currentProject?.id, 'isProcessing:', isProcessing);
+        if (!currentProject || isProcessing) return;
+
+        // 检查 Agent 是否已就绪，避免竞态条件
+        const agentStatus = await window.ipcRenderer.invoke('agent:is-ready') as { ready: boolean };
+        if (!agentStatus.ready) {
+            window.alert('AI 引擎尚未就绪，请稍候几秒后重试。\n\n如果问题持续，请检查 Settings 中的 API Key 是否已配置。');
+            return;
+        }
+
+        setStreamingText('');
+        setIsLoadingHistory(false);
+
+        const result = await window.ipcRenderer.invoke('project:task:create', currentProject.id, t('preview') || '预览') as { success: boolean; task?: ProjectTask };
+        console.log('[Preview:Debug] project:task:create result:', result);
+        if (!result.success || !result.task) return;
+
+        setCurrentTaskId(result.task.id);
+        setStreamingText('');
+        pendingTaskRename = {
+            taskId: result.task.id,
+            projectId: currentProject.id
+        };
+
+        console.log('[Preview:Debug] Sending preview message, taskId:', result.task.id);
+        onSendMessage('请运行本地开发服务（npm run dev 或类似命令），启动成功后自动打开内置浏览器进行预览。');
+    }, [currentProject, isProcessing, t, onSendMessage]);
+
+    handlePreviewRef.current = handlePreview;
+
+    useEffect(() => {
+        if (onRegisterPreviewHandler) {
+            onRegisterPreviewHandler(() => {
+                handlePreviewRef.current?.();
+            });
+        }
+    }, [onRegisterPreviewHandler]);
+
+    // ─── 部署逻辑 ────────────────────────────────────────────────────────────────
+    const deployLogRef = useRef<string>('');
+    const deployHandlerRef = useRef<() => Promise<void>>();
+
+    const stripAnsi = (text: string): string =>
+        text
+            .replace(/\x1B\]8;;[^\x1B]*\x1B\\([^\x1B]*)\x1B\]8;;\x1B\\/g, '$1')
+            .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '');
+
+    const buildDeployLog = (rawLog: string): string => {
+        const clean = stripAnsi(rawLog).trimEnd();
+        return `**🚀 ${t('deployLogTitle')}**\n\n\`\`\`deploy-log\n${clean}\n\`\`\``;
+    };
+
+    /** 把部署日志同步到 Agent history，并触发 session:save 持久化 */
+    const saveDeployHistory = useCallback((messages: Anthropic.MessageParam[]) => {
+        if (messages.length > 0) {
+            window.ipcRenderer.invoke('session:save', messages).catch((err: unknown) =>
+                console.error('[ProjectView] Failed to save deploy session:', err)
+            );
+        }
+    }, []);
+
+    const handleDeploy = useCallback(async () => {
+        if (!currentProject || isProcessing) return;
+
+        onDeployStatusChange?.('deploying');
+        deployLogRef.current = '';
+
+        // 创建独立任务（与预览逻辑一致）
+        const result = await window.ipcRenderer.invoke('project:task:create', currentProject.id, t('deploy') || '部署') as { success: boolean; task?: ProjectTask };
+        if (!result.success || !result.task) {
+            onDeployStatusChange?.('error');
+            return;
+        }
+
+        setCurrentTaskId(result.task.id);
+        setStreamingText('');
+        setIsLoadingHistory(false);
+
+        // 写入"部署开始"消息到 Agent history（通过主进程），使其可被 session:save 持久化
+        const startMsg: Anthropic.MessageParam = { role: 'assistant', content: buildDeployLog(t('deployStarting')) };
+        await window.ipcRenderer.invoke('agent:inject-history', [startMsg]).catch(() => {});
+
+        try {
+            await window.ipcRenderer.invoke('deploy:start', currentProject.path);
+        } catch (err) {
+            console.error('[ProjectView] Deploy invoke error:', err);
+            onDeployStatusChange?.('error');
+        }
+    }, [currentProject, isProcessing, t, onDeployStatusChange]);
+
+    deployHandlerRef.current = handleDeploy;
+
+    useEffect(() => {
+        if (onRegisterDeployHandler) {
+            onRegisterDeployHandler(() => {
+                deployHandlerRef.current?.();
+            });
+        }
+    }, [onRegisterDeployHandler]);
+
+    // 监听部署事件，把日志实时更新到 history 并保存 session
+    useEffect(() => {
+        const removeDeployLog = window.ipcRenderer.on('deploy:log', (_event, ...args) => {
+            const chunk = args[0] as string;
+            deployLogRef.current += chunk;
+            const logContent = buildDeployLog(deployLogRef.current);
+            // 直接通知主进程更新 Agent history 中的最后一条 assistant 消息
+            window.ipcRenderer.invoke('agent:update-last-assistant', logContent).catch(() => {});
+        });
+
+        const removeDeployDone = window.ipcRenderer.on('deploy:done', (_event, ...args) => {
+            const url = args[0] as string;
+            onDeployStatusChange?.('success');
+            const successContent = `**✅ ${t('deploySuccessMessage')}**\n\n[${url}](${url})`;
+            window.ipcRenderer.invoke('agent:append-assistant', successContent).then(() => {
+                // 部署完成后获取最新 history 并保存
+                window.ipcRenderer.invoke('agent:get-history').then((msgs: unknown) => {
+                    saveDeployHistory(msgs as Anthropic.MessageParam[]);
+                }).catch(() => {});
+            }).catch(() => {});
+            setTimeout(() => onDeployStatusChange?.('idle'), 3000);
+        });
+
+        const removeDeployError = window.ipcRenderer.on('deploy:error', (_event, ...args) => {
+            const errMsg = args[0] as string;
+            onDeployStatusChange?.('error');
+            const cleanErr = stripAnsi(errMsg || 'Unknown error');
+            const errorContent = `**❌ ${t('deployFailedMessage')}**\n\n\`\`\`deploy-log\n${cleanErr}\n\`\`\``;
+            window.ipcRenderer.invoke('agent:append-assistant', errorContent).then(() => {
+                window.ipcRenderer.invoke('agent:get-history').then((msgs: unknown) => {
+                    saveDeployHistory(msgs as Anthropic.MessageParam[]);
+                }).catch(() => {});
+            }).catch(() => {});
+            setTimeout(() => onDeployStatusChange?.('idle'), 3000);
+        });
+
+        return () => {
+            removeDeployLog();
+            removeDeployDone();
+            removeDeployError();
+        };
+    }, [t, onDeployStatusChange, saveDeployHistory]);
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    // 发送消息；新任务在聊天完成后（agent:done）根据首条用户消息自动重命名
+    const handleSendMessageWithRename = useCallback((message: string | { content: string, images: string[] }) => {
+        if (currentProject && currentTaskId && history.length === 0 && (!pendingTaskRename || pendingTaskRename.taskId !== currentTaskId)) {
+            pendingTaskRename = { taskId: currentTaskId, projectId: currentProject.id };
         }
         onSendMessage(message);
-    }, [currentProject, onSendMessage, t]);
+    }, [onSendMessage, currentProject, currentTaskId, history.length]);
 
     const handleSelectTask = async (taskId: string) => {
         if (!currentProject) return;
@@ -232,12 +621,23 @@ export function ProjectView({
             pendingTaskRename = null;
         }
         
+        // 标记开始加载历史（如果任务有历史记录）
+        setIsLoadingHistory(true);
+        
         // 切换任务（这会加载对应的 session 历史或清空历史）
         const result = await window.ipcRenderer.invoke('project:task:switch', currentProject.id, taskId) as { success: boolean };
         if (result.success) {
             setCurrentTaskId(taskId);
             setStreamingText(''); // 清空流式文本
             // project:task:switch 已经会处理 session 的加载或清空，这里不需要额外操作
+            // 如果历史为空（新任务），立即取消加载状态
+            setTimeout(() => {
+                if (history.length === 0) {
+                    setIsLoadingHistory(false);
+                }
+            }, 100);
+        } else {
+            setIsLoadingHistory(false);
         }
     };
 
@@ -261,6 +661,9 @@ export function ProjectView({
             const refAfterLoad = multiTabEditorRefRef.current;
             if (refAfterLoad) {
                 refAfterLoad.openEditorTab(filePath, result.content);
+            } else {
+                // ref 未就绪（如 MultiTabEditor 尚未挂载），暂存待打开，由 MultiTabEditor 挂载后消费
+                setPendingOpenFile({ filePath, content: result.content });
             }
         }
     };
@@ -294,6 +697,16 @@ export function ProjectView({
 
     return (
         <div className="h-full w-full flex flex-col bg-[#FAF8F5] dark:bg-zinc-950">
+            {/* Resource Update Notification */}
+            {resourceUpdateAvailable && (
+                <UpdateNotification
+                    currentVersion={resourceUpdateAvailable.currentVersion}
+                    latestVersion={resourceUpdateAvailable.latestVersion}
+                    updateSize={resourceUpdateAvailable.updateSize}
+                    onClose={() => setResourceUpdateAvailable(null)}
+                />
+            )}
+
             {showCreateDialog && (
                 <ProjectCreateDialog
                     onClose={() => {
@@ -310,8 +723,18 @@ export function ProjectView({
 
 
             {currentProject && (
-                <>
-                    <div className="flex-1 flex overflow-hidden">
+                <div key={currentProject.id} className="contents">
+                    <div className="flex-1 flex overflow-hidden relative">
+                        {/* 左侧悬停检测区域（仅在侧栏收起时显示） */}
+                        {isTaskPanelHidden && (
+                            <div
+                                className="absolute left-0 top-0 bottom-0 w-2 z-50 cursor-pointer"
+                                onMouseEnter={handleLeftEdgeMouseEnter}
+                                onMouseLeave={handleLeftEdgeMouseLeave}
+                                title="悬停 1 秒展开侧栏"
+                            />
+                        )}
+                        
                         {/* 区域一：任务列表 */}
                         <div className={`transition-all duration-300 ${isTaskPanelHidden ? 'w-0 overflow-hidden' : 'w-64'}`}>
                             <TaskListPanel
@@ -320,47 +743,104 @@ export function ProjectView({
                                 currentProject={currentProject}
                                 currentTaskId={currentTaskId}
                                 isProcessing={isProcessing}
+                                isDeploying={isDeploying}
                                 onSelectTask={handleSelectTask}
                                 onCreateTask={handleCreateTask}
                             />
                         </div>
 
-                        {/* 中间区域：聊天 + 编辑器（左右布局） */}
-                        <div className="flex-1 flex flex-row min-w-0">
-                            {/* 区域二：聊天交互（左侧） */}
-                            <div className="w-1/2 border-r border-stone-200 dark:border-zinc-800 flex flex-col min-w-0">
-                            <ChatPanel
-                                history={history}
-                                streamingText={streamingText}
-                                onSendMessage={handleSendMessageWithRename}
-                                onAbort={onAbort}
-                                isProcessing={isProcessing}
-                                workingDir={currentProject.path}
-                                config={config}
-                                setConfig={setConfig}
-                                lockedProjectName={currentProject.name}
-                            />
-                            </div>
-
-                            {/* 区域三：多Tab编辑器（右侧） */}
-                            <div className="flex-1 min-w-0">
-                                <MultiTabEditor
-                                    projectPath={currentProject.path}
-                                    agentContent={streamingText}
-                                    onFileChange={handleFileChange}
-                                    onFileSave={handleFileSave}
-                                    onRef={setMultiTabEditorRef}
+                        {/* 中间区域：窄窗口仅聊天，宽窗口聊天 + 编辑器（左右布局，可拖拽调整） */}
+                        <div className="flex-1 min-w-0">
+                            {isNarrowWindow ? (
+                                <div className="flex flex-col h-full min-w-0">
+                                    <div className="flex-1 min-h-0 overflow-hidden">
+                                        <ChatPanel
+                                            history={history}
+                                            streamingText={streamingText}
+                                            onSendMessage={handleSendMessageWithRename}
+                                            onAbort={onAbort}
+                                            isProcessing={isProcessing}
+                                            workingDir={currentProject.path}
+                                            config={config}
+                                            setConfig={setConfig}
+                                            lockedProjectName={currentProject.name}
+                                            isLoadingHistory={isLoadingHistory}
+                                        />
+                                    </div>
+                                </div>
+                            ) : (
+                                <ResizableSplitPane
+                                    leftPanel={
+                                        <div className="flex flex-col h-full min-w-0">
+                                            {/* 与右侧 tab 栏同高，同款 border-b，使下边线与左侧无缝连接 */}
+                                            <div className="h-10 shrink-0 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900" />
+                                            <div className="flex-1 min-h-0 overflow-hidden">
+                                                <ChatPanel
+                                                    history={history}
+                                                    streamingText={streamingText}
+                                                    onSendMessage={handleSendMessageWithRename}
+                                                    onAbort={onAbort}
+                                                    isProcessing={isProcessing}
+                                                    workingDir={currentProject.path}
+                                                    config={config}
+                                                    setConfig={setConfig}
+                                                    lockedProjectName={currentProject.name}
+                                                    isLoadingHistory={isLoadingHistory}
+                                                />
+                                            </div>
+                                        </div>
+                                    }
+                                    rightPanel={
+                                        <MultiTabEditor
+                                            projectPath={currentProject.path}
+                                            agentContent={streamingText}
+                                            onFileChange={handleFileChange}
+                                            onFileSave={handleFileSave}
+                                            onRef={setMultiTabEditorRef}
+                                            pendingOpenFile={pendingOpenFile}
+                                            onConsumePendingOpenFile={() => setPendingOpenFile(null)}
+                                        />
+                                    }
+                                    initialRatio={splitRatio}
+                                    onRatioChange={async (ratio) => {
+                                        setSplitRatio(ratio);
+                                        try {
+                                            await window.ipcRenderer.invoke('config:set-all', {
+                                                chatEditorSplitRatio: ratio
+                                            });
+                                        } catch (error) {
+                                            console.error('[ProjectView] Failed to save split ratio:', error);
+                                        }
+                                    }}
+                                    minSize={20}
+                                    leftMinSizePx={390}
+                                    rightMinSizePx={390}
                                 />
-                            </div>
+                            )}
                         </div>
 
-                        {/* 区域四：资源管理器 */}
-                        <FileExplorer
-                            projectPath={currentProject.path}
-                            onOpenFile={handleOpenFile}
-                        />
+                        {/* 右侧悬停检测区域（仅在资源管理器收起且非窄窗口时显示） */}
+                        {isExplorerPanelHidden && !isNarrowWindow && (
+                            <div
+                                className="absolute right-0 top-0 bottom-0 w-2 z-50 cursor-pointer"
+                                onMouseEnter={handleRightEdgeMouseEnter}
+                                onMouseLeave={handleRightEdgeMouseLeave}
+                                title="悬停 1 秒展开资源管理器"
+                            />
+                        )}
+
+                        {/* 区域四：资源管理器（窄窗口下隐藏） */}
+                        {!isNarrowWindow && (
+                            <div className={`transition-all duration-300 flex flex-col h-full ${isExplorerPanelHidden ? 'w-0 overflow-hidden' : 'w-64'} bg-white dark:bg-zinc-900`}>
+                                <FileExplorer
+                                    projectPath={currentProject.path}
+                                    onOpenFile={handleOpenFile}
+                                    onFileDeleted={(path) => multiTabEditorRef?.closeTabByFilePath?.(path)}
+                                />
+                            </div>
+                        )}
                     </div>
-                </>
+                </div>
             )}
         </div>
     );

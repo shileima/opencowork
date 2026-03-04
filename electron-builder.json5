@@ -8,20 +8,32 @@
   "directories": {
     "output": "release/${version}"
   },
-  "publish": {
-    "provider": "github",
-    "owner": "Safphere",
-    "repo": "opencowork",
-    "releaseType": "release"
-  },
+  "publish": null,
+  "npmRebuild": false,
+  "buildDependenciesFromSource": false,
   "files": [
     "dist",
-    "dist-electron"
+    "dist-electron",
+    // node-pty 是 native module，在 vite 中被标记为 external，
+    // 运行时通过 createRequire 动态加载，必须随 app 一起打包
+    "node_modules/node-pty/**/*"
+  ],
+  // native .node 文件无法从 asar 归档中加载，必须解压到 app.asar.unpacked
+  "asarUnpack": [
+    "node_modules/node-pty/**/*.node",
+    "node_modules/node-pty/build/**/*",
+    "node_modules/node-pty/prebuilds/**/*"
   ],
   "extraResources": [
     {
       "from": "public/icon.png",
       "to": "icon.png"
+    },
+    // 美团内部私有包（@mtfe/sso-web-oidc-cli 及其依赖），内置以免外部安装
+    {
+      "from": "resources/node_modules",
+      "to": "node_modules",
+      "filter": "**/*"
     },
     {
       "from": "resources/skills",
@@ -29,9 +41,35 @@
       "filter": "**/*"
     },
     {
+      "from": "resources/templates",
+      "to": "templates",
+      "filter": "**/*"
+    },
+    {
       "from": "resources/mcp",
       "to": "mcp",
       "filter": "**/*"
+    },
+    {
+      "from": "resources/admin-users.json",
+      "to": "admin-users.json"
+    },
+    {
+      "from": "resources/node",
+      "to": "node",
+      "filter": ["**/*"]
+    },
+    // Playwright 包（JS）
+    {
+      "from": "resources/playwright/package",
+      "to": "playwright/package",
+      "filter": ["**/*"]
+    },
+    // Chromium 浏览器内置（构建前需执行 pnpm run prepare:playwright；macOS 若遇签名问题会回退到 userData 安装）
+    {
+      "from": "resources/playwright/browsers",
+      "to": "playwright/browsers",
+      "filter": ["**/*"]
     }
   ],
   "mac": {

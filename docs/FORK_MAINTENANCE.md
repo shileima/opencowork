@@ -16,7 +16,6 @@
 本仓库是基于 OpenCowork 的定制化版本，主要定制化内容包括：
 
 - 应用配置（应用ID、产品名称、发布配置）
-- 官方自动化脚本（`resources/skills/chrome-agent/`）
 - 其他定制化功能
 
 为了保持与上游的同步，需要定期合并上游更新。本指南提供了详细的维护流程。
@@ -155,10 +154,6 @@ upstream  https://github.com/Safphere/opencowork.git (push)
   - 保留定制版本的应用ID、产品名称、发布配置
   - 手动合并必要的上游更新（如新的打包配置选项）
 
-- **`resources/skills/chrome-agent/`**
-  - 保留定制版本的官方脚本
-  - 手动合并新增的官方脚本（如果有）
-
 - **`package.json`**
   - 保留定制版本的版本号和产品名称（如果修改了）
   - 合并依赖更新（通常使用上游版本）
@@ -223,7 +218,6 @@ upstream  https://github.com/Safphere/opencowork.git (push)
 | 文件路径 | 定制化内容 | 处理策略 |
 |---------|-----------|---------|
 | `electron-builder.json5` | 应用ID、产品名称、发布配置 | 保留定制版本，手动合并必要更新 |
-| `resources/skills/chrome-agent/` | 官方自动化脚本 | 保留定制版本，手动合并新增脚本 |
 | `package.json` | 版本号、产品名称（可选） | 保留定制版本，合并依赖更新 |
 
 ### 其他可能定制化的文件
@@ -257,27 +251,7 @@ upstream  https://github.com/Safphere/opencowork.git (push)
 
 3. 查看错误日志，定位问题。
 
-### Q2: 官方脚本丢失
-
-**原因**：可能是 `resources/skills/chrome-agent/` 目录被上游覆盖。
-
-**解决方法**：
-
-1. 检查定制化脚本是否还在：
-
-   ```bash
-   ls -la resources/skills/chrome-agent/
-   ```
-
-2. 如果丢失，从备份或 Git 历史恢复：
-
-   ```bash
-   git checkout HEAD -- resources/skills/chrome-agent/
-   ```
-
-3. 重新合并，这次手动处理冲突。
-
-### Q3: 合并后功能异常
+### Q2: 合并后功能异常
 
 **原因**：可能是上游的破坏性更改。
 

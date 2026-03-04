@@ -40,65 +40,9 @@
 
 ---
 
-### 2. 官方脚本系统
+### 2. 自动化脚本目录
 
-#### `resources/skills/chrome-agent/`
-
-**定制化内容**：
-- `official-scripts.json`: 官方脚本清单文件
-- `*.js`: 官方自动化脚本文件
-
-**目录结构**：
-```
-resources/skills/chrome-agent/
-├── official-scripts.json    # 官方脚本清单
-├── login_xgpt.js           # 官方脚本示例
-└── [其他官方脚本].js
-```
-
-**处理策略**：保留定制版本，手动合并新增的官方脚本（如果有）
-
-**影响范围**：自动化脚本功能
-
----
-
-#### `electron/config/ScriptStore.ts`
-
-**定制化内容**：
-- 添加了官方脚本同步逻辑
-- 添加了 `isOfficial` 字段支持
-- 添加了 `syncOfficialScripts()` 方法
-- 添加了 `getOfficialScripts()` 方法
-- 添加了 `isOfficialScript()` 方法
-- 修改了 `deleteScript()` 方法，禁止删除官方脚本
-
-**处理策略**：保留定制版本，合并上游的功能更新
-
-**影响范围**：脚本管理功能
-
----
-
-#### `electron/main.ts`
-
-**定制化内容**：
-- 在应用启动时调用 `scriptStore.syncOfficialScripts()`
-
-**处理策略**：保留定制版本，合并上游的功能更新
-
-**影响范围**：应用启动流程
-
----
-
-#### `src/components/CoworkView.tsx`
-
-**定制化内容**：
-- 脚本列表中显示"官方"标签
-- 官方脚本不显示删除按钮
-- 更新了 `Script` 接口，添加 `isOfficial` 字段
-
-**处理策略**：保留定制版本，合并上游的 UI 更新
-
-**影响范围**：用户界面
+自动化脚本存放在 `~/.qa-cowork/scripts/<sessionId>/`，按会话隔离。详见 [AUTOMATION_SCRIPTS.md](docs/AUTOMATION_SCRIPTS.md)。
 
 ---
 
@@ -124,28 +68,6 @@ resources/skills/chrome-agent/
 
 ---
 
-## 定制化功能说明
-
-### 官方脚本标签机制
-
-**功能描述**：
-- 支持标记某些自动化脚本为"官方"脚本
-- 官方脚本在用户安装客户端时自动安装
-- 官方脚本不允许用户删除
-- 官方脚本和用户脚本合并显示，但标记来源
-
-**实现文件**：
-- `resources/skills/chrome-agent/official-scripts.json`
-- `electron/config/ScriptStore.ts`
-- `src/components/CoworkView.tsx`
-
-**使用方式**：
-1. 在 `resources/skills/chrome-agent/` 目录下添加脚本文件
-2. 在 `official-scripts.json` 中注册脚本信息
-3. 应用启动时自动同步到用户目录
-
----
-
 ## 合并上游更新时的注意事项
 
 ### 高优先级（必须手动处理）
@@ -155,22 +77,15 @@ resources/skills/chrome-agent/
    - 手动合并必要的上游更新
    - 保留定制化的应用ID和产品名称
 
-2. **`resources/skills/chrome-agent/`**
-   - 检查是否有新的官方脚本
-   - 手动合并新增的脚本
-   - 保留定制化的脚本清单
-
 ### 中优先级（需要审查）
 
 1. **`electron/config/ScriptStore.ts`**
    - 检查上游是否有相关更新
    - 手动合并功能更新
-   - 保留定制化的官方脚本逻辑
 
 2. **`src/components/CoworkView.tsx`**
    - 检查上游是否有 UI 更新
    - 手动合并 UI 改进
-   - 保留定制化的官方标签显示
 
 ### 低优先级（通常自动合并）
 

@@ -40,13 +40,13 @@ For skills using `agent-browser` to automate browser interactions, follow these 
 
 1. 打开浏览器（首次用 `--headed`）
    ```bash
-   npx agent-browser open <url> --headed
+   agent-browser open <url> --headed
    ```
 
 2. 等待并截图验证
    ```bash
    sleep 2
-   npx agent-browser screenshot /tmp/browser-check.png
+   agent-browser screenshot /tmp/browser-check.png
    ```
 
 3. 根据截图结果：
@@ -63,15 +63,15 @@ For skills using `agent-browser` to automate browser interactions, follow these 
 
 **❌ 常见错误命令**：
 ```bash
-npx agent-browser launch --headed  # ❌ 不存在 launch 命令
-npx agent-browser goto <url>       # ❌ 浏览器未打开时无法使用
-npx agent-browser start            # ❌ 不存在 start 命令
+agent-browser launch --headed  # ❌ 不存在 launch 命令
+agent-browser goto <url>       # ❌ 浏览器未打开时无法使用
+agent-browser start            # ❌ 不存在 start 命令
 ```
 
 **✅ 正确做法**：
 ```bash
-npx agent-browser open <url> --headed  # ✅ 首次打开浏览器
-npx agent-browser goto <url>           # ✅ 浏览器已打开后跳转
+agent-browser open <url> --headed  # ✅ 首次打开浏览器
+agent-browser goto <url>           # ✅ 浏览器已打开后跳转
 ```
 
 **关键区别**：
@@ -96,8 +96,8 @@ npx agent-browser goto <url>           # ✅ 浏览器已打开后跳转
 | 查看内容 | `snapshot` | 获取完整页面内容 |
 
 **禁止**：
-- ❌ `npx agent-browser close` - 会丢失登录状态
-- ❌ 瞎猜命令 - 先查 `npx agent-browser --help`
+- ❌ `agent-browser close` - 会丢失登录状态
+- ❌ 瞎猜命令 - 先查 `agent-browser --help`
 ```
 
 ### Login Flow Pattern

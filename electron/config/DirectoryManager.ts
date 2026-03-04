@@ -54,9 +54,33 @@ export class DirectoryManager {
         this.ensureDirectory(this.getMcpDir());
         this.ensureDirectory(this.getCacheDir());
         this.ensureDirectory(this.getLogsDir());
+        this.ensureDirectory(this.getCoworkOutputDir());
+
+        // 初始化工作空间上下文文件（用于保持对话连续性）
+        this.ensureContextFiles();
 
         this.initialized = true;
         console.log('[DirectoryManager] Directory initialization complete');
+    }
+
+    /**
+     * 初始化工作空间上下文文件
+     * 在 ~/.qa-cowork/ 下创建 CLAUDE.md 和 user-preferences.md 模板（如不存在）
+     */
+    private ensureContextFiles(): void {
+        const workspaceDir = this.getCoworkWorkspaceDir();
+
+        const claudePath = path.join(workspaceDir, 'CLAUDE.md');
+        if (!fs.existsSync(claudePath)) {
+            fs.writeFileSync(claudePath, CLAUDE_MD_TEMPLATE, 'utf-8');
+            console.log(`[DirectoryManager] Created context file: ${claudePath}`);
+        }
+
+        const preferencesPath = path.join(workspaceDir, 'user-preferences.md');
+        if (!fs.existsSync(preferencesPath)) {
+            fs.writeFileSync(preferencesPath, USER_PREFERENCES_TEMPLATE, 'utf-8');
+            console.log(`[DirectoryManager] Created context file: ${preferencesPath}`);
+        }
     }
 
     /**
@@ -91,10 +115,21 @@ export class DirectoryManager {
     }
 
     /**
-     * 获取自动化脚本目录路径 (~/.qa-cowork/skills/chrome-agent/)
+     * 获取自动化脚本根目录路径 (~/.qa-cowork/scripts/)
+     * 每次聊天的脚本产物按 sessionId 存储在子文件夹下：~/.qa-cowork/scripts/<sessionId>/
      */
     public getScriptsDir(): string {
-        return path.join(this.baseDir, 'skills', 'chrome-agent');
+        return path.join(this.baseDir, 'scripts');
+    }
+
+    /**
+     * 获取指定会话的脚本目录路径 (~/.qa-cowork/scripts/<sessionId>/)
+     * 自动创建目录（如不存在）
+     */
+    public getSessionScriptsDir(sessionId: string): string {
+        const sessionDir = path.join(this.getScriptsDir(), sessionId);
+        this.ensureDirectory(sessionDir);
+        return sessionDir;
     }
 
     /**
@@ -116,6 +151,22 @@ export class DirectoryManager {
      */
     public getLogsDir(): string {
         return path.join(this.baseDir, 'logs');
+    }
+
+    /**
+     * 获取协作/会话模式默认工作空间目录路径 (~/.qa-cowork/)
+     * 统一使用 .qa-cowork 作为默认工作目录
+     */
+    public getCoworkWorkspaceDir(): string {
+        return this.baseDir;
+    }
+
+    /**
+     * 获取协作模式文件输出目录路径 (~/.qa-cowork/out/)
+     * Cowork 模式下 AI 生成的非代码文件（Excel、PDF、图片等）统一输出到此目录
+     */
+    public getCoworkOutputDir(): string {
+        return path.join(this.baseDir, 'out');
     }
 
     /**
@@ -273,6 +324,22 @@ export class DirectoryManager {
     }
 
     /**
+     * 获取 SSO token 存储文件路径 (~/.qa-cowork/sso)
+     * 参考小美搭档 ~/.xiaomei-cowork-sso 方案，存储 access_token / refresh_token
+     */
+    public getSsoTokenPath(): string {
+        return path.join(this.baseDir, 'sso');
+    }
+
+    /**
+     * 获取用户身份信息存储文件路径 (~/.qa-cowork/userinfo)
+     * 参考小美搭档 ~/.xiaomei-cowork-userinfo 方案，存储姓名、工号等
+     */
+    public getUserInfoPath(): string {
+        return path.join(this.baseDir, 'userinfo');
+    }
+
+    /**
      * 验证目录是否存在且可访问
      */
     public validateDirectory(dirPath: string): boolean {
@@ -299,6 +366,8 @@ export class DirectoryManager {
         mcpDir: string;
         cacheDir: string;
         logsDir: string;
+        coworkWorkspaceDir: string;
+        coworkOutputDir: string;
         builtinResourcesDir: string;
         builtinSkillsDir: string;
         builtinMcpDir: string;
@@ -315,6 +384,8 @@ export class DirectoryManager {
             mcpDir: this.getMcpDir(),
             cacheDir: this.getCacheDir(),
             logsDir: this.getLogsDir(),
+            coworkWorkspaceDir: this.getCoworkWorkspaceDir(),
+            coworkOutputDir: this.getCoworkOutputDir(),
             builtinResourcesDir: this.getBuiltinResourcesDir(),
             builtinSkillsDir: this.getBuiltinSkillsDir(),
             builtinMcpDir: this.getBuiltinMcpDir(),
@@ -325,6 +396,69 @@ export class DirectoryManager {
         };
     }
 }
+
+// 工作空间上下文文件模板
+
+const CLAUDE_MD_TEMPLATE = `# OpenCowork 助手指南
+
+## 角色定位
+
+你是 OpenCowork，一个高效的 AI 桌面助手，专注于任务执行、文件管理、编程辅助和研究。
+
+## 每次对话开始时
+
+**先读取用户信息**：
+\`\`\`
+Read ~/.qa-cowork/user-preferences.md
+\`\`\`
+根据读取的信息了解用户是谁、有什么偏好，并据此调整回答风格和内容。
+
+## 自动学习
+
+当检测到以下内容时，**自动记录**到 \`~/.qa-cowork/user-preferences.md\`：
+
+1. **个人信息** — 用户提到姓名、团队、项目、角色
+2. **用户纠正错误** — 记录正确做法
+3. **用户教新知识** — 技术、业务、流程、工具
+4. **用户偏好** — 代码风格、沟通方式、工作习惯
+
+记录后简短告知用户："已记住 [内容摘要]"
+
+## 技能使用规则
+
+接到用户请求后，在动手之前：
+1. 先查看 \`~/.qa-cowork/skills/\` 下是否有适合当前任务的技能
+2. 如有匹配的技能 → 优先按技能指引操作
+3. 没有匹配 → 用自身能力完成
+
+## 删除操作安全规范
+
+**任何删除操作都必须经过用户确认，或在用户明确指定条件下执行。**
+`;
+
+const USER_PREFERENCES_TEMPLATE = `# 用户记忆
+
+这里存储用户的个人信息、偏好和知识。OpenCowork 会在对话中自动学习和更新。
+
+## 个人信息
+
+- 姓名：
+- 团队/部门：
+- 角色：（研发/产品/测试/运营等）
+- 常用项目：
+
+## 用户偏好
+
+（OpenCowork 会在这里记录你的工作偏好和习惯）
+
+## 业务知识
+
+（OpenCowork 会在这里记录业务相关的知识）
+
+## 通用经验
+
+（OpenCowork 会在这里记录各类经验教训）
+`;
 
 // 导出单例实例
 export const directoryManager = DirectoryManager.getInstance();

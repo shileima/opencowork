@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, Check, X } from 'lucide-react';
+import { AlertTriangle, Check, X, FolderOpen } from 'lucide-react';
 
 interface ConfirmationRequest {
     id: string;
@@ -23,6 +23,52 @@ export function ConfirmDialog({ request, onConfirm, onDeny }: ConfirmDialogProps
     if (!request) return null;
 
     const path = (request.args?.path || request.args?.cwd) as string | undefined;
+    const isFolderAuth = request.tool === 'authorize_folder';
+
+    if (isFolderAuth) {
+        return (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                <div className="bg-background border border-border rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                    {/* Header */}
+                    <div className="p-5 border-b border-border bg-blue-500/10">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-blue-500/20 rounded-full">
+                                <FolderOpen className="text-blue-500" size={24} />
+                            </div>
+                            <div>
+                                <h3 className="font-semibold text-lg">授权目录访问</h3>
+                                <p className="text-sm text-muted-foreground">AI 需要读取该目录中的文件</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Body */}
+                    <div className="p-5 space-y-3">
+                        <p className="text-sm text-muted-foreground">允许 AI 访问以下目录？授权后 AI 可读取该目录及其子目录中的文件。</p>
+                        <div className="bg-secondary/50 px-3 py-2 rounded-lg">
+                            <p className="font-mono text-sm break-all">{path}</p>
+                        </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex gap-3 p-5 border-t border-border bg-muted/30">
+                        <button
+                            onClick={() => onDeny(request.id)}
+                            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-destructive/10 text-destructive rounded-xl hover:bg-destructive/20 transition-colors font-medium"
+                        >
+                            <X size={18} /> 拒绝
+                        </button>
+                        <button
+                            onClick={() => onConfirm(request.id, false, request.tool, path)}
+                            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors font-medium"
+                        >
+                            <Check size={18} /> 授权访问
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">

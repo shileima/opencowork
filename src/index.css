@@ -101,15 +101,17 @@
 
 @layer components {
   .user-bubble {
-    @apply bg-[#E8E4DF] text-stone-800 dark:bg-zinc-800 dark:text-zinc-200 rounded-2xl px-4 py-2.5 leading-6 shadow-sm;
+    @apply bg-[#E8E4DF] text-stone-800 dark:bg-zinc-800 dark:text-zinc-200 rounded-2xl px-4 py-2.5 text-[13px] leading-5 shadow-sm;
   }
 
   .command-block {
-    @apply bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm;
+    @apply bg-white/80 dark:bg-zinc-900/80 border border-stone-200/80 dark:border-zinc-800/60 rounded-xl overflow-hidden;
+    @apply shadow-[0_1px_3px_rgba(0,0,0,0.04)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.2)];
+    @apply backdrop-blur-sm;
   }
 
   .command-block-header {
-    @apply flex items-center justify-between px-4 py-3 hover:bg-stone-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer;
+    @apply flex items-center justify-between px-3 py-2.5 hover:bg-stone-50/80 dark:hover:bg-zinc-800/50 transition-colors cursor-pointer;
   }
 
   .steps-indicator {
@@ -140,6 +142,44 @@
     /* IE and Edge */
     scrollbar-width: none;
     /* Firefox */
+  }
+
+  /* 任务列表滚动条样式 */
+  .task-list-scroll::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .task-list-scroll::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 4px;
+  }
+
+  .task-list-scroll::-webkit-scrollbar-thumb {
+    background: rgb(214, 211, 209);
+    border-radius: 4px;
+    transition: background 0.2s;
+  }
+
+  .task-list-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgb(168, 162, 158);
+  }
+
+  .dark .task-list-scroll::-webkit-scrollbar-thumb {
+    background: rgb(63, 63, 70);
+  }
+
+  .dark .task-list-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgb(82, 82, 91);
+  }
+
+  /* Firefox 滚动条样式 */
+  .task-list-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(214, 211, 209) transparent;
+  }
+
+  .dark .task-list-scroll {
+    scrollbar-color: rgb(63, 63, 70) transparent;
   }
 }
 
@@ -213,4 +253,119 @@
   .animate-success-pop {
     animation: success-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
+}
+
+/* XTerm.js terminal styles - ensure proper rendering */
+.terminal-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: block;
+  /* 与 xterm theme.background 一致，左右间距不再显黑色 */
+  background-color: #1e1e1e;
+}
+
+.terminal-container .xterm {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0.5rem !important;
+  right: 0.5rem !important;
+  width: calc(100% - 1rem) !important;
+  height: 100% !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.terminal-container .xterm-viewport {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  background-color: transparent;
+}
+
+.terminal-container .xterm-screen {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.terminal-container .xterm-cursor-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.terminal-container .xterm-text-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: pre;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace !important;
+  font-size: 14px !important;
+  line-height: 1.2 !important;
+  letter-spacing: 0 !important;
+}
+
+.terminal-container .xterm-char-measure-element {
+  position: absolute;
+  visibility: hidden;
+  top: 0;
+  left: 0;
+  white-space: pre;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+@keyframes ellipsis {
+  0%   { width: 0; }
+  25%  { width: 0.5em; }
+  50%  { width: 1em; }
+  75%  { width: 1.5em; }
+  100% { width: 0; }
+}
+
+@keyframes shimmer-thinking {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.shimmer-thinking-text {
+  background-image: linear-gradient(
+    90deg,
+    #78716c 0%,
+    #78716c 25%,
+    #d6d3d1 50%,
+    #78716c 75%,
+    #78716c 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer-thinking 2s linear infinite;
+}
+
+.dark .shimmer-thinking-text {
+  background-image: linear-gradient(
+    90deg,
+    #71717a 0%,
+    #71717a 25%,
+    #e4e4e7 50%,
+    #71717a 75%,
+    #71717a 100%
+  );
 }

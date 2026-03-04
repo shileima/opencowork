@@ -34,13 +34,16 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         updateLanguage();
         localStorage.setItem('opencowork-language', languageMode);
 
-        // Listen for system language changes if needed (rare but good correctness)
         const listener = () => {
             if (languageMode === 'system') updateLanguage();
         };
         window.addEventListener('languagechange', listener);
         return () => window.removeEventListener('languagechange', listener);
     }, [languageMode]);
+
+    useEffect(() => {
+        window.ipcRenderer?.invoke('agent:set-language', language);
+    }, [language]);
 
     const t = (key: TranslationKey, params?: Record<string, string | number>): string => {
         let translation = translations[language][key] || translations.en[key] || key;

@@ -111,6 +111,28 @@ if (builderConfig.includes('resources/mcp')) {
     console.error('❌ MCP directory NOT included in extraResources');
 }
 
+// Check project template
+console.log('\n📄 Checking project template...');
+
+const templatePath = path.join(__dirname, '../resources/templates/react-vite');
+if (fs.existsSync(templatePath)) {
+    const requiredFiles = ['package.json', 'index.html', 'vite.config.ts', 'src/main.tsx', 'src/App.tsx'];
+    const missingFiles = requiredFiles.filter(f => !fs.existsSync(path.join(templatePath, f)));
+    if (missingFiles.length === 0) {
+        console.log('✅ Project template (react-vite) found with required files');
+    } else {
+        console.error('❌ Project template missing files:', missingFiles.join(', '));
+    }
+} else {
+    console.error('❌ Project template not found at:', templatePath);
+}
+
+if (builderConfig.includes('resources/templates')) {
+    console.log('✅ Templates directory included in extraResources');
+} else {
+    console.error('❌ Templates directory NOT included in extraResources');
+}
+
 if (builderConfig.includes('resources/playwright') || builderConfig.includes('playwright/package')) {
     console.log('✅ Playwright package included in extraResources');
 } else {
@@ -148,6 +170,78 @@ for (const check of checks) {
 
 console.log(`\n✅ SkillManager checks: ${skillManagerChecks}/${checks.length}`);
 
+// Check built-in Node.js 20 and pnpm (all platform dirs must have complete pnpm for installer)
+console.log('\n📦 Checking built-in Node.js 20 and pnpm...');
+
+const NODE_EXPECTED_MAJOR = 20;
+const nodeResourcesPath = path.join(__dirname, '../resources/node');
+const platform = process.platform;
+const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+const platformKey = platform === 'win32' ? 'win32-x64' : `${platform}-${arch}`;
+const nodeExe = platform === 'win32' ? 'node.exe' : 'node';
+
+function checkPlatformPnpm(platformDir, key) {
+    const nodePath = path.join(platformDir, nodeExe);
+    const pnpmBinPath = path.join(platformDir, 'pnpm', 'bin', 'pnpm.cjs');
+    const pnpmDistPath = path.join(platformDir, 'pnpm', 'dist');
+    const distHasContent = fs.existsSync(path.join(pnpmDistPath, 'pnpm.cjs')) || fs.existsSync(path.join(pnpmDistPath, 'node_modules'));
+    const hasNode = fs.existsSync(nodePath);
+    const hasPnpmBin = fs.existsSync(pnpmBinPath);
+    const hasPnpmDist = fs.existsSync(pnpmDistPath) && distHasContent;
+    return { key, hasNode, hasPnpmBin, hasPnpmDist, pnpmComplete: hasPnpmBin && hasPnpmDist };
+}
+
+let nodeCheckPassed = false;
+const nodeDir = path.join(nodeResourcesPath, platformKey);
+const nodePath = path.join(nodeDir, nodeExe);
+
+if (fs.existsSync(nodePath)) {
+    try {
+        const { execSync } = require('child_process');
+        const versionOutput = execSync(`"${nodePath}" --version`, { encoding: 'utf-8' }).trim();
+        const match = versionOutput.match(/^v?(\d+)\./);
+        const major = match ? parseInt(match[1], 10) : 0;
+        if (major === NODE_EXPECTED_MAJOR) {
+            console.log(`✅ Built-in Node.js ${versionOutput} found (${platformKey})`);
+            nodeCheckPassed = true;
+        } else {
+            console.warn(`⚠️  Built-in Node.js version ${versionOutput} (expected v${NODE_EXPECTED_MAJOR}.x.x)`);
+        }
+    } catch (e) {
+        console.warn(`⚠️  Built-in Node.js exists but failed to run: ${e.message}`);
+    }
+} else {
+    console.warn(`⚠️  Built-in Node.js not found at ${nodePath}`);
+    console.warn('   Run: node scripts/download-node.mjs');
+}
+
+// 所有存在的平台目录都必须包含完整 pnpm（bin + dist），打包才会通过
+const platformDirs = fs.existsSync(nodeResourcesPath)
+    ? fs.readdirSync(nodeResourcesPath, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && /^(darwin|win32|linux)-(arm64|x64)$/.test(d.name))
+        .map((d) => ({ key: d.name, dir: path.join(nodeResourcesPath, d.name) }))
+    : [];
+const pnpmResults = platformDirs.map(({ key, dir }) => ({ ...checkPlatformPnpm(dir, key), dir }));
+
+let pnpmCheckPassed = true;
+for (const r of pnpmResults) {
+    if (r.pnpmComplete) {
+        console.log(`✅ pnpm 完整 (${r.key}): pnpm/bin/pnpm.cjs + pnpm/dist`);
+    } else {
+        pnpmCheckPassed = false;
+        if (!r.hasPnpmBin) console.warn(`❌ ${r.key}: 缺少 pnpm/bin/pnpm.cjs`);
+        if (!r.hasPnpmDist) console.warn(`❌ ${r.key}: 缺少或为空 pnpm/dist（需与 bin 同包）`);
+    }
+}
+if (pnpmResults.length === 0) {
+    console.warn('⚠️  resources/node 下无平台目录，请先执行 node scripts/download-node.mjs');
+    pnpmCheckPassed = false;
+} else if (pnpmCheckPassed) {
+    console.log('✅ 所有平台目录均包含完整 pnpm，打包将包含内置 pnpm');
+} else {
+    console.warn('   Run: node scripts/prepare-pnpm.mjs 后重新构建');
+}
+
 // Check Playwright package (browsers 不再打包，首次运行时下载到 userData)
 console.log('\n🌐 Checking Playwright...');
 
@@ -169,12 +263,13 @@ console.log('\n' + '='.repeat(60));
 console.log('📊 SUMMARY');
 console.log('='.repeat(60));
 
-const totalChecks = 3 + checks.length;
+const totalChecks = 4 + checks.length;
 let passedChecks = 0;
 
 if (validSkills > 0) passedChecks++;
 if (mcpContent.includes('DEFAULT_MCP_CONFIGS')) passedChecks++;
 if (builderConfig.includes('resources/skills')) passedChecks++;
+if (nodeCheckPassed) passedChecks++;
 passedChecks += skillManagerChecks;
 
 const percentage = Math.round((passedChecks / totalChecks) * 100);
@@ -192,6 +287,12 @@ if (percentage === 100) {
     process.exit(1);
 }
 
+if (nodeCheckPassed) {
+    console.log('   • Built-in Node.js 20 is ready for deploy and run_command');
+} else {
+    console.log('   • Run "node scripts/download-node.mjs" to build with built-in Node.js');
+}
+
 console.log('\n📝 Expected behavior:');
 console.log('   • Skills will be copied to ~/.qa-cowork/skills on first run');
 console.log('   • MCP servers will be loaded from resources/mcp/builtin-mcp.json');
@@ -202,4 +303,23 @@ console.log('\n📦 Packaging:');
 console.log('   • Skills are included in installer as extraResources');
 console.log('   • MCP configs are included in installer as extraResources');
 console.log('   • Green version (portable) works the same way');
+
+// 打安装包前必须通过的内置资源检查（缺一不可，否则安装包内部署会失败）
+console.log('\n📋 Required for installer (must pass before packaging):');
+const requiredOk = nodeCheckPassed && pnpmCheckPassed;
+if (requiredOk) {
+    console.log('   ✅ Built-in Node.js 20');
+    console.log('   ✅ Built-in pnpm (pnpm/bin+dist)');
+    console.log('   → Ready to build installer.');
+} else {
+    console.log('   ❌ Missing required built-in resources for installer.');
+    if (!nodeCheckPassed) {
+        console.log('   • Built-in Node.js: run  node scripts/download-node.mjs');
+    }
+    if (!pnpmCheckPassed) {
+        console.log('   • Built-in pnpm:     run  node scripts/prepare-pnpm.mjs');
+    }
+    console.log('\n   Then run  pnpm run build  again.');
+    process.exit(1);
+}
 process.exit(0);

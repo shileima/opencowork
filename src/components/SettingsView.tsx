@@ -26,6 +26,7 @@ interface ProviderConfig {
     maxTokens?: number;
     isCustom?: boolean;
     readonlyUrl?: boolean;
+    isPreset?: boolean;
 }
 
 interface Config {
@@ -131,11 +132,23 @@ const ProviderLogo = ({ id, name }: { id: string, name: string }) => {
     );
 };
 
+/**
+ * 掩码显示 API 密钥
+ */
+function maskApiKey(key: string): string {
+    if (!key || key.length < 10) {
+        return '***';
+    }
+    const start = key.substring(0, 3);
+    const end = key.substring(key.length - 4);
+    return `${start}***...***${end}`;
+}
+
 export function SettingsView({ onClose }: SettingsViewProps) {
     const [isProviderOpen, setIsProviderOpen] = useState(false);
 
     const [config, setConfig] = useState<Config>({
-        activeProviderId: 'minimax_intl',
+        activeProviderId: 'custom',
         providers: {},
         authorizedFolders: [],
         networkAccess: false,
@@ -156,6 +169,26 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     const [checkingUpdate, setCheckingUpdate] = useState(false);
 
     const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean, latestVersion: string, releaseUrl: string } | null>(null);
+    
+    // Resource update states
+    const [checkingResourceUpdate, setCheckingResourceUpdate] = useState(false);
+    const [resourceUpdateInfo, setResourceUpdateInfo] = useState<{
+        hasUpdate: boolean;
+        currentVersion: string;
+        latestVersion: string;
+        updateSize?: number;
+        changelog?: string;
+    } | null>(null);
+    const [updatingResources, setUpdatingResources] = useState(false);
+    const [resourceUpdateDone, setResourceUpdateDone] = useState(false);
+    const [clearingHotUpdate, setClearingHotUpdate] = useState(false);
+    const [updateProgress, setUpdateProgress] = useState<{ 
+        stage?: 'checking' | 'downloading' | 'extracting' | 'applying' | 'completed';
+        total: number; 
+        downloaded: number; 
+        current: string;
+        percentage?: number;
+    } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
@@ -185,6 +218,98 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         } finally {
             setCheckingUpdate(false);
         }
+    };
+
+    // 检查资源更新
+    const handleCheckResourceUpdate = async () => {
+        setCheckingResourceUpdate(true);
+        setResourceUpdateInfo(null);
+        try {
+            const result = await window.ipcRenderer?.invoke('resource:check-update') as any;
+            if (result && result.success) {
+                setResourceUpdateInfo({
+                    hasUpdate: result.hasUpdate,
+                    currentVersion: result.currentVersion,
+                    latestVersion: result.latestVersion,
+                    updateSize: result.updateSize,
+                    changelog: result.changelog
+                });
+            }
+        } catch (error) {
+            console.error('Check resource update failed', error);
+        } finally {
+            setCheckingResourceUpdate(false);
+        }
+    };
+
+    // 执行资源更新
+    const handlePerformResourceUpdate = async () => {
+        setUpdatingResources(true);
+        setResourceUpdateDone(false);
+        setUpdateProgress(null);
+        try {
+            // 监听更新进度
+            const removeListener = window.ipcRenderer?.on('resource:update-progress', (_event: any, progress: any) => {
+                setUpdateProgress(progress);
+            });
+
+            const result = await window.ipcRenderer?.invoke('resource:perform-update') as {
+                success: boolean;
+                willRestart?: boolean;
+                error?: string;
+                version?: string;
+            } | undefined;
+            
+            if (removeListener) {
+                removeListener();
+            }
+
+            if (result && result.success) {
+                // 主进程会在 1.5s 后自动重启，展示重启提示即可
+                setResourceUpdateDone(true);
+            } else {
+                const errorMsg = result?.error || '未知错误';
+                alert(`资源更新失败: ${errorMsg}\n\n请检查网络连接或稍后重试。`);
+                setUpdatingResources(false);
+                setUpdateProgress(null);
+            }
+        } catch (error: any) {
+            console.error('Resource update failed', error);
+            const errorMsg = error?.message || '未知错误';
+            alert(`资源更新失败: ${errorMsg}\n\n请检查开发者控制台获取详细信息。`);
+            setUpdatingResources(false);
+            setUpdateProgress(null);
+        }
+    };
+
+    // 清理热更新目录（整包更新后仍显示旧界面时使用，重启后将使用内置资源）
+    const handleClearHotUpdate = async () => {
+        setClearingHotUpdate(true);
+        try {
+            const result = await window.ipcRenderer?.invoke('resource:clear-hot-update') as { success: boolean; error?: string; message?: string };
+            if (result?.success) {
+                // 清理成功后自动重启应用
+                setTimeout(() => {
+                    window.ipcRenderer?.invoke('resource:restart-app');
+                }, 800);
+            } else {
+                alert(result?.error ?? '清理失败');
+                setClearingHotUpdate(false);
+            }
+        } catch (error: any) {
+            console.error('Clear hot update failed', error);
+            alert(error?.message ?? '清理失败');
+            setClearingHotUpdate(false);
+        }
+    };
+
+    // 格式化字节大小
+    const formatBytes = (bytes: number): string => {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
     };
 
     // Reset test result when provider changes
@@ -260,6 +385,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                 const config = cfg as Config;
                 // Ensure all providers are initialized, including custom
                 const initializedProviders = { ...config.providers };
+                // Only create custom provider if it doesn't exist AND is not preset
+                // If it exists (even with preset config), keep it as is
                 if (!initializedProviders['custom']) {
                     initializedProviders['custom'] = {
                         id: 'custom',
@@ -267,12 +394,14 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                         apiKey: '',
                         apiUrl: '',
                         model: '',
-                        isCustom: true
+                        isCustom: true,
+                        isPreset: false
                     };
                 }
-                setConfig({ ...config, providers: initializedProviders });
-                // Initialize baseline reference to avoid saving what we just loaded
-                prevConfigRef.current = JSON.stringify({ ...config, providers: initializedProviders });
+                const finalConfig = { ...config, providers: initializedProviders };
+                // CRITICAL: Set prevConfigRef BEFORE setConfig to prevent auto-save loop
+                prevConfigRef.current = JSON.stringify(finalConfig);
+                setConfig(finalConfig);
             }
         }).finally(() => {
             setIsLoading(false);
@@ -316,13 +445,6 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         window.ipcRenderer.invoke('skills:list').then(list => setSkills(list as SkillInfo[]));
     };
 
-    // Initialize prevConfigRef when config is first loaded
-    useEffect(() => {
-        if (config && prevConfigRef.current === '') {
-            prevConfigRef.current = JSON.stringify(config);
-        }
-    }, [config]);
-
     // Reusable save function with force option
     const saveConfig = async (cfg: Config, force: boolean = false) => {
         // Prevent saving if still loading or if config is empty/default
@@ -350,6 +472,12 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     useEffect(() => {
         if (isFirstRender.current) {
             isFirstRender.current = false;
+            return;
+        }
+
+        // Skip if config hasn't actually changed (prevent redundant saves)
+        const currentConfigStr = JSON.stringify(config);
+        if (currentConfigStr === prevConfigRef.current) {
             return;
         }
 
@@ -651,30 +779,56 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                 )}
                                             </div>
                                             <div className="relative">
-                                                <input
-                                                    type={showApiKey ? "text" : "password"}
-                                                    value={config.providers[config.activeProviderId].apiKey}
-                                                    onChange={(e) => {
-                                                        const newProviders = { ...config.providers };
-                                                        newProviders[config.activeProviderId] = {
-                                                            ...newProviders[config.activeProviderId],
-                                                            apiKey: e.target.value
-                                                        };
-                                                        setConfig({ ...config, providers: newProviders });
-                                                    }}
-                                                    placeholder={t('apiKeyPlaceholder')}
-                                                    onBlur={handleForceSave}
-                                                    className="w-full bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 pr-9"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowApiKey(!showApiKey)}
-                                                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
-                                                    title={showApiKey ? t('hide') : t('show')}
-                                                >
-                                                    {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
-                                                </button>
+                                                {(() => {
+                                                    const currentProvider = config.providers[config.activeProviderId];
+                                                    const isPreset = currentProvider?.isPreset === true;
+                                                    const displayValue = isPreset 
+                                                        ? maskApiKey(currentProvider.apiKey)
+                                                        : currentProvider?.apiKey || '';
+                                                    
+                                                    return (
+                                                        <>
+                                                            <input
+                                                                type={isPreset ? "text" : (showApiKey ? "text" : "password")}
+                                                                value={displayValue}
+                                                                onChange={(e) => {
+                                                                    if (isPreset) return; // 预设配置不允许修改
+                                                                    const newProviders = { ...config.providers };
+                                                                    newProviders[config.activeProviderId] = {
+                                                                        ...newProviders[config.activeProviderId],
+                                                                        apiKey: e.target.value
+                                                                    };
+                                                                    setConfig({ ...config, providers: newProviders });
+                                                                }}
+                                                                placeholder={isPreset ? '预设配置（不可修改）' : t('apiKeyPlaceholder')}
+                                                                onBlur={handleForceSave}
+                                                                disabled={isPreset}
+                                                                className={`w-full border border-stone-200 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 pr-9 ${
+                                                                    isPreset 
+                                                                        ? 'bg-stone-100 dark:bg-zinc-800 cursor-not-allowed' 
+                                                                        : 'bg-white dark:bg-zinc-900'
+                                                                }`}
+                                                            />
+                                                            {!isPreset && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setShowApiKey(!showApiKey)}
+                                                                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
+                                                                    title={showApiKey ? t('hide') : t('show')}
+                                                                >
+                                                                    {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                                                                </button>
+                                                            )}
+                                                        </>
+                                                    );
+                                                })()}
                                             </div>
+                                            {config.providers[config.activeProviderId]?.isPreset && (
+                                                <div className="text-xs text-orange-600 dark:text-orange-400 mt-1.5 flex items-center gap-1.5">
+                                                    <Shield size={12} />
+                                                    <span>此为预设配置，API 密钥已加密保护，不可修改</span>
+                                                </div>
+                                            )}
 
                                             <div className="mt-3">
                                                 <div className="flex items-center justify-between mb-1.5">
@@ -1234,6 +1388,112 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                             )}
                                         </div>
                                     )}
+
+                                    {/* 资源更新区域 */}
+                                    <div className="border-t border-stone-200 dark:border-zinc-700 pt-4 mt-4">
+                                        <p className="text-xs text-stone-500 dark:text-zinc-400 mb-2 text-center">
+                                            支持资源热更新
+                                        </p>
+                                        <div className="flex flex-col items-center gap-2">
+                                            <button
+                                                onClick={handleCheckResourceUpdate}
+                                                disabled={checkingResourceUpdate || updatingResources}
+                                                className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 flex items-center gap-2"
+                                                aria-label="检查资源更新"
+                                            >
+                                                {checkingResourceUpdate && <Loader2 size={14} className="animate-spin" />}
+                                                {checkingResourceUpdate ? '检查中...' : '检查资源更新'}
+                                            </button>
+                                            <button
+                                                onClick={handleClearHotUpdate}
+                                                disabled={clearingHotUpdate || updatingResources}
+                                                className="px-3 py-1.5 text-xs text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200 border border-stone-300 dark:border-zinc-600 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                                                aria-label="清理热更新目录，重启后使用内置资源"
+                                                title="整包更新后仍显示旧界面时可用"
+                                            >
+                                                {clearingHotUpdate && <Loader2 size={12} className="animate-spin" />}
+                                                {clearingHotUpdate ? '清理中...' : '清理热更新'}
+                                            </button>
+                                        </div>
+
+                                        {resourceUpdateInfo && (
+                                            <div className="mt-3 text-sm animate-in fade-in slide-in-from-top-2">
+                                                {resourceUpdateInfo.hasUpdate ? (
+                                                    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg p-3 space-y-2 w-full min-w-0">
+                                                        <p className="text-amber-800 dark:text-amber-200 font-medium">
+                                                            发现新资源版本!
+                                                        </p>
+                                                        <div className="text-xs text-amber-700 dark:text-amber-300 space-y-1">
+                                                            <p>当前: v{resourceUpdateInfo.currentVersion}</p>
+                                                            <p>最新: v{resourceUpdateInfo.latestVersion}</p>
+                                                            {resourceUpdateInfo.updateSize && (
+                                                                <p>变更文件: {formatBytes(resourceUpdateInfo.updateSize)}</p>
+                                                            )}
+                                                            <p className="text-amber-600/70 dark:text-amber-400/70 text-[10px]">
+                                                                注: 首次更新需下载完整资源包
+                                                            </p>
+                                                        </div>
+                                                        {!resourceUpdateDone && (
+                                                            <button
+                                                                onClick={handlePerformResourceUpdate}
+                                                                disabled={updatingResources}
+                                                                className="w-full px-3 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                                            >
+                                                                {updatingResources && <Loader2 size={14} className="animate-spin" />}
+                                                                {updatingResources ? '更新中...' : '立即更新'}
+                                                            </button>
+                                                        )}
+                                                        {/* 进度区域：使用固定高度避免内容变化时的布局抖动 */}
+                                                        {updateProgress && !resourceUpdateDone && (
+                                                            <div className="mt-2 space-y-1">
+                                                                <div className="flex justify-between text-xs text-amber-700 dark:text-amber-300 h-4 min-w-0">
+                                                                    <span className="truncate flex-1 min-w-0 mr-2">
+                                                                        {updateProgress.stage === 'checking' && '检查更新中...'}
+                                                                        {updateProgress.stage === 'downloading' && '下载资源包中...'}
+                                                                        {updateProgress.stage === 'extracting' && '解压文件中...'}
+                                                                        {updateProgress.stage === 'applying' && '应用更新中...'}
+                                                                        {updateProgress.stage === 'completed' && '更新完成！'}
+                                                                        {!updateProgress.stage && `进度: ${updateProgress.downloaded}/${updateProgress.total}`}
+                                                                    </span>
+                                                                    <span className="font-mono tabular-nums shrink-0 ml-auto">
+                                                                        {updateProgress.percentage !== undefined 
+                                                                            ? `${Math.round(updateProgress.percentage)}%`
+                                                                            : `${Math.round((updateProgress.downloaded / updateProgress.total) * 100)}%`}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="w-full h-1.5 bg-amber-200 dark:bg-amber-800 rounded-full overflow-hidden">
+                                                                    <div
+                                                                        className="h-full bg-amber-500 transition-all duration-300"
+                                                                        style={{ 
+                                                                            width: `${updateProgress.percentage !== undefined 
+                                                                                ? updateProgress.percentage 
+                                                                                : (updateProgress.downloaded / updateProgress.total) * 100}%` 
+                                                                        }}
+                                                                    />
+                                                                </div>
+                                                                <p className="text-xs text-amber-600 dark:text-amber-400 font-mono truncate h-4 leading-4" title={updateProgress.current}>
+                                                                    {updateProgress.current}
+                                                                </p>
+                                                            </div>
+                                                        )}
+                                                        {/* 更新完成：展示重启提示 */}
+                                                        {resourceUpdateDone && (
+                                                            <div className="mt-2 flex items-center justify-center gap-2 text-green-600 dark:text-green-400 py-2 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-700">
+                                                                <Loader2 size={13} className="animate-spin shrink-0" />
+                                                                <span className="text-sm font-medium">更新完成，正在重启应用...</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg p-3">
+                                                        <p className="text-green-700 dark:text-green-300 text-center">
+                                                            ✓ 资源已是最新版本
+                                                        </p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 <p className="text-xs text-stone-400 dark:text-zinc-600 max-w-xs leading-relaxed">

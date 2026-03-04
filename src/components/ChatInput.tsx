@@ -1,6 +1,14 @@
 import React, { useState, useRef, useLayoutEffect, useEffect } from 'react';
-import { ArrowUp, FolderOpen, Square, ChevronDown, Check, X } from 'lucide-react';
+import { ArrowUp, FolderOpen, Square, ChevronDown, Check, X, Image } from 'lucide-react';
 import { useI18n } from '../i18n/I18nContext';
+
+const useAppVersion = () => {
+    const [version, setVersion] = useState<string>('');
+    useEffect(() => {
+        window.ipcRenderer.invoke('app:get-version').then((v: unknown) => setVersion(v as string)).catch(() => {});
+    }, []);
+    return version;
+};
 
 interface ChatInputProps {
     onSendMessage: (message: string | { content: string, images: string[] }) => void;
@@ -12,6 +20,10 @@ interface ChatInputProps {
     config: any;
     setConfig: (config: any) => void;
     lockedProjectName?: string | null;
+    /** 外部预填文本（编辑消息时使用） */
+    prefillText?: string | null;
+    /** 预填文本消费后的回调，用于清空外部状态 */
+    onPrefillConsumed?: () => void;
 }
 
 export function ChatInput({
@@ -23,9 +35,12 @@ export function ChatInput({
     mode,
     config,
     setConfig,
-    lockedProjectName: _lockedProjectName
+    lockedProjectName,
+    prefillText,
+    onPrefillConsumed
 }: ChatInputProps) {
     const { t } = useI18n();
+    const appVersion = useAppVersion();
     const [input, setInput] = useState('');
     const [images, setImages] = useState<string[]>([]);
     const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
@@ -64,6 +79,21 @@ export function ChatInput({
         'custom': '自定义'
     };
 
+    // 响应外部预填文本（编辑消息）
+    useEffect(() => {
+        if (prefillText != null) {
+            setInput(prefillText);
+            onPrefillConsumed?.();
+            setTimeout(() => {
+                if (inputRef.current) {
+                    inputRef.current.focus();
+                    const len = prefillText.length;
+                    inputRef.current.setSelectionRange(len, len);
+                }
+            }, 0);
+        }
+    }, [prefillText]);
+
     // Auto-resize textarea - Isolated to this component
     useLayoutEffect(() => {
         if (inputRef.current) {
@@ -100,6 +130,8 @@ export function ChatInput({
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
+            // 中文等 IME 组合输入（拼音选字）时，不拦截 Enter，让输入法先确认选字
+            if (e.nativeEvent.isComposing) return;
             e.preventDefault();
             handleSubmit(e as any);
         }
@@ -176,7 +208,7 @@ export function ChatInput({
                             onPaste={handlePaste}
                             placeholder={mode === 'memory' ? t('inputMessage') : workingDir ? t('describeTaskPlaceholder') : t('selectWorkingDirFirst')}
                             rows={1}
-                            className="w-full bg-transparent text-stone-800 dark:text-zinc-100 placeholder:text-stone-400 dark:placeholder:text-zinc-500 text-sm focus:outline-none resize-none overflow-y-auto min-h-[24px] max-h-[120px] leading-6 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0"
+                            className="w-full bg-transparent text-stone-800 dark:text-zinc-100 placeholder:text-stone-400 dark:placeholder:text-zinc-500 text-xs focus:outline-none resize-none overflow-y-auto min-h-[22px] max-h-[120px] leading-5 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0"
                             style={{
                                 scrollbarWidth: 'none',
                                 msOverflowStyle: 'none',
@@ -208,7 +240,7 @@ export function ChatInput({
                                     className="p-1.5 text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg transition-colors"
                                     title={t('uploadImage')}
                                 >
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 0 0 0-2.828 0L6 21" /></svg>
+                                    <Image size={16} strokeWidth={2} />
                                 </button>
 
                                 <input
@@ -341,7 +373,7 @@ export function ChatInput({
                                     <button
                                         type="button"
                                         onClick={onAbort}
-                                        className="p-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all flex items-center gap-1 px-2 shadow-sm"
+                                        className="p-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-all flex items-center gap-1 px-2 shadow-sm whitespace-nowrap shrink-0"
                                         title={t('stop')}
                                     >
                                         <Square size={12} fill="currentColor" />
@@ -366,7 +398,7 @@ export function ChatInput({
                 </form>
 
                 <p className="text-[11px] text-stone-400 dark:text-zinc-600 text-center mt-1.5">
-                    {t('aiDisclaimer')}
+                    {t('aiDisclaimer')}{appVersion && <span className="ml-1 opacity-70">{appVersion}</span>}
                 </p>
             </div>
         </div>

@@ -3,6 +3,7 @@ import { Home, History, X, Plus, Check } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { FloatingInput } from './FloatingInput';
 import { useI18n } from '../i18n/I18nContext';
+import { useToast } from './Toast';
 import { logger } from '../services/logger';
 
 type BallState = 'collapsed' | 'input' | 'expanded';
@@ -28,28 +29,7 @@ interface Message {
 
 export function FloatingBallPage() {
     const { t } = useI18n();
-
-    // ⚠️ 优化：环境检测，生产环境减少日志
-    const isDevelopment = process.env.NODE_ENV === 'development';
-
-    // ⚠️ 优化：创建日志工具函数
-    const log = isDevelopment
-        ? (...args: unknown[]) => console.log('[FloatingBall]', ...args)
-        : () => {}; // 生产环境空函数
-
-    const warn = isDevelopment
-        ? (...args: unknown[]) => logger.warn('[FloatingBall]', ...args)
-        : () => {};
-
-    const error = (...args: unknown[]) => logger.error('[FloatingBall]', ...args);
-
-    // ⚠️ 优化：历史哈希计算函数（用于重复更新检测）
-    const computeHistoryHash = (data: Message[]): string => {
-        // 简单哈希：取长度和前100个字符
-        const str = JSON.stringify(data);
-        return `${str.length}:${str.slice(0, 100)}`;
-    };
-
+    const { showToast } = useToast();
     const [ballState, setBallState] = useState<BallState>('collapsed');
     // input/images moved to FloatingInput, but we track presence for auto logic
     const [hasContent, setHasContent] = useState(false);
@@ -238,6 +218,19 @@ ${error}
             });
         });
 
+        const removeContextSwitchedListener = window.ipcRenderer.on('agent:context-switched', (_event, ...args) => {
+            const payload = args[0] as { newSessionId?: string; taskId?: string; projectId?: string };
+            if (payload?.newSessionId) {
+                setSessionId(payload.newSessionId);
+            }
+            showToast(t('contextSwitchedToNewSession'), 'info');
+            if (showHistory) {
+                window.ipcRenderer.invoke('session:list').then((list) => {
+                    setSessions(list as SessionSummary[]);
+                });
+            }
+        });
+
         const removeAbortListener = window.ipcRenderer.on('agent:aborted', (_event, ...args) => {
             const eventData = args[0] as { sessionId: string; data: unknown };
 
@@ -391,6 +384,7 @@ ${error}
             // No need to manually save on unmount
 
             removeUpdateListener?.();
+            removeContextSwitchedListener?.();
             removeStreamListener?.();
             removeErrorListener?.();
             removeAbortListener?.();
@@ -399,7 +393,7 @@ ${error}
             removeSessionChangedListener?.();
             clearInterval(cleanupInterval); // 清理定时器
         };
-    }, []);
+    }, [showToast, t]);
 
     // ... (refs and resizing logic same as before) ...
     // Change ref to textarea

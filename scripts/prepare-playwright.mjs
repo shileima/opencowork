@@ -22,6 +22,17 @@ const browsersPath = path.join(projectRoot, 'resources', 'playwright', 'browsers
 console.log('📦 准备 Playwright 浏览器二进制文件...');
 console.log(`目标目录: ${browsersPath}`);
 
+// 快速检测：浏览器已存在则直接跳过，避免每次 build/postinstall 都重复安装
+if (fs.existsSync(browsersPath)) {
+  const existing = fs.readdirSync(browsersPath).filter(f => f.startsWith('chromium-'));
+  if (existing.length > 0) {
+    console.log(`✅ 浏览器已存在 (${existing[0]})，跳过安装`);
+    // 仍然确保软链接存在
+    ensureSkillSymlink(browsersPath);
+    process.exit(0);
+  }
+}
+
 // 确保目录存在
 if (!fs.existsSync(browsersPath)) {
   fs.mkdirSync(browsersPath, { recursive: true });
@@ -101,6 +112,8 @@ if (!hasCache) {
   console.log('✅ Playwright 浏览器下载完成');
 }
 
+ensureSkillSymlink(browsersPath);
+
 console.log(`浏览器位置: ${browsersPath}`);
 // 显示下载的文件大小
 if (fs.existsSync(browsersPath)) {
@@ -120,6 +133,31 @@ if (fs.existsSync(browsersPath)) {
 } else {
   console.error('❌ 浏览器目录不存在');
   process.exit(1);
+}
+
+function ensureSkillSymlink(targetBrowsersPath) {
+  const skillBrowsersLink = path.join(os.homedir(), '.qa-cowork', 'skills', 'agent-browser', 'browsers');
+  try {
+    const skillDir = path.dirname(skillBrowsersLink);
+    if (!fs.existsSync(skillDir)) {
+      fs.mkdirSync(skillDir, { recursive: true });
+    }
+    // 若已存在且是软链接，先删除再重建（保证指向正确）
+    try {
+      const stat = fs.lstatSync(skillBrowsersLink);
+      if (stat.isSymbolicLink()) {
+        fs.unlinkSync(skillBrowsersLink);
+      }
+    } catch (_) { /* 不存在，忽略 */ }
+    if (!fs.existsSync(skillBrowsersLink)) {
+      fs.symlinkSync(targetBrowsersPath, skillBrowsersLink);
+      console.log(`✅ 已创建软链接: ${skillBrowsersLink} → ${targetBrowsersPath}`);
+    } else {
+      console.log(`⏭️  软链接已存在，跳过: ${skillBrowsersLink}`);
+    }
+  } catch (err) {
+    console.warn('⚠️  创建软链接失败（不影响功能）:', err.message);
+  }
 }
 
 function getDirSize(dirPath) {

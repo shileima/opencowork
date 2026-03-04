@@ -1,0 +1,93 @@
+# Changelog
+
+## [1.0.2] - 2026-02-11
+
+### 🔧 改进
+
+- **新建项目**：固定路径为 `~/Library/Application Support/qacowork/projects`，仅需填写项目名称
+- **任务完成后**：修复首次完成任务时聊天区域被清空的问题，保留对话历史
+- **加载页**：优化 Splash 布局，将「Powered by Claude AI」独立到底部区域
+
+---
+
+## [1.0.0] - 2026-02-11
+
+### ✨ 新增功能
+
+- **项目模板**：新建项目支持模板化流程
+  - 基于 draw-tool 精简的 React + Vite + TailwindCSS + Ant Design 模板
+  - 新建项目自动拷贝模板，无需 `pnpm create vite`
+  - Agent 直接生成业务代码，执行 `pnpm install` 和 `pnpm dev` 即可
+  - 模板路径：`resources/templates/react-vite/`
+
+### 🔧 技术改进
+
+- 修改 `project:create-new`：从空目录改为拷贝模板并替换占位符
+- 更新 Agent 系统提示：明确模板化流程，不再执行 `pnpm create vite`
+- 更新 react-project-builder Skill：区分模板化与手动创建流程
+- electron-builder 增加 templates 资源打包
+- verify-builtin-resources 增加模板校验
+
+---
+
+## [0.0.42] - 2026-02-10
+
+### ✨ 新增功能
+
+- **项目视图**：增强项目任务管理与 UI
+  - 实现上下文切换与会话管理
+  - BrowserTab 加载超时与用户友好错误处理
+  - 优化项目任务管理界面
+
+---
+
+## [0.0.41] - 2026-02-09
+
+### ✨ 新增功能
+
+- **智能清理系统**：退出应用时自动清理所有资源
+  - 自动关闭所有浏览器会话（agent-browser）
+  - 自动终止所有终端进程（PTY 和普通进程）
+  - 自动清理所有子进程（开发服务器等）
+  - 自动释放常用开发端口（3000, 5173, 8080, 4200, 8000）
+  - 跨平台支持（macOS/Linux/Windows）
+
+### 📝 文档
+
+- 新增退出清理功能完整文档（中英文）
+- 新增快速参考指南
+- 新增实现总结文档
+- 新增测试脚本
+
+### 🔧 技术改进
+
+- 在 `FileSystemTools` 中添加静态资源跟踪机制
+- 增强 `before-quit` 事件处理器，实现完整清理流程
+- 添加超时保护和错误容错机制
+- 详细的清理日志输出
+
+### 📚 相关文档
+
+- `docs/CLEANUP_ON_QUIT.md` - 英文功能文档
+- `docs/CLEANUP_ON_QUIT_CN.md` - 中文功能文档
+- `docs/CLEANUP_QUICK_REFERENCE.md` - 快速参考
+- `scripts/test-cleanup.sh` - 测试脚本
+- `CLEANUP_IMPLEMENTATION.md` - 实现总结
+
+---
+
+## [0.0.40] - 2026-02-09
+
+### 🔧 修复
+
+- 修复构建配置问题
+- 更新 Vite 配置以支持 CDN 部署
+
+---
+
+## [0.0.39] - 2026-02-08
+
+### 📝 文档
+
+- 添加 macOS 安装指南
+- 添加一键移除隔离属性脚本

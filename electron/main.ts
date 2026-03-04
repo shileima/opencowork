@@ -2,6 +2,9 @@ import { app, BrowserWindow, shell, ipcMain, screen, dialog, globalShortcut, Tra
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
+import os from 'node:os'
+import { spawn as cpSpawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import dotenv from 'dotenv'
 import { AgentRuntime } from './agent/AgentRuntime'
 import { configStore, TrustLevel } from './config/ConfigStore'
@@ -10,9 +13,17 @@ import { scriptStore } from './config/ScriptStore'
 import { projectStore } from './config/ProjectStore'
 import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
-import { getBuiltinNodePath } from './utils/NodePath'
+import { ssoStore } from './config/SsoStore'
+
+import { getBuiltinNodePath, getBuiltinPnpmPath, getSystemNpxPath } from './utils/NodePath'
+import { resolveDeployEnv } from './utils/DeployEnvResolver'
+import { resolveShellPath, validateShellPath, getShellCandidates, resolveShellForCommand } from './utils/ShellResolver'
+import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
+import { setPlaywrightManager } from './utils/PlaywrightEnsure'
+import { ensureAgentBrowserCanFindChromium } from './utils/PlaywrightPath'
+import { registerContextSwitchHandler } from './contextSwitchCoordinator'
 import Anthropic from '@anthropic-ai/sdk'
 
 // Extend App type to include isQuitting property
@@ -24,7 +35,13 @@ declare global {
   }
 }
 
-dotenv.config()
+// 打包后：dotenv 固定从可执行文件目录加载 .env，避免因 cwd 不同（双击 .app vs 直接运行 MacOS/QACowork）导致行为不一致
+if (app.isPackaged) {
+  const envPath = path.join(path.dirname(process.execPath), '.env');
+  dotenv.config({ path: envPath });
+} else {
+  dotenv.config();
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -37,21 +54,25 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
 /**
- * 简单版本比较：a >= b 返回 true
- * 用于判断热更新版本是否不低于应用版本，避免旧热更新导致黑屏
+ * 比较版本号，用于决定是否使用热更新目录
+ * 仅在此处使用，避免与后面的 compareVersions 重复
  */
-function isVersionGte(a: string, b: string): boolean {
-  const parse = (v: string) => v.split('.').map(Number)
-  const [a0, a1, a2] = parse(a)
-  const [b0, b1, b2] = parse(b)
-  if (a0 !== b0) return a0 >= b0
-  if (a1 !== b1) return a1 >= b1
-  return (a2 ?? 0) >= (b2 ?? 0)
+function compareVersionsForDist(a: string, b: string): number {
+  const parts1 = a.split('.').map(Number)
+  const parts2 = b.split('.').map(Number)
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] ?? 0
+    const p2 = parts2[i] ?? 0
+    if (p1 > p2) return 1
+    if (p1 < p2) return -1
+  }
+  return 0
 }
 
 /**
  * 获取前端资源目录路径
- * 生产环境下优先使用热更新目录（仅当热更新版本>=应用版本），否则使用内置资源
+ * 生产环境下：若热更新目录存在且版本不低于应用版本则用热更新，否则用内置资源。
+ * 这样在「整包更新」（如 GitHub Actions 安装新版本）后，会使用新内置前端，避免被旧热更新目录覆盖。
  */
 function getRendererDistPath(): string {
   if (VITE_DEV_SERVER_URL) {
@@ -61,14 +82,15 @@ function getRendererDistPath(): string {
   const hotUpdateDistDir = directoryManager.getHotUpdateDistDir()
   const hotUpdateIndexPath = path.join(hotUpdateDistDir, 'index.html')
   if (!fs.existsSync(hotUpdateIndexPath)) {
-    console.log('[Main] Using built-in dist directory')
+    console.log('[Main] Using built-in dist directory (no hot-update index)')
     return RENDERER_DIST
   }
 
   const appVersion = app.getVersion()
   const hotUpdateVersion = directoryManager.getHotUpdateVersion()
-  if (!hotUpdateVersion || !isVersionGte(hotUpdateVersion, appVersion)) {
-    console.log(`[Main] Using built-in dist directory (hot-update ${hotUpdateVersion ?? '?'} < app ${appVersion})`)
+  // 热更新无清单或版本落后于应用版本（例如用户刚做了整包更新）→ 用内置，避免旧热更新覆盖新前端
+  if (!hotUpdateVersion || compareVersionsForDist(hotUpdateVersion, appVersion) < 0) {
+    console.log(`[Main] Using built-in dist directory (app=${appVersion}, hot-update=${hotUpdateVersion ?? 'none'}, prefer built-in after full app update)`)
     return RENDERER_DIST
   }
 
@@ -111,6 +133,7 @@ app.commandLine.appendSwitch('disable-gpu-sandbox');
 
 let mainWin: BrowserWindow | null = null
 let floatingBallWin: BrowserWindow | null = null
+const terminalWindows: Map<string, BrowserWindow> = new Map()
 let tray: Tray | null = null
 let mainAgent: AgentRuntime | null = null  // Agent for main window
 let floatingBallAgent: AgentRuntime | null = null  // Independent agent for floating ball
@@ -123,13 +146,198 @@ const BALL_SIZE = 64
 const EXPANDED_WIDTH = 340    // Match w-80 (320px) + padding
 const EXPANDED_HEIGHT = 320   // Compact height for less dramatic expansion
 
+// 右下角小窗模式：记录收缩前的位置/尺寸，便于还原
+const MINI_WINDOW_WIDTH = 430
+const MINI_WINDOW_HEIGHT = 560
+const MINI_WINDOW_MARGIN = 16
+let mainWinPreMiniState: { x: number; y: number; width: number; height: number } | null = null
+
+/**
+ * 将主窗口缩小并移至屏幕右下角，同时置顶。
+ * 仅在打开客户端外部的浏览器或应用时调用，方便用户对照查看。
+ * 打开客户端内置浏览器时不调用此函数。
+ */
+function shrinkMainWindowToBottomRight() {
+  if (!mainWin || mainWin.isDestroyed()) return
+  if (mainWin.isMinimized()) mainWin.restore()
+
+  const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
+
+  // 记录还原状态（仅在未处于小窗模式时记录）
+  if (!mainWinPreMiniState) {
+    const [wx, wy] = mainWin.getPosition()
+    const [ww, wh] = mainWin.getSize()
+    mainWinPreMiniState = { x: wx, y: wy, width: ww, height: wh }
+  }
+
+  const targetX = sw - MINI_WINDOW_WIDTH - MINI_WINDOW_MARGIN
+  const targetY = sh - MINI_WINDOW_HEIGHT - MINI_WINDOW_MARGIN
+
+  mainWin.setBounds({ x: targetX, y: targetY, width: MINI_WINDOW_WIDTH, height: MINI_WINDOW_HEIGHT }, true)
+  mainWin.setAlwaysOnTop(true, 'floating')
+  mainWin.show()
+  mainWin.focus()
+
+  mainWin.webContents.send('window:enter-mini-mode')
+}
+
+/**
+ * 延迟若干毫秒后通过 AppleScript 将 Google Chrome for Testing 窗口最大化。
+ * 仅在 macOS 上生效；agent-browser --headed 启动后浏览器需要一小段时间初始化，
+ * 所以延迟 1.5 秒再执行最大化，确保窗口已创建。
+ */
+function maximizeChromeForTesting(delayMs = 1500) {
+  if (process.platform !== 'darwin') return
+  setTimeout(async () => {
+    const { spawn } = await import('node:child_process')
+    // 使用 spawn 传递多个 -e 参数，避免单引号转义问题
+    // 通过点击缩放按钮（绿色按钮）最大化窗口，而非全屏
+    const child = spawn('osascript', [
+      '-e', 'tell application "System Events"',
+      '-e', 'set chromeProcs to every process whose name contains "Google Chrome for Testing"',
+      '-e', 'repeat with proc in chromeProcs',
+      '-e', 'set frontmost of proc to true',
+      '-e', 'repeat with win in windows of proc',
+      '-e', 'try',
+      '-e', 'set zoomBtn to (first button of win whose subrole is "AXZoomButton")',
+      '-e', 'click zoomBtn',
+      '-e', 'end try',
+      '-e', 'end repeat',
+      '-e', 'end repeat',
+      '-e', 'end tell',
+    ])
+    child.on('error', (err: Error) => {
+      console.warn('[Main] maximizeChromeForTesting error:', err.message)
+    })
+    child.stderr?.on('data', (data: Buffer) => {
+      const msg = data.toString().trim()
+      if (msg) console.warn('[Main] maximizeChromeForTesting AppleScript:', msg)
+    })
+  }, delayMs)
+}
+
+/**
+ * 将主窗口从右下角小窗模式还原到之前的位置和大小。
+ */
+function restoreMainWindowFromMini() {
+  if (!mainWin || mainWin.isDestroyed()) return
+  mainWin.setAlwaysOnTop(false)
+  if (mainWinPreMiniState) {
+    mainWin.setBounds(mainWinPreMiniState, true)
+    mainWinPreMiniState = null
+  }
+}
+
 app.on('before-quit', async () => {
   app.isQuitting = true
-  // Stop resource updater
-  if (resourceUpdater) {
-    resourceUpdater.stopAutoUpdateCheck()
+  console.log('[Main] Application is quitting, starting cleanup...');
+  
+  // 1. 关闭所有浏览器（通过 agent-browser）
+  try {
+    console.log('[Main] Closing browser sessions...');
+    // 使用 agent-browser close 命令关闭浏览器
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+    
+    try {
+      // 关闭默认浏览器会话
+      await execAsync('agent-browser close', {
+        timeout: 5000,
+        encoding: 'utf-8'
+      });
+      console.log('[Main] Browser session closed');
+    } catch (browserError) {
+      // 浏览器可能未运行，忽略错误
+      console.log('[Main] Browser cleanup skipped (browser may not be running)');
+    }
+  } catch (error) {
+    console.warn('[Main] Error closing browser:', error);
   }
-  // Clean up both agent resources
+  
+  // 2. 清理所有终端会话
+  console.log('[Main] Cleaning up terminal sessions...');
+  terminalSessions.forEach((session, id) => {
+    try {
+      if (session.pty) {
+        console.log(`[Main] Killing terminal PTY session ${id}`);
+        session.pty.kill('SIGKILL');
+      } else if (session.process && session.process.pid) {
+        console.log(`[Main] Killing terminal process ${id} (PID: ${session.process.pid})`);
+        if (process.platform === 'win32') {
+          // Windows: 使用 taskkill 强制终止进程树
+          cpSpawn('taskkill', ['/PID', session.process.pid.toString(), '/T', '/F'], {
+            stdio: 'ignore'
+          });
+        } else {
+          // Unix: 发送 SIGKILL 信号
+          session.process.kill('SIGKILL');
+        }
+      }
+    } catch (error) {
+      console.warn(`[Main] Error killing terminal session ${id}:`, error);
+    }
+  });
+  terminalSessions.clear();
+  console.log('[Main] Terminal sessions cleaned up');
+  
+  // 3. 清理所有子进程和端口（通过 FileSystemTools）
+  try {
+    console.log('[Main] Cleaning up child processes and ports...');
+    const { FileSystemTools } = await import('./agent/tools/FileSystemTools');
+    await FileSystemTools.cleanupAll();
+    
+    // 额外清理常用的开发端口（3000, 5173, 8080 等）
+    console.log('[Main] Cleaning up common development ports...');
+    const commonPorts = [3000, 5173, 8080, 4200, 8000];
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+    
+    for (const port of commonPorts) {
+      try {
+        if (process.platform === 'darwin' || process.platform === 'linux') {
+          const { stdout } = await execAsync(`lsof -ti :${port}`, {
+            timeout: 2000,
+            encoding: 'utf-8'
+          });
+          const pids = stdout.trim().split(/\s+/).filter(Boolean);
+          if (pids.length > 0) {
+            console.log(`[Main] Killing processes on port ${port}: ${pids.join(', ')}`);
+            for (const pid of pids) {
+              await execAsync(`kill -9 ${pid}`, { timeout: 2000 });
+            }
+          }
+        } else if (process.platform === 'win32') {
+          const { stdout } = await execAsync(`netstat -ano | findstr ":${port}"`, {
+            timeout: 2000,
+            encoding: 'utf-8',
+            shell: 'cmd.exe'
+          });
+          const lines = stdout.trim().split(/\r?\n/).filter((line: string) => line.includes(`:${port}`) && line.includes('LISTENING'));
+          for (const line of lines) {
+            const parts = line.trim().split(/\s+/);
+            const pid = parts[parts.length - 1];
+            if (pid) {
+              console.log(`[Main] Killing process ${pid} on port ${port}`);
+              await execAsync(`taskkill /PID ${pid} /F`, {
+                timeout: 2000,
+                shell: 'cmd.exe'
+              });
+            }
+          }
+        }
+      } catch (portError) {
+        // 端口可能未被占用，忽略错误
+      }
+    }
+    
+    console.log('[Main] Child processes and ports cleaned up');
+  } catch (error) {
+    console.warn('[Main] Error cleaning up child processes:', error);
+  }
+  
+  // 4. 清理 Agent 资源
   const agents = [mainAgent, floatingBallAgent].filter((agent): agent is AgentRuntime => agent !== null)
   if (agents.length > 0) {
     console.log('[Main] Cleaning up agent resources...');
@@ -143,6 +351,13 @@ app.on('before-quit', async () => {
     mainAgent = null;
     floatingBallAgent = null;
   }
+  
+  // 5. 停止资源更新器
+  if (resourceUpdater) {
+    resourceUpdater.stopAutoUpdateCheck()
+  }
+  
+  console.log('[Main] Cleanup completed, application will now quit');
 })
 
 app.on('window-all-closed', () => {
@@ -183,6 +398,53 @@ app.whenReady().then(() => {
   const effectiveVersion = resourceUpdater?.getCurrentVersion() || appVersion
   console.log(`[Main] App started - appVersion: ${appVersion}, hotUpdateVersion: ${hotUpdateVersion}, effectiveVersion: ${effectiveVersion}`)
 
+  // 清理过期热更新 dist：整包安装新版本后，若热更新目录版本低于应用版本，删除旧的 hot-update/dist
+  // 避免旧版前端资源遗留在热更新目录中，导致下次启动时 ResourceUpdater.getCurrentVersion 返回旧版本号
+  if (hotUpdateVersion && compareVersionsForDist(hotUpdateVersion, appVersion) < 0) {
+    try {
+      const staleDistDir = directoryManager.getHotUpdateDistDir()
+      if (fs.existsSync(staleDistDir)) {
+        fs.rmSync(staleDistDir, { recursive: true, force: true })
+        console.log(`[Main] Cleaned stale hot-update dist (hotUpdate=${hotUpdateVersion} < app=${appVersion})`)
+      }
+    } catch (cleanupErr) {
+      console.error('[Main] Failed to clean stale hot-update dist:', cleanupErr)
+    }
+  }
+
+  // #region agent log - launch mode debug (H1,H2,H5)
+  try {
+    const userDataPath = app.getPath('userData');
+    const cwd = process.cwd();
+    const appName = app.getName();
+    const execDir = path.dirname(process.execPath);
+    const envInCwd = path.join(cwd, '.env');
+    const envInExecDir = path.join(execDir, '.env');
+    const payload = {
+      location: 'main.ts:app.whenReady',
+      message: 'Launch context',
+      data: {
+        cwd,
+        userDataPath,
+        appName,
+        execDir,
+        isPackaged: app.isPackaged,
+        hasEnvKey: !!process.env.ANTHROPIC_API_KEY,
+        envExistsInCwd: fs.existsSync(envInCwd),
+        envExistsInExecDir: fs.existsSync(envInExecDir)
+      },
+      timestamp: Date.now(),
+      hypothesisId: 'H1,H2,H5'
+    };
+    fs.appendFileSync(path.join(userDataPath, 'debug-launch.log'), JSON.stringify(payload) + '\n');
+    fetch('http://127.0.0.1:7242/ingest/c9da8242-409a-4cac-8926-c6d816aecb2e', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).catch(() => {});
+  } catch (_e) {}
+  // #endregion
+
   // 1. Setup IPC handlers FIRST
   // 1. Setup IPC handlers FIRST
   // setupIPCHandlers() - handlers are defined at top level now
@@ -191,26 +453,12 @@ app.whenReady().then(() => {
   createMainWindow()
   createFloatingBallWindow()
 
-  // 3. Ensure built-in MCP config exists (synchronous, fast)
+  // 3. Quick synchronous setup (non-blocking, fast)
   ensureBuiltinMcpConfig()
-
-  // 4. Sync official scripts to user directory (non-blocking)
-  scriptStore.syncOfficialScripts()
-
-  // 4.5. Initialize permission service and check preset admin
-  // 这会自动检查当前用户是否为预设管理员，如果是则自动设置为管理员
   permissionService.getUserRole()
-
-  // 5. Built-in skills are now loaded async by SkillManager (inside initializeAgent)
-  // ensureBuiltinSkills() - Removed
-
-  // 6. Initialize agent AFTER windows are created
-  initializeAgent()
-
-  // 6.5 Clean up empty sessions on startup
   sessionStore.cleanupEmptySessions()
 
-  // 7. Initialize resource updater and start auto-check
+  // 4. Initialize resource updater (fast, just creates instance)
   resourceUpdater = new ResourceUpdater()
   
   // 开发环境也启用自动更新检查 (用于测试)
@@ -228,9 +476,12 @@ app.whenReady().then(() => {
     resourceUpdater.startAutoUpdateCheck(1 / 60, notifyUpdateFound)
   }
 
-  // 7.5 Initialize Playwright manager and check status
+  // 7.5 Initialize Playwright manager（不再弹窗提示安装；自动化执行时自动判断并静默安装）
   playwrightManager = new PlaywrightManager()
-  checkPlaywrightStatus()
+  setPlaywrightManager(playwrightManager)
+
+  // 确保 agent-browser 0.15.x 能在 Electron 环境中找到 chromium headless shell
+  ensureAgentBrowserCanFindChromium()
 
   // 4. Create system tray
   createTray()
@@ -262,11 +513,33 @@ app.whenReady().then(() => {
 
 // IPC Handlers
 
-ipcMain.handle('agent:send-message', async (event, message: string | { content: string, images: string[] }) => {
+ipcMain.handle('agent:send-message', async (event, message: string | { content: string, images: string[] }, viewContext?: 'cowork' | 'project') => {
   // Determine which agent to use based on sender window
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
+  const targetAgent = isFloatingBall ? floatingBallAgent : mainAgent
+  console.log('[Preview:Debug] agent:send-message received, viewContext:', viewContext, 'isFloatingBall:', isFloatingBall, 'targetAgent exists:', !!targetAgent, 'currentTaskIdForSession:', currentTaskIdForSession)
+  if (!targetAgent) return { error: 'Agent not initialized' }
+  // 仅在项目视图（非协作视图）下才传入当前任务 ID 与项目 ID
+  const isCoworkView = viewContext === 'cowork' || isFloatingBall
+  const currentProject = isCoworkView ? null : projectStore.getCurrentProject()
+  const taskId = isCoworkView ? undefined : (currentProject && currentTaskIdForSession ? currentTaskIdForSession : undefined)
+  const projectId = currentProject?.id
+  console.log('[Preview:Debug] agent:send-message params, isCoworkView:', isCoworkView, 'projectId:', projectId, 'taskId:', taskId)
+  // 开始处理时立即将任务状态设为进行中，左侧任务卡片显示正确图标
+  if (projectId && taskId) {
+    projectStore.updateTask(projectId, taskId, { status: 'active' })
+    const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('project:task:updated', { projectId, taskId, updates: { status: 'active' } })
+    }
+  }
+  const viewCtx: 'cowork' | 'project' = isCoworkView ? 'cowork' : 'project'
+  return await targetAgent.processUserMessage(message, taskId, projectId, isFloatingBall, viewCtx)
+})
+
+ipcMain.handle('agent:is-ready', (event) => {
   const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
-  if (!targetAgent) throw new Error('Agent not initialized')
-  return await targetAgent.processUserMessage(message)
+  return { ready: !!targetAgent }
 })
 
 ipcMain.handle('agent:abort', (event) => {
@@ -297,9 +570,65 @@ ipcMain.handle('agent:new-session', (event) => {
   return { success: true, sessionId: null }
 })
 
+/** 部署专用：向 Agent history 注入初始消息（不触发 AI 处理） */
+ipcMain.handle('agent:inject-history', (event, messages: Anthropic.MessageParam[]) => {
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  if (!targetAgent || !Array.isArray(messages)) return { success: false }
+  targetAgent.loadHistory(messages)
+  return { success: true }
+})
+
+/** 部署专用：更新 history 中最后一条 assistant 消息的内容（用于实时刷新部署日志） */
+ipcMain.handle('agent:update-last-assistant', (event, content: string) => {
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
+  if (!targetAgent) return { success: false }
+  const history = targetAgent.getHistory()
+  const updated = [...history]
+  for (let i = updated.length - 1; i >= 0; i--) {
+    if (updated[i].role === 'assistant') {
+      updated[i] = { role: 'assistant', content }
+      break
+    }
+  }
+  targetAgent.loadHistory(updated)
+  const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.webContents.send('agent:history-update', updated)
+  }
+  return { success: true }
+})
+
+/** 部署专用：向 Agent history 追加一条 assistant 消息 */
+ipcMain.handle('agent:append-assistant', (event, content: string) => {
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
+  if (!targetAgent) return { success: false }
+  const history = targetAgent.getHistory()
+  const updated = [...history, { role: 'assistant' as const, content }]
+  targetAgent.loadHistory(updated)
+  const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.webContents.send('agent:history-update', updated)
+  }
+  return { success: true }
+})
+
+/** 部署专用：获取 Agent 当前 history */
+ipcMain.handle('agent:get-history', (event) => {
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  return targetAgent?.getHistory() ?? []
+})
+
 // Session Management
 ipcMain.handle('session:list', () => {
   return sessionStore.getSessions()
+})
+
+/** Cowork 模式挂载时按需加载最近会话，避免 Project 模式被 Cowork 历史覆盖 */
+ipcMain.handle('session:auto-load', () => {
+  autoLoadLatestSession()
+  return { success: true }
 })
 
 ipcMain.handle('session:get', (_, id: string) => {
@@ -328,18 +657,25 @@ ipcMain.handle('session:save', (event, messages: Anthropic.MessageParam[]) => {
   // Get the appropriate current session ID based on window
   const currentId = sessionStore.getSessionId(isFloatingBall)
 
-  console.log(`[Session] Saving session for ${isFloatingBall ? 'floating ball' : 'main window'}: ${messages.length} messages`)
+  // Capture current primary working directory for session binding
+  const authorizedFolders = configStore.getAll().authorizedFolders || []
+  const currentWorkspaceDir = authorizedFolders.length > 0 ? authorizedFolders[0].path : undefined
+
+  console.log(`[Session] Saving session for ${isFloatingBall ? 'floating ball' : 'main window'}: ${messages.length} messages, workspaceDir: ${currentWorkspaceDir}`)
 
   try {
+    // 根据当前是否处于 project 模式来标记 session 来源
+    const currentProject = projectStore.getCurrentProject()
+    const sessionMode: 'cowork' | 'project' = currentProject ? 'project' : 'cowork'
+
     // Use the smart save method that only saves if there's meaningful content
-    const sessionId = sessionStore.saveSession(currentId, messages)
+    const sessionId = sessionStore.saveSession(currentId, messages, currentWorkspaceDir, sessionMode)
 
     // Update the appropriate current session ID
     if (sessionId) {
       sessionStore.setSessionId(sessionId, isFloatingBall)
       
       // 如果是项目视图，尝试更新当前任务的 sessionId
-      const currentProject = projectStore.getCurrentProject()
       if (currentProject && currentTaskIdForSession) {
         const task = projectStore.getTasks(currentProject.id).find(t => t.id === currentTaskIdForSession)
         if (task && (!task.sessionId || task.sessionId === '')) {
@@ -414,46 +750,6 @@ ipcMain.handle('script:rename', (_, id: string, newName: string) => {
 
   const success = scriptStore.renameScript(id, newName.trim())
   return { success, error: success ? undefined : 'Failed to rename script' }
-})
-
-ipcMain.handle('script:mark-official', (_, id: string) => {
-  const script = scriptStore.getScript(id)
-  if (!script) {
-    return { success: false, error: 'Script not found' }
-  }
-
-  // 权限检查：只有管理员可以标记脚本为官方
-  if (!permissionService.canMarkScriptOfficial(id)) {
-    return { success: false, error: 'Permission denied: Only administrators can mark scripts as official' }
-  }
-
-  // 如果已经是官方脚本，直接返回成功
-  if (script.isOfficial) {
-    return { success: true }
-  }
-
-  const success = scriptStore.markAsOfficial(id)
-  return { success, error: success ? undefined : 'Failed to mark script as official' }
-})
-
-ipcMain.handle('script:unmark-official', (_, id: string) => {
-  const script = scriptStore.getScript(id)
-  if (!script) {
-    return { success: false, error: 'Script not found' }
-  }
-
-  // 权限检查：只有管理员可以将官方脚本标记为非官方
-  if (!permissionService.canUnmarkScriptOfficial(id)) {
-    return { success: false, error: 'Permission denied: Only administrators can unmark official scripts' }
-  }
-
-  // 如果不是官方脚本，直接返回成功
-  if (!script.isOfficial) {
-    return { success: true }
-  }
-
-  const success = scriptStore.unmarkAsOfficial(id)
-  return { success, error: success ? undefined : 'Failed to unmark script as official' }
 })
 
 /**
@@ -537,7 +833,7 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
     const shouldClose = shouldCloseBrowser(userInput);
     
     // 构建执行消息
-    let executeMessage = `请执行以下 chrome-agent 脚本：\n\n\`\`\`bash\n${command}\n\`\`\`\n\n脚本路径：${script.filePath}`;
+    let executeMessage = `请执行以下自动化脚本：\n\n\`\`\`bash\n${command}\n\`\`\`\n\n脚本路径：${script.filePath}`;
     
     // 如果没有明确要求关闭浏览器，添加提示保持浏览器打开
     if (!shouldClose) {
@@ -552,7 +848,7 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
       try {
         // 使用 agent 的 processUserMessage 方法，传递 taskId 以支持并发执行
         // 使用当前会话 ID 作为 taskId，保持在当前会话中
-        await targetAgent.processUserMessage(executeMessage)
+        await targetAgent.processUserMessage(executeMessage, currentSessionId, undefined, isFloatingBall)
       } catch (error) {
         console.error('[Script] Error executing script:', error)
         const errorMsg = (error as Error).message
@@ -580,6 +876,26 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
     return { success: true, sessionId: currentSessionId }
   } catch (error) {
     console.error('[Script] Error executing script:', error)
+    return { success: false, error: (error as Error).message }
+  }
+})
+
+// 打开外部链接（在系统默认浏览器中打开；美团内网改用内置浏览器，避免「扫码用户登录」报错）
+ipcMain.handle('app:open-external-url', async (_event, url: string) => {
+  try {
+    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+      return { success: false, error: 'Invalid URL' }
+    }
+    // 美团内网用内置浏览器打开，避免系统浏览器报扫码登录错误
+    if (url.includes('.sankuai.com') || url.includes('.meituan.com')) {
+      mainWin?.webContents.send('agent:open-browser-preview', url)
+      return { success: true }
+    }
+    await shell.openExternal(url)
+    shrinkMainWindowToBottomRight()
+    return { success: true }
+  } catch (error) {
+    console.error('[Main] Error opening external URL:', error)
     return { success: false, error: (error as Error).message }
   }
 })
@@ -622,9 +938,14 @@ ipcMain.handle('permissions:clear', () => {
   return { success: true }
 })
 
-// Get chrome-agent scripts directory path
+// Get automation scripts root directory path (~/.qa-cowork/scripts/)
 ipcMain.handle('agent:get-scripts-dir', () => {
   return directoryManager.getScriptsDir()
+})
+
+// 获取协作/会话模式默认工作空间目录路径 (~/.qa-cowork/)
+ipcMain.handle('agent:get-cowork-workspace-dir', () => {
+  return directoryManager.getCoworkWorkspaceDir()
 })
 
 ipcMain.handle('agent:set-working-dir', (_, folderPath: string) => {
@@ -635,6 +956,11 @@ ipcMain.handle('agent:set-working-dir', (_, folderPath: string) => {
   const newFolders = existing ? [existing, ...otherFolders] : [{ path: folderPath, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() }, ...otherFolders]
   configStore.set('authorizedFolders', newFolders)
   return true
+})
+
+ipcMain.handle('agent:set-language', (_, lang: string) => {
+  mainAgent?.setLanguage(lang)
+  floatingBallAgent?.setLanguage(lang)
 })
 
 ipcMain.handle('config:get-all', () => configStore.getAll())
@@ -708,6 +1034,61 @@ ipcMain.handle('app:get-version', () => {
   return resourceUpdater?.getCurrentVersion() || app.getVersion()
 })
 
+// ─── SSO 登录相关 IPC ────────────────────────────────────────────────────────
+
+/** 检查本地是否有有效 SSO 会话 */
+ipcMain.handle('sso:check-session', async () => {
+  const session = await ssoStore.tryRestoreSession();
+  if (session) {
+    return { loggedIn: true, userInfo: session.userInfo };
+  }
+  return { loggedIn: false, userInfo: null };
+})
+
+/** 获取扫码登录页 URL（兼容旧调用，实际登录由 sso:start-login 通过 SDK 完成） */
+ipcMain.handle('sso:get-login-url', () => {
+  return { loginUrl: 'https://ssosv.sankuai.com/sson/login' };
+})
+
+/**
+ * 启动 SSO 登录流程（@mtfe/sso-web-oidc-cli 方案）：
+ * 1. 调用 ssoStore.login() → SDK 自动打开系统浏览器访问 ssosv.sankuai.com
+ * 2. 用户扫码后 SSO 回调本地端口（9152/10152）
+ * 3. SDK 完成授权码交换，写入标准 AT token（有效期 3 天，含 refresh_token）
+ * 4. 获取 userinfo 并通知前端
+ */
+ipcMain.handle('sso:start-login', async (_event) => {
+  try {
+    console.log('[SSO] Starting login via @mtfe/sso-web-oidc-cli...');
+    await ssoStore.login();
+    console.log('[SSO] Token obtained, fetching userinfo...');
+    const userInfo = await ssoStore.fetchUserInfo();
+    if (userInfo) {
+      mainWin?.webContents.send('sso:login-success', { userInfo });
+      return { success: true, userInfo };
+    }
+    return { success: false, error: '登录成功但获取用户信息失败，请重试' };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[SSO] Login failed:', msg);
+    return { success: false, error: msg || '登录失败，请重试' };
+  }
+})
+
+/** 获取当前登录用户信息 */
+ipcMain.handle('sso:get-user-info', async () => {
+  return ssoStore.readUserInfo();
+})
+
+/** 登出：清除本地 token 和 userinfo */
+ipcMain.handle('sso:logout', () => {
+  ssoStore.logout();
+  mainWin?.webContents.send('sso:logged-out');
+  return { success: true };
+})
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 ipcMain.handle('app:check-update', async () => {
   try {
     const currentVersion = app.getVersion();
@@ -772,9 +1153,27 @@ ipcMain.handle('resource:perform-update', async () => {
       // 更新完成后获取新版本号
       const newVersion = resourceUpdater.getCurrentVersion()
       console.log(`[Main] Resource update completed. New version: ${newVersion}`)
+
+      // 更新成功后延迟 1.5 秒自动重启，给前端时间展示完成提示
+      setTimeout(() => {
+        console.log('[Main] Auto-restarting after resource update...')
+        try {
+          app.relaunch()
+          app.quit()
+        } catch (restartError) {
+          console.error('[Main] app.relaunch() failed, trying alternative restart:', restartError)
+          try {
+            // 备用方案：直接退出，让用户手动重启
+            app.exit(0)
+          } catch (exitError) {
+            console.error('[Main] app.exit() also failed:', exitError)
+          }
+        }
+      }, 1500)
       
       return { 
         success: true, 
+        willRestart: true,
         message: `资源更新完成！新版本: v${newVersion}`,
         version: newVersion
       }
@@ -789,32 +1188,35 @@ ipcMain.handle('resource:perform-update', async () => {
   }
 })
 
+// 清理热更新目录（回退到内置资源，解决整包更新后仍加载旧前端的问题）
+ipcMain.handle('resource:clear-hot-update', async () => {
+  try {
+    if (!resourceUpdater) {
+      return { success: false, error: 'Resource updater not initialized' }
+    }
+    await resourceUpdater.clearHotUpdate()
+    console.log('[Main] Hot update directory cleared by user')
+    return { success: true, message: '已清理热更新目录，重启后将使用内置资源版本。' }
+  } catch (error: any) {
+    console.error('[Main] Clear hot update failed:', error)
+    return { success: false, error: error?.message ?? '清理失败' }
+  }
+})
+
 // 应用更新后重启
 ipcMain.handle('resource:restart-app', () => {
-  app.relaunch()
-  app.quit()
+  try {
+    app.relaunch()
+    app.quit()
+  } catch (error) {
+    console.error('[Main] resource:restart-app failed:', error)
+    app.exit(0)
+  }
 })
 
 // ========== Playwright 管理 ==========
 
-// 检查 Playwright 安装状态
-async function checkPlaywrightStatus() {
-  if (!playwrightManager) return
-
-  try {
-    const status = await playwrightManager.getInstallStatus()
-    
-    if (status.needsInstall && mainWin) {
-      // 通知前端需要安装
-      mainWin.webContents.send('playwright:status', {
-        installed: false,
-        ...status
-      })
-    }
-  } catch (error) {
-    console.error('检查 Playwright 状态失败:', error)
-  }
-}
+// 不再在启动时通知前端“需要安装”；改为在自动化执行时自动判断并静默安装
 
 // 获取 Playwright 安装状态
 ipcMain.handle('playwright:get-status', async () => {
@@ -1010,6 +1412,10 @@ ipcMain.handle('window:set-maximized', (_event, maximized: boolean) => {
     }
   }
 })
+
+// 右下角小窗：前端主动触发缩小 / 还原
+ipcMain.handle('window:shrink-to-bottom-right', () => shrinkMainWindowToBottomRight())
+ipcMain.handle('window:restore-from-mini', () => restoreMainWindowFromMini())
 
 
 // MCP Configuration Handlers
@@ -1402,21 +1808,27 @@ ipcMain.handle('project:list', () => {
   return projectStore.getProjects();
 });
 
+/** 将路径转为绝对路径并规范化（展开 ~），便于与 fs:list-dir 的解析规则一致 */
+const toAbsoluteFolderPath = (p: string): string => {
+  const expanded = p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
+  return path.normalize(path.resolve(expanded)).replace(/[/\\]$/, '');
+};
+
 // Project 模式：主工作目录优先使用当前已选项目的目录，其次 ~/.qa-cowork
 const applyProjectWorkingDirs = (project: { path: string }) => {
   const folders = configStore.getAll().authorizedFolders || [];
   const baseDir = directoryManager.getBaseDir();
-  const normalizedBase = path.normalize(baseDir).replace(/\/$/, '');
-  const normalizedProject = path.normalize(project.path).replace(/\/$/, '');
+  const normalizedBase = toAbsoluteFolderPath(baseDir);
+  const normalizedProject = toAbsoluteFolderPath(project.path);
   const ensureFolder = (p: string, trust: TrustLevel = 'standard') => {
-    const np = path.normalize(p).replace(/\/$/, '');
-    const existing = folders.find((f: { path: string }) => path.normalize(f.path).replace(/\/$/, '') === np);
+    const np = toAbsoluteFolderPath(p);
+    const existing = folders.find((f: { path: string }) => toAbsoluteFolderPath(f.path) === np);
     return existing || { path: np, trustLevel: trust, addedAt: Date.now() };
   };
   const baseFolder = ensureFolder(baseDir, 'strict');
   const projectFolder = ensureFolder(project.path, 'standard');
   const otherFolders = folders.filter((f: { path: string }) => {
-    const np = path.normalize(f.path).replace(/\/$/, '');
+    const np = toAbsoluteFolderPath(f.path);
     return np !== normalizedBase && np !== normalizedProject;
   });
   // 已选项目路径作为 Primary，确保启动/关闭服务、文件操作等优先作用于当前项目
@@ -1475,12 +1887,25 @@ ipcMain.handle('project:open-folder', async (event, dirPath: string) => {
   }
 });
 
-// 新建项目：在 ~/.qa-cowork/projects 下创建目录，重名则加后缀 -1、-2…
+// 新建项目：在 ~/Library/Application Support/qacowork/projects 下创建目录，从模板拷贝，重名则加后缀 -1、-2…
 ipcMain.handle('project:create-new', async (event, name: string) => {
   if (!name || typeof name !== 'string') return { success: false, error: 'Invalid project name' };
   const sanitized = name.trim().replace(/[/\\:*?"<>|]/g, '-').replace(/-+/g, '-') || 'project';
-  const baseDir = directoryManager.getBaseDir();
-  const projectsDir = path.join(baseDir, 'projects');
+
+  // 模板路径：开发用 app 目录，生产用 extraResources
+  const templateDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'templates', 'react-vite')
+    : path.join(app.getAppPath(), 'resources', 'templates', 'react-vite');
+
+  if (!fs.existsSync(templateDir)) {
+    console.error(`[Project] Template not found: ${templateDir}`);
+    return { success: false, error: 'Project template not found' };
+  }
+
+  // 使用固定的项目目录：~/Library/Application Support/qacowork/projects
+  const homeDir = os.homedir();
+  const projectsDir = path.join(homeDir, 'Library', 'Application Support', 'qacowork', 'projects');
+
   try {
     if (!fs.existsSync(projectsDir)) {
       fs.mkdirSync(projectsDir, { recursive: true });
@@ -1493,16 +1918,61 @@ ipcMain.handle('project:create-new', async (event, name: string) => {
       dirPath = path.join(projectsDir, dirName);
       n += 1;
     }
-    fs.mkdirSync(dirPath, { recursive: true });
+    fs.cpSync(templateDir, dirPath, { recursive: true });
+
+    // 替换占位符 {{PROJECT_NAME}}
+    const replaceInFile = (filePath: string) => {
+      const fullPath = path.join(dirPath, filePath);
+      if (fs.existsSync(fullPath)) {
+        let content = fs.readFileSync(fullPath, 'utf-8');
+        content = content.replace(/\{\{PROJECT_NAME\}\}/g, dirName);
+        fs.writeFileSync(fullPath, content);
+      }
+    };
+    replaceInFile('package.json');
+    replaceInFile('index.html');
     const project = projectStore.createProject(dirName, dirPath);
     notifyProjectSwitched(event, project);
     const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
+    const isFloatingBall = event.sender === floatingBallWin?.webContents;
+    
     if (targetWindow && !targetWindow.isDestroyed()) {
       targetWindow.webContents.send('project:created', project);
       targetWindow.webContents.send('project:switched', project);
     }
+    
+    // 自动创建一个新任务
+    try {
+      const taskTitle = '新任务';
+      const task = projectStore.createTask(project.id, taskTitle, '');
+      if (task) {
+        // 设置当前任务ID，用于后续 session 绑定
+        currentTaskIdForSession = task.id;
+        
+        // 清空历史并设置 session 为 null（新任务）
+        if (targetAgent) {
+          targetAgent.clearHistory();
+          sessionStore.setSessionId(null, isFloatingBall);
+        }
+        
+        // 通知前端任务已创建和历史已清空
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', []);
+          targetWindow.webContents.send('project:task:created', task);
+        }
+        
+        console.log(`[Project] Auto-created initial task "${taskTitle}" for project "${dirName}"`);
+      }
+    } catch (taskError) {
+      console.error(`[Project] Failed to auto-create initial task:`, taskError);
+      // 即使创建任务失败，项目创建仍然成功
+    }
+    
+    console.log(`[Project] Created new project "${dirName}" at ${dirPath}`);
     return { success: true, project };
   } catch (err) {
+    console.error(`[Project] Failed to create project:`, err);
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 });
@@ -1517,8 +1987,73 @@ ipcMain.handle('project:ensure-working-dir', () => {
   if (project) applyProjectWorkingDirs(project);
 });
 
-ipcMain.handle('project:delete', (_, id: string) => {
-  return { success: projectStore.deleteProject(id) };
+// 协作/会话模式：切换到 cowork 视图时，将默认工作目录设置为 ~/.qa-cowork
+ipcMain.handle('cowork:ensure-working-dir', () => {
+  const coworkWorkspaceDir = directoryManager.getCoworkWorkspaceDir();
+  const folders = configStore.getAll().authorizedFolders || [];
+  const normalizedCowork = toAbsoluteFolderPath(coworkWorkspaceDir);
+  const existing = folders.find((f: { path: string }) => toAbsoluteFolderPath(f.path) === normalizedCowork);
+  const coworkFolder = existing || { path: normalizedCowork, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() };
+  const otherFolders = folders.filter((f: { path: string }) => toAbsoluteFolderPath(f.path) !== normalizedCowork);
+  // 将 .qa-cowork 设为首位（primary）
+  configStore.setAll({ ...configStore.getAll(), authorizedFolders: [coworkFolder, ...otherFolders] });
+});
+
+ipcMain.handle('project:delete', async (event, id: string, projectPath?: string) => {
+  try {
+    // 获取项目信息
+    const project = projectStore.getProject(id);
+    if (!project) {
+      return { success: false, error: 'Project not found' };
+    }
+
+    // 使用传入的路径或项目中的路径
+    const pathToDelete = projectPath || project.path;
+
+    // 删除项目记录(包含所有关联任务,并自动切换到最近的项目)
+    const deleteResult = projectStore.deleteProject(id);
+    if (!deleteResult.success) {
+      return { success: false, error: 'Failed to delete project record' };
+    }
+
+    console.log(`[Project] Deleted project ${id}, tasks automatically deleted with project`);
+    if (deleteResult.switchedToProjectId) {
+      console.log(`[Project] Switched to most recent project: ${deleteResult.switchedToProjectId}`);
+    }
+
+    // 删除本地文件目录
+    if (pathToDelete && fs.existsSync(pathToDelete)) {
+      try {
+        console.log(`[Project] Deleting project directory: ${pathToDelete}`);
+        fs.rmSync(pathToDelete, { recursive: true, force: true });
+        console.log(`[Project] Successfully deleted project directory: ${pathToDelete}`);
+      } catch (error) {
+        console.error(`[Project] Failed to delete project directory: ${pathToDelete}`, error);
+        // 即使删除文件失败，项目记录已经删除，返回成功但记录警告
+        return { 
+          success: true,
+          switchedToProjectId: deleteResult.switchedToProjectId,
+          warning: `项目记录已删除，但删除本地文件时出错：${error instanceof Error ? error.message : String(error)}` 
+        };
+      }
+    } else if (pathToDelete) {
+      console.warn(`[Project] Project directory does not exist: ${pathToDelete}`);
+    }
+
+    // 通知渲染进程刷新：删除/切换项目后，资源管理器需同步清空或切换
+    const win = BrowserWindow.fromWebContents(event.sender as Electron.WebContents);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('project:switched');
+    }
+
+    return { 
+      success: true,
+      switchedToProjectId: deleteResult.switchedToProjectId
+    };
+  } catch (error) {
+    console.error('[Project] Error deleting project:', error);
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 // Project Task Handlers
@@ -1560,6 +2095,30 @@ ipcMain.handle('project:task:list', (_, projectId: string) => {
 // 存储当前任务ID，用于 session 绑定
 let currentTaskIdForSession: string | null = null;
 
+registerContextSwitchHandler((taskId) => {
+    currentTaskIdForSession = taskId;
+});
+
+/** 在项目无任务时清空聊天区域 */
+ipcMain.handle('project:clear-chat', async (event) => {
+  try {
+    const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
+    const isFloatingBall = event.sender === floatingBallWin?.webContents;
+    const targetWindow = isFloatingBall ? floatingBallWin : mainWin;
+    if (targetAgent) {
+      targetAgent.clearHistory();
+      sessionStore.setSessionId(null, isFloatingBall);
+      currentTaskIdForSession = null;
+      if (targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('agent:history-update', []);
+      }
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
 ipcMain.handle('project:task:switch', async (event, projectId: string, taskId: string) => {
   try {
     const task = projectStore.getTasks(projectId).find(t => t.id === taskId);
@@ -1568,11 +2127,11 @@ ipcMain.handle('project:task:switch', async (event, projectId: string, taskId: s
     }
     const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
     const isFloatingBall = event.sender === floatingBallWin?.webContents;
-    
     if (!targetAgent) {
       return { success: false, error: 'Agent not initialized' };
     }
-    
+
+    const previousTaskId = currentTaskIdForSession;
     // 设置当前任务ID，用于后续 session 绑定
     currentTaskIdForSession = taskId;
     
@@ -1598,12 +2157,19 @@ ipcMain.handle('project:task:switch', async (event, projectId: string, taskId: s
         }
       }
     } else {
-      // 任务没有 sessionId，清空历史（新任务）
-      targetAgent.clearHistory();
-      sessionStore.setSessionId(null, isFloatingBall);
-      // clearHistory 会触发 notifyUpdate，但为了确保前端收到更新，我们再次发送
-      if (targetWindow && !targetWindow.isDestroyed()) {
-        targetWindow.webContents.send('agent:history-update', []);
+      // 任务没有 sessionId：若正在“切换”到当前任务（如 loadCurrentProject 重选同一任务），
+      // 且 session:save 尚未把 session 关联到任务，保留当前 agent 历史，避免聊天区域被清空
+      if (previousTaskId === taskId) {
+        const currentHistory = targetAgent.getHistory();
+        if (currentHistory.length > 0 && targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', currentHistory);
+        }
+      } else {
+        targetAgent.clearHistory();
+        sessionStore.setSessionId(null, isFloatingBall);
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', []);
+        }
       }
     }
     return { success: true };
@@ -1625,6 +2191,431 @@ ipcMain.handle('project:task:update', (event, projectId: string, taskId: string,
 
 ipcMain.handle('project:task:delete', (_, projectId: string, taskId: string) => {
   return { success: projectStore.deleteTask(projectId, taskId) };
+});
+
+/** 将当前任务标题改为指定文案（如部署开始时改为「部署」） */
+ipcMain.handle('project:rename-current-task', (event, title: string) => {
+  const project = projectStore.getCurrentProject();
+  if (!project || !currentTaskIdForSession) return { success: false };
+  const success = projectStore.updateTask(project.id, currentTaskIdForSession, { title });
+  if (success) {
+    const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('project:task:updated', { projectId: project.id, taskId: currentTaskIdForSession, updates: { title } });
+    }
+  }
+  return { success };
+});
+
+// ═══════════════════════════════════════
+// Deploy Handler: generate deploy.sh, execute, stream logs
+// ═══════════════════════════════════════
+
+/** 部署结束时更新当前任务状态，并广播 project:task:updated */
+function updateDeployTaskStatus(status: 'completed' | 'failed', senderContents: Electron.WebContents) {
+  const project = projectStore.getCurrentProject();
+  if (!project || !currentTaskIdForSession) return;
+  projectStore.updateTask(project.id, currentTaskIdForSession, { status });
+  const targetWindow = senderContents === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.webContents.send('project:task:updated', { projectId: project.id, taskId: currentTaskIdForSession, updates: { status } });
+  }
+}
+
+ipcMain.handle('deploy:start', async (event, projectPath: string) => {
+  try {
+    const sender = event.sender;
+
+    // Step 1: Read package.json to get name and version
+    const pkgPath = path.join(projectPath, 'package.json');
+    if (!fs.existsSync(pkgPath)) {
+      updateDeployTaskStatus('failed', sender);
+      sender.send('deploy:error', 'package.json not found in project root');
+      return { success: false, error: 'package.json not found' };
+    }
+    const pkgJson = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    const projectName = pkgJson.name || 'unknown-project';
+
+    // Step 1.5: Bump patch version (0.0.1 -> 0.0.2)
+    const currentVersion = pkgJson.version || '0.0.0';
+    const versionParts = currentVersion.split('.').map(Number);
+    if (versionParts.length === 3) {
+      versionParts[2] += 1; // bump patch
+    } else {
+      versionParts.push(1);
+    }
+    const version = versionParts.join('.');
+    pkgJson.version = version;
+    fs.writeFileSync(pkgPath, JSON.stringify(pkgJson, null, 2) + '\n', 'utf-8');
+    sender.send('deploy:log', `Version bumped: ${currentVersion} -> ${version}\n`);
+
+    // Step 2: Resolve deploy env（部署强制使用内置 Node 20，避免缓存/项目 Node 触发 npm 内部错误）
+    const deployEnvResult = await resolveDeployEnv(projectPath, true);
+    sender.send('deploy:log', `Using ${deployEnvResult.packageManager}, Node: ${deployEnvResult.nodePath} (built-in)\n`);
+    sender.send('deploy:log', `✓ webstatic (via npx @bfe/webstatic)\n\n`);
+    sender.send('deploy:log', `── CDN Deploy: ${projectName} v${version} ──\n\n`);
+
+    // Step 2.5: Generate complete vite.config for CDN deployment
+    // According to SKILL.md requirements, vite.config must include:
+    // - tailwindcss() plugin before federation
+    // - base: CDN URL
+    // - build.outDir: CDN output directory
+    // - build.assetsDir: ''
+    // - build.target: 'esnext'
+    // - build.minify: false
+    // - build.sourcemap: false
+    // - build.emptyOutDir: true
+    // - rollupOptions with complete configuration
+    const cdnBase = `https://aie.sankuai.com/rdc_host/code/${projectName}/vite/${version}/`;
+    const cdnOutDir = `dist/code/${projectName}/vite/${version}/`;
+
+    // Find vite config file (support .ts, .mts, .js, .mjs)
+    const viteConfigCandidates = ['vite.config.ts', 'vite.config.mts', 'vite.config.js', 'vite.config.mjs'];
+    let viteConfigPath: string | null = null;
+    for (const candidate of viteConfigCandidates) {
+      const candidatePath = path.join(projectPath, candidate);
+      if (fs.existsSync(candidatePath)) {
+        viteConfigPath = candidatePath;
+        break;
+      }
+    }
+
+    if (viteConfigPath) {
+      const originalContent = fs.readFileSync(viteConfigPath, 'utf-8');
+
+      // Strategy: Smart patching to preserve existing plugins while ensuring SKILL.md requirements
+      let viteConfigContent = originalContent;
+
+      // Step 1: Extract existing imports and plugins
+      const importLines: string[] = [];
+      const otherLines: string[] = [];
+      
+      originalContent.split('\n').forEach(line => {
+        if (line.trim().startsWith('import ')) {
+          importLines.push(line);
+        } else {
+          otherLines.push(line);
+        }
+      });
+
+      // Step 2: Ensure required imports exist
+      const hasDefineConfig = importLines.some(l => l.includes('defineConfig'));
+      const hasTailwindImport = importLines.some(l => l.includes('@tailwindcss/vite') || l.includes('tailwindcss'));
+      const hasFederationImport = importLines.some(l => l.includes('federation'));
+
+      if (!hasDefineConfig) {
+        importLines.unshift("import { defineConfig } from 'vite'");
+      }
+      if (!hasTailwindImport) {
+        sender.send('deploy:log', `⚠️  Warning: @tailwindcss/vite not imported. Add it if using Tailwind CSS.\n`);
+      }
+      if (!hasFederationImport) {
+        sender.send('deploy:log', `⚠️  Warning: Module Federation plugin not imported. Add it if needed.\n`);
+      }
+
+      // Step 3: Build the complete config with SKILL.md requirements
+      const configContent = otherLines.join('\n');
+      
+      // Remove existing base, build sections to rebuild them
+      const cleanedConfig = configContent
+        .replace(/^\s*base\s*:\s*[`'"].*?[`'"],?\s*$/gm, '')
+        .replace(/^\s*build\s*:\s*\{[\s\S]*?\n\s*\},?\s*$/gm, '');
+
+      // Find the defineConfig call and inject complete configuration
+      const defineConfigMatch = cleanedConfig.match(/(export\s+default\s+defineConfig\s*\(\s*\{)([\s\S]*?)(\}\s*\))/);
+      
+      if (defineConfigMatch) {
+        const beforeConfig = defineConfigMatch[1];
+        const existingConfig = defineConfigMatch[2];
+        const afterConfig = defineConfigMatch[3];
+
+        // Extract plugins section if exists; for CDN build use only web-safe plugins to avoid
+        // "Class extends value undefined is not a constructor or null" when loading electron plugin in Node-only context
+        const pluginsMatch = existingConfig.match(/(plugins\s*:\s*\[[\s\S]*?\])/);
+        const originalPluginsSection = pluginsMatch ? pluginsMatch[0] : 'plugins: []';
+        const hasReact = importLines.some(l => l.includes('@vitejs/plugin-react')) || originalPluginsSection.includes('react()');
+        const cdnPluginsSection = hasReact ? 'plugins: [react()],' : 'plugins: [],';
+
+        // Build complete config according to SKILL.md
+        const completeConfig = `${beforeConfig}
+  // ========================================
+  // CDN Deployment Configuration (SKILL.md)
+  // ========================================
+  base: '${cdnBase}',
+  
+  ${cdnPluginsSection}
+
+  build: {
+    outDir: '${cdnOutDir}',
+    target: 'esnext',
+    minify: false,
+    sourcemap: false,
+    emptyOutDir: true,
+    assetsDir: '', // All files at same level as index.html
+    rollupOptions: {
+      output: {
+        format: 'esm',
+        chunkFileNames: '[name].[hash].js',
+        assetFileNames: '[name].[hash].[ext]',
+        manualChunks: {
+          tailwind: ['tailwindcss'],
+        },
+      },
+      external: [],
+    },
+  },
+${afterConfig}`;
+
+        viteConfigContent = importLines.join('\n') + '\n\n' + completeConfig;
+      } else {
+        // Fallback: generate minimal config (web-only plugins to avoid electron in Node context)
+        const hasReactFallback = importLines.some((l: string) => l.includes('@vitejs/plugin-react'));
+        const fallbackPlugins = hasReactFallback ? 'plugins: [react()],' : 'plugins: [],';
+        viteConfigContent = `${importLines.join('\n')}
+
+export default defineConfig({
+  base: '${cdnBase}',
+  ${fallbackPlugins}
+  build: {
+    outDir: '${cdnOutDir}',
+    target: 'esnext',
+    minify: false,
+    sourcemap: false,
+    emptyOutDir: true,
+    assetsDir: '',
+    rollupOptions: {
+      output: {
+        format: 'esm',
+        chunkFileNames: '[name].[hash].js',
+        assetFileNames: '[name].[hash].[ext]',
+      },
+      external: [],
+    },
+  },
+})
+`;
+      }
+
+      // Save backup of original config
+      const backupPath = viteConfigPath + '.deploy-backup';
+      fs.writeFileSync(backupPath, originalContent, 'utf-8');
+
+      // Write patched config
+      fs.writeFileSync(viteConfigPath, viteConfigContent, 'utf-8');
+
+      sender.send('deploy:log', `✓ Patched vite.config with complete CDN deployment configuration\n`);
+      sender.send('deploy:log', `  base: ${cdnBase}\n`);
+      sender.send('deploy:log', `  outDir: ${cdnOutDir}\n`);
+      sender.send('deploy:log', `  assetsDir: '' (flat structure)\n`);
+      sender.send('deploy:log', `  target: esnext, minify: false, sourcemap: false\n`);
+      sender.send('deploy:log', `  rollupOptions: complete ESM configuration\n`);
+      sender.send('deploy:log', `  plugins: web-only (electron excluded to avoid "Class extends value undefined")\n`);
+      sender.send('deploy:log', `  Backup: ${path.basename(viteConfigPath)}.deploy-backup\n\n`);
+    } else {
+      updateDeployTaskStatus('failed', sender);
+      sender.send('deploy:error', 'No vite.config found, cannot proceed with deployment');
+      return { success: false, error: 'No vite.config found' };
+    }
+
+    // Step 3: Execute webstatic publish (env from DeployEnvResolver)
+    const expectedDeployUrl = `https://${projectName}.autocode.test.sankuai.com/`;
+    const expectedBuildPath = path.join(projectPath, 'dist', 'code', projectName, 'vite', version);
+    let allOutput = '';
+
+    const restoreViteConfig = () => {
+      if (viteConfigPath) {
+        const backupPath = viteConfigPath + '.deploy-backup';
+        if (fs.existsSync(backupPath)) {
+          fs.copyFileSync(backupPath, viteConfigPath);
+          fs.unlinkSync(backupPath);
+          sender.send('deploy:log', `\nRestored original ${path.basename(viteConfigPath)}\n`);
+        }
+      }
+    };
+
+    // 使用内置 Node 直接执行 tsc + vite build，避免 webstatic 内部调用 npm/pnpm 触发 "Class extends value undefined"
+    const nodePath = deployEnvResult.nodePath;
+    const deployEnv = deployEnvResult.env;
+    const runBuildWithNode = (): Promise<boolean> => {
+      return new Promise((resolve) => {
+        const tscJs = path.join(projectPath, 'node_modules', 'typescript', 'bin', 'tsc.js');
+        const tscPath = fs.existsSync(tscJs) ? tscJs : path.join(projectPath, 'node_modules', 'typescript', 'bin', 'tsc');
+        const vitePath = path.join(projectPath, 'node_modules', 'vite', 'bin', 'vite.js');
+        const hasTsc = fs.existsSync(tscPath);
+        const hasVite = fs.existsSync(vitePath);
+
+        const runStep = (args: string[], _name: string, onDone: (code: number | null) => void) => {
+          const proc = cpSpawn(nodePath, args, { cwd: projectPath, env: deployEnv });
+          proc.stdout?.on('data', (d: Buffer) => { allOutput += d.toString(); sender.send('deploy:log', d.toString()); });
+          proc.stderr?.on('data', (d: Buffer) => { allOutput += d.toString(); sender.send('deploy:log', d.toString()); });
+          proc.on('close', (code) => onDone(code));
+        };
+
+        if (hasTsc && hasVite) {
+          sender.send('deploy:log', `Running build with built-in Node (tsc + vite build)...\n`);
+          runStep([tscPath], 'tsc', (tscCode) => {
+            if (tscCode !== 0) {
+              resolve(false);
+              return;
+            }
+            runStep([vitePath, 'build'], 'vite build', (viteCode) => resolve(viteCode === 0));
+          });
+        } else {
+          // Fallback: 使用 shell 执行包管理器命令（可能仍会触发 npm 错误）
+          const pm = deployEnvResult.packageManager;
+          const cmd = pm === 'yarn' ? 'yarn exec tsc && yarn exec vite build' : `${pm} exec tsc && ${pm} exec vite build`;
+          sender.send('deploy:log', `Running build (fallback): ${cmd}\n`);
+          const shell = process.platform === 'win32' ? 'cmd' : 'sh';
+          const shellArg = process.platform === 'win32' ? '/c' : '-c';
+          const proc = cpSpawn(shell, [shellArg, cmd], { cwd: projectPath, env: deployEnv });
+          proc.stdout?.on('data', (d: Buffer) => { allOutput += d.toString(); sender.send('deploy:log', d.toString()); });
+          proc.stderr?.on('data', (d: Buffer) => { allOutput += d.toString(); sender.send('deploy:log', d.toString()); });
+          proc.on('close', (code) => resolve(code === 0));
+        }
+      });
+    };
+
+    runBuildWithNode().then((buildOk) => {
+      if (!buildOk) {
+        restoreViteConfig();
+        updateDeployTaskStatus('failed', sender);
+        sender.send('deploy:error', `Build failed.\n\n${allOutput.slice(-800)}`);
+        return;
+      }
+      sender.send('deploy:log', `✓ Build completed, uploading via webstatic...\n\n`);
+
+      // 优先使用内置 Node 20 + 内置 pnpm（不依赖 npx，DMG 下也无 PATH 问题）
+      const webstaticArgs = [
+        '@bfe/webstatic', 'publish',
+        '--appkey=com.sankuai.waimaiqafc.aie',
+        '--env=prod',
+        '--artifact=dist',
+        '--build-command=true',
+        '--token=269883ad-b7b0-4431-b5e7-5886cd1d590f',
+      ];
+      const builtinPnpm = getBuiltinPnpmPath();
+      let uploadEnv: NodeJS.ProcessEnv;
+      let uploadExecPath: string;
+      let uploadExecArgs: string[];
+      if (builtinPnpm) {
+        uploadExecPath = nodePath;
+        uploadExecArgs = [builtinPnpm, 'dlx', ...webstaticArgs];
+        uploadEnv = deployEnv;
+        sender.send('deploy:log', `Using built-in Node + pnpm: ${builtinPnpm}\n`);
+      } else {
+        const systemNpx = getSystemNpxPath();
+        uploadExecPath = systemNpx || 'npx';
+        uploadExecArgs = uploadExecPath === 'npx' ? webstaticArgs : webstaticArgs;
+        uploadEnv = { ...deployEnv, PATH: process.env.PATH };
+        sender.send('deploy:log', systemNpx ? `Using system npx: ${systemNpx}\n` : `Using npx from PATH\n`);
+      }
+
+      const child = cpSpawn(uploadExecPath, uploadExecArgs, {
+        cwd: projectPath,
+        env: uploadEnv,
+      });
+
+      child.stdout?.on('data', (data: Buffer) => {
+        const text = data.toString();
+        allOutput += text;
+        sender.send('deploy:log', text);
+      });
+
+      child.stderr?.on('data', (data: Buffer) => {
+        const text = data.toString();
+        allOutput += text;
+        sender.send('deploy:log', text);
+      });
+
+      child.on('close', async (code: number | null) => {
+        restoreViteConfig();
+
+        if (code !== 0) {
+          const errSnippet = allOutput.slice(-500);
+          const isNodeInstallDirError = /Could not determine Node\.js install directory/i.test(allOutput);
+          const hint = isNodeInstallDirError
+            ? '\n\n💡 提示：Node 环境解析失败。请确保项目已执行 pnpm install 安装依赖。'
+            : '';
+          updateDeployTaskStatus('failed', sender);
+          sender.send('deploy:error', `Upload script exited with code ${code}\n\n${errSnippet}${hint}`);
+          return;
+        }
+
+        // Verify build output
+        const indexPath = path.join(expectedBuildPath, 'index.html');
+        const altIndexPath = path.join(projectPath, 'dist', 'index.html');
+        let buildPath: string | null = null;
+        if (fs.existsSync(indexPath)) {
+          buildPath = expectedBuildPath;
+        } else if (fs.existsSync(altIndexPath)) {
+          buildPath = path.join(projectPath, 'dist');
+          sender.send('deploy:log', `⚠ 构建产物在 dist/，预期为 dist/code/${projectName}/vite/${version}\n`);
+        }
+        if (!buildPath || !fs.existsSync(path.join(buildPath, 'index.html'))) {
+          updateDeployTaskStatus('failed', sender);
+          sender.send('deploy:error', `Build output missing: ${expectedBuildPath}\n请检查 vite.config.ts 中 outDir 配置`);
+          return;
+        }
+        const countFiles = (dir: string): number => {
+          let n = 0;
+          for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (e.isFile()) n += 1;
+            else if (e.isDirectory()) n += countFiles(path.join(dir, e.name));
+          }
+          return n;
+        };
+        const fileCount = countFiles(buildPath);
+        sender.send('deploy:log', `✓ Build verified: ${fileCount} files\n`);
+
+        // Register proxy
+        const deployBaseUrl = `https://aie.sankuai.com/rdc_host/code/${projectName}/vite/${version}`;
+        const proxyUrl = `https://digitalgateway.waimai.test.sankuai.com/testgenius/open/agent/claudeProject/updateProjectProxyTarget?projectId=${projectName}&proxyType=publish&targetUrl=${encodeURIComponent(deployBaseUrl)}`;
+        try {
+          const proxyRes = await new Promise<number>((resolve) => {
+            const req = https.request(proxyUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+            }, (res) => resolve(res.statusCode ?? 0));
+            req.write('{}');
+            req.end();
+          });
+          if (proxyRes === 200) {
+            sender.send('deploy:log', `✓ Proxy registered\n\n✓ Deploy successful!\n  URL: ${expectedDeployUrl}\n`);
+          } else {
+            updateDeployTaskStatus('failed', sender);
+            sender.send('deploy:error', `Proxy registration failed (HTTP ${proxyRes})`);
+            return;
+          }
+        } catch (err) {
+          updateDeployTaskStatus('failed', sender);
+          sender.send('deploy:error', `Proxy registration failed: ${err instanceof Error ? err.message : String(err)}`);
+          return;
+        }
+
+        updateDeployTaskStatus('completed', sender);
+        sender.send('deploy:done', expectedDeployUrl);
+        if (mainWin && !mainWin.isDestroyed()) {
+          mainWin.webContents.send('agent:open-browser-preview', expectedDeployUrl);
+        }
+      });
+
+      child.on('error', (err: Error & { code?: string }) => {
+        restoreViteConfig();
+        const isNpxEnovent = err.code === 'ENOENT' || /spawn npx ENOENT/i.test(err.message);
+        const hint = isNpxEnovent
+          ? '\n\n💡 未找到 npx（DMG 安装后 GUI 启动时 PATH 可能不含 Node）。请：\n  • 安装 Node.js（https://nodejs.org）或使用 nvm/fnm；或\n  • 从终端执行 open -a QACowork 启动应用后再试部署。'
+          : '';
+        updateDeployTaskStatus('failed', sender);
+        sender.send('deploy:error', `Failed to execute deploy: ${err.message}${hint}`);
+      });
+    });
+
+    return { success: true };
+  } catch (error) {
+    updateDeployTaskStatus('failed', event.sender);
+    event.sender.send('deploy:error', error instanceof Error ? error.message : String(error));
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 // File System Handlers
@@ -1672,17 +2663,20 @@ ipcMain.handle('fs:write-file', async (_, filePath: string, content: string) => 
 
 ipcMain.handle('fs:list-dir', async (_, dirPath: string) => {
   try {
-    // 权限检查
+    const resolvedPath = toAbsoluteFolderPath(dirPath);
     const folders = configStore.getAll().authorizedFolders || [];
-    const isAuthorized = folders.some(f => dirPath.startsWith(f.path));
+    const isAuthorized = folders.some((f: { path: string }) => {
+      const resolvedFolder = toAbsoluteFolderPath(f.path);
+      return resolvedPath === resolvedFolder || resolvedPath.startsWith(resolvedFolder + path.sep);
+    });
     if (!isAuthorized) {
       return { success: false, error: 'Path not authorized' };
     }
-    const items = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    const items = await fs.promises.readdir(resolvedPath, { withFileTypes: true });
     const result = items.map(item => ({
       name: item.name,
       isDirectory: item.isDirectory(),
-      path: path.join(dirPath, item.name)
+      path: path.join(resolvedPath, item.name)
     }));
     return { success: true, items: result };
   } catch (error) {
@@ -1763,42 +2757,590 @@ ipcMain.handle('fs:delete', async (_, filePath: string) => {
   }
 });
 
-// Terminal Handlers
-const terminalSessions = new Map<string, { process: any, cwd: string, webContents: Electron.WebContents }>();
+// Terminal Handlers: 支持 node-pty（PTY）或 child_process（pipe）两种后端
+type TerminalSession = {
+  cwd: string;
+  webContents: Electron.WebContents;
+  process?: import('child_process').ChildProcess;
+  pty?: { write: (data: string) => void; resize: (cols: number, rows: number) => void; kill: (signal?: string) => void };
+  windowId?: string;
+  processGroupId?: number; // 进程组 ID（用于发送信号到整个进程组）
+};
+const terminalSessions = new Map<string, TerminalSession>();
 
-function setupTerminalListeners(id: string, process: any, webContents: Electron.WebContents) {
-  process.stdout.on('data', (data: Buffer) => {
-    webContents.send('terminal:output', id, data.toString());
+// ========== 终端诊断日志 ==========
+console.log('[Terminal:Diag] ==================== 终端模块诊断开始 ====================');
+console.log('[Terminal:Diag] process.platform:', process.platform);
+console.log('[Terminal:Diag] process.arch:', process.arch);
+console.log('[Terminal:Diag] process.resourcesPath:', process.resourcesPath);
+console.log('[Terminal:Diag] app.isPackaged:', app.isPackaged);
+console.log('[Terminal:Diag] app.getAppPath():', app.getAppPath());
+console.log('[Terminal:Diag] __dirname:', __dirname);
+console.log('[Terminal:Diag] import.meta.url:', import.meta.url);
+
+// 检查 node-pty 是否可加载
+try {
+  const _require = createRequire(import.meta.url);
+  const nodePtyPath = _require.resolve('node-pty');
+  console.log('[Terminal:Diag] node-pty 模块路径:', nodePtyPath);
+  const ptyMod = _require('node-pty');
+  console.log('[Terminal:Diag] node-pty 加载成功, spawn 函数:', typeof ptyMod?.spawn);
+  console.log('[Terminal:Diag] node-pty 导出的键:', Object.keys(ptyMod || {}));
+} catch (e) {
+  const err = e instanceof Error ? e : new Error(String(e));
+  console.error('[Terminal:Diag] node-pty 加载失败!', err.message);
+  console.error('[Terminal:Diag] node-pty 错误堆栈:', err.stack);
+
+  // 尝试列出可能的 node-pty 位置
+  const possiblePaths = [
+    path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'node-pty'),
+    path.join(process.resourcesPath, 'app', 'node_modules', 'node-pty'),
+    path.join(__dirname, '..', 'node_modules', 'node-pty'),
+    path.join(app.getAppPath(), 'node_modules', 'node-pty'),
+  ];
+  for (const p of possiblePaths) {
+    console.log(`[Terminal:Diag] 检查路径 ${p}: 存在=${fs.existsSync(p)}`);
+    if (fs.existsSync(p)) {
+      try {
+        const files = fs.readdirSync(p);
+        console.log(`[Terminal:Diag]   内容: ${files.join(', ')}`);
+        // 检查 build/Release 目录
+        const buildRelease = path.join(p, 'build', 'Release');
+        if (fs.existsSync(buildRelease)) {
+          console.log(`[Terminal:Diag]   build/Release: ${fs.readdirSync(buildRelease).join(', ')}`);
+        }
+        const prebuilds = path.join(p, 'prebuilds');
+        if (fs.existsSync(prebuilds)) {
+          console.log(`[Terminal:Diag]   prebuilds: ${fs.readdirSync(prebuilds).join(', ')}`);
+        }
+      } catch (readErr) {
+        console.log(`[Terminal:Diag]   读取目录失败: ${readErr}`);
+      }
+    }
+  }
+}
+
+// 检查 shell 路径
+const diagShellPath = process.env.SHELL || '/bin/zsh';
+console.log(`[Terminal:Diag] SHELL 环境变量: ${process.env.SHELL}`);
+console.log(`[Terminal:Diag] shell 路径 (${diagShellPath}): 存在=${fs.existsSync(diagShellPath)}`);
+console.log('[Terminal:Diag] ==================== 终端模块诊断结束 ====================');
+
+// resolveShellPath / validateShellPath / getShellCandidates 已提取到 ./utils/ShellResolver.ts
+
+// 构建 PTY 环境变量
+function buildPtyEnv(minimal: boolean): Record<string, string> {
+  // 对于 PTY 模式，使用最简化的环境变量来避免 posix_spawnp 失败
+  // 只包含绝对必需的环境变量
+  const base: Record<string, string> = {
+    TERM: 'xterm-256color',
+    PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+    HOME: process.env.HOME || os.homedir(),
+    USER: process.env.USER || process.env.LOGNAME || 'user',
+    LANG: process.env.LANG || 'en_US.UTF-8',
+    SHELL: resolveShellPath(),
+  };
+  
+  // 只在最小模式下使用基础环境变量
+  if (minimal) {
+    if (process.env.TMPDIR) base.TMPDIR = process.env.TMPDIR;
+    if (process.env.LOGNAME) base.LOGNAME = process.env.LOGNAME;
+    return base;
+  }
+  
+  // 完整模式：添加一些安全的环境变量
+  // 但仍然过滤掉可能有问题的变量
+  const skipPrefixes = [
+    'npm_config_',
+    'npm_package_',
+    'npm_lifecycle_',
+    'npm_node_execpath',
+    'npm_execpath',
+    'npm_command',
+    'VSCODE_',
+    'CURSOR_',
+    '__CF',
+    'XPC_',
+  ];
+  
+  if (process.env) {
+    for (const [k, v] of Object.entries(process.env)) {
+      // 跳过可能有问题的键
+      if (skipPrefixes.some(prefix => k.startsWith(prefix))) {
+        continue;
+      }
+      // 只包含字符串值，且值不为空
+      if (v !== undefined && typeof v === 'string' && v.length > 0) {
+        // 对于 PATH 等关键变量，允许包含非 ASCII 字符
+        // 对于其他变量，检查是否包含控制字符
+        if (k === 'PATH' || !/[\x00-\x1F\x7F]/.test(v)) {
+          base[k] = v;
+        }
+      }
+    }
+  }
+  
+  // 确保关键环境变量存在
+  base.TERM = base.TERM || 'xterm-256color';
+  if (!base.SHELL) base.SHELL = resolveShellPath();
+  if (!base.HOME) base.HOME = os.homedir();
+  if (!base.USER) base.USER = process.env.USER || process.env.LOGNAME || 'user';
+  
+  return base;
+}
+
+
+
+// 创建 PTY 终端
+function createPtyTerminal(
+  id: string,
+  normalizedCwd: string,
+  event: Electron.IpcMainInvokeEvent,
+  windowId?: string
+): { success: boolean; error?: string; mode?: 'pty' | 'pipe' } {
+  console.log(`[Terminal:PTY] createPtyTerminal 开始, id=${id}, cwd=${normalizedCwd}, windowId=${windowId}`);
+  console.log(`[Terminal:PTY] 运行环境: platform=${process.platform}, arch=${process.arch}, isPackaged=${app.isPackaged}`);
+
+  if (process.platform === 'win32') {
+    console.log('[Terminal:PTY] Windows 平台不支持 PTY 模式');
+    return { success: false, error: 'PTY mode is not supported on Windows' };
+  }
+
+  const require = createRequire(import.meta.url);
+  let ptyModule: any;
+  try {
+    const resolvedPath = require.resolve('node-pty');
+    console.log(`[Terminal:PTY] node-pty 解析路径: ${resolvedPath}`);
+    ptyModule = require('node-pty');
+    // 验证 node-pty 模块是否可用
+    if (!ptyModule || typeof ptyModule.spawn !== 'function') {
+      console.error('[Terminal:PTY] node-pty 模块已加载但 spawn 函数不存在', {
+        hasModule: !!ptyModule,
+        keys: Object.keys(ptyModule || {}),
+        spawnType: typeof ptyModule?.spawn,
+      });
+      return { success: false, error: 'node-pty module is not properly loaded (spawn function not found)' };
+    }
+    console.log('[Terminal:PTY] node-pty 模块加载成功');
+  } catch (e) {
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    const errorStack = e instanceof Error ? e.stack : '';
+    console.error('[Terminal:PTY] node-pty 加载失败:', errorMsg);
+    console.error('[Terminal:PTY] node-pty 错误堆栈:', errorStack);
+    
+    // 诊断: 列出 require 路径
+    try {
+      console.log('[Terminal:PTY] require 搜索路径 (import.meta.url):', import.meta.url);
+      const possibleNodeModules = [
+        path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'node-pty'),
+        path.join(process.resourcesPath, 'app', 'node_modules', 'node-pty'),
+        path.join(__dirname, '..', 'node_modules', 'node-pty'),
+      ];
+      for (const p of possibleNodeModules) {
+        console.log(`[Terminal:PTY] 检查 ${p}: ${fs.existsSync(p) ? '存在' : '不存在'}`);
+      }
+    } catch (diagErr) {
+      console.error('[Terminal:PTY] 诊断检查失败:', diagErr);
+    }
+    
+    return { success: false, error: `node-pty module not available: ${errorMsg}` };
+  }
+
+  const ptyShellArgs: string[] = []; // 不使用 -l，避免 .zprofile 中的 exit 导致 shell 立即退出
+  
+  // 尝试多种 shell 和环境变量组合
+  // 优先使用最小环境变量，因为完整环境变量可能导致 posix_spawnp 失败
+  const shellCandidates = getShellCandidates();
+  const envCandidates = [true, false]; // 先尝试最小环境变量（更稳定），再尝试完整环境变量
+  
+  let lastError: Error | null = null;
+  const lastErrorDetails: string[] = [];
+
+  for (const shellPath of shellCandidates) {
+    const validation = validateShellPath(shellPath);
+    if (!validation.valid) {
+      lastErrorDetails.push(`Shell validation failed for ${shellPath}: ${validation.error}`);
+      continue;
+    }
+
+    for (const useFullEnv of envCandidates) {
+      try {
+        const ptyEnv = buildPtyEnv(!useFullEnv);
+        
+        // 验证工作目录是否存在且可访问
+        if (!fs.existsSync(normalizedCwd)) {
+          throw new Error(`Working directory does not exist: ${normalizedCwd}`);
+        }
+        
+        const stats = fs.statSync(normalizedCwd);
+        if (!stats.isDirectory()) {
+          throw new Error(`Path is not a directory: ${normalizedCwd}`);
+        }
+        
+        // 尝试创建 PTY
+        // 使用最简化的选项来避免 posix_spawnp 失败
+        const ptyOptions: any = {
+          cwd: normalizedCwd,
+          env: ptyEnv,
+          cols: 80,
+          rows: 24,
+          name: 'xterm-256color',
+          // 不设置 encoding，让 node-pty 使用默认值
+        };
+        
+        // 尝试使用 spawn，如果失败则尝试 fork
+        let ptyProcess: any;
+        try {
+          ptyProcess = ptyModule.spawn(shellPath, ptyShellArgs, ptyOptions);
+        } catch (spawnError) {
+          // 如果 spawn 失败，尝试使用 fork（某些情况下更稳定）
+          if (typeof ptyModule.fork === 'function') {
+            console.log(`[Terminal] spawn failed, trying fork for ${shellPath}`);
+            try {
+              ptyProcess = ptyModule.fork(shellPath, ptyShellArgs, ptyOptions);
+            } catch (forkError) {
+              throw spawnError; // 抛出原始 spawn 错误
+            }
+          } else {
+            throw spawnError;
+          }
+        }
+
+        // 验证 PTY 进程是否成功创建
+        if (!ptyProcess) {
+          throw new Error('PTY process is null');
+        }
+
+        ptyProcess.on('data', (data?: string) => {
+          event.sender.send('terminal:output', id, data ?? '');
+        });
+
+        ptyProcess.on('exit', () => {
+          if (terminalSessions.has(id)) {
+            event.sender.send('terminal:exit', id);
+            terminalSessions.delete(id);
+          }
+        });
+
+        terminalSessions.set(id, {
+          cwd: normalizedCwd,
+          webContents: event.sender,
+          pty: ptyProcess,
+          windowId
+        });
+
+        console.log(`[Terminal] PTY mode succeeded with shell: ${shellPath}, env: ${useFullEnv ? 'full' : 'minimal'}`);
+        return { success: true, mode: 'pty' };
+      } catch (e) {
+        const error = e instanceof Error ? e : new Error(String(e));
+        lastError = error;
+        const errorMsg = error.message || String(e);
+        lastErrorDetails.push(`Shell: ${shellPath}, Env: ${useFullEnv ? 'full' : 'minimal'}, Error: ${errorMsg}`);
+        
+        // 如果是 posix_spawnp 错误，提供更详细的诊断
+        if (errorMsg.includes('posix_spawnp')) {
+          lastErrorDetails.push(`  - Shell path: ${shellPath}`);
+          lastErrorDetails.push(`  - Shell exists: ${fs.existsSync(shellPath)}`);
+          lastErrorDetails.push(`  - CWD: ${normalizedCwd}`);
+          lastErrorDetails.push(`  - CWD exists: ${fs.existsSync(normalizedCwd)}`);
+          lastErrorDetails.push(`  - CWD is directory: ${fs.existsSync(normalizedCwd) && fs.statSync(normalizedCwd).isDirectory()}`);
+          const envKeys = Object.keys(buildPtyEnv(!useFullEnv));
+          lastErrorDetails.push(`  - Env keys count: ${envKeys.length}`);
+          lastErrorDetails.push(`  - Env keys: ${envKeys.slice(0, 20).join(', ')}${envKeys.length > 20 ? '...' : ''}`);
+        }
+      }
+    }
+  }
+
+  // 所有尝试都失败了
+  const errorMessage = lastError?.message || 'Unknown error';
+  const diagnosticInfo = lastErrorDetails.join('\n');
+  console.error(`[Terminal] PTY mode failed after trying all combinations:\n${diagnosticInfo}`);
+  
+  return {
+    success: false,
+    error: `PTY mode failed: ${errorMessage}. Tried shells: ${shellCandidates.join(', ')}. See console for details.`,
+    mode: undefined
+  };
+}
+
+// 创建 Pipe 终端（使用 script 命令创建伪终端）
+async function createPipeTerminal(
+  id: string,
+  normalizedCwd: string,
+  event: Electron.IpcMainInvokeEvent,
+  windowId?: string
+): Promise<{ success: boolean; error?: string; mode?: 'pty' | 'pipe' }> {
+  const { spawn } = await import('child_process');
+  
+  // 确定 shell 命令（统一使用 ShellResolver 的候选回退逻辑）
+  let shellCommand: string;
+  if (process.platform === 'win32') {
+    shellCommand = process.env.COMSPEC || 'cmd.exe';
+  } else {
+    shellCommand = resolveShellForCommand() || resolveShellPath();
+  }
+  
+  // 设置环境变量
+  const terminalEnv = {
+    ...process.env,
+    TERM: 'xterm-256color',
+    ...(process.platform !== 'win32' ? { 
+      FORCE_COLOR: '1',
+      PS1: '$ ',
+      PS2: '> ',
+    } : {})
+  };
+  
+  let processGroupId: number | undefined;
+  let terminalProcess: import('child_process').ChildProcess;
+  
+  if (process.platform !== 'win32') {
+    // 直接使用 bash -i，但确保 stdin 保持打开
+    // 通过设置环境变量和确保 stdin 不关闭来让 shell 保持运行
+    console.log(`[Terminal] Using direct spawn with interactive shell: ${shellCommand}`);
+    
+    terminalProcess = spawn(shellCommand, ['-i'], {
+      cwd: normalizedCwd,
+      env: {
+        ...terminalEnv,
+        // 确保 shell 认为是交互式的
+        PS1: '$ ',
+        PS2: '> ',
+        // 防止 shell 因为非 TTY 而退出
+        INTERACTIVE: '1',
+        // 清空可能干扰的环境变量
+        BASH_ENV: '',
+        ENV: '',
+        // 确保有正确的 TERM
+        TERM: 'xterm-256color',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: false,
+    });
+    
+    if (terminalProcess.pid) {
+      processGroupId = terminalProcess.pid;
+    }
+    
+    // 确保 stdin 不会因为父进程关闭而关闭
+    if (terminalProcess.stdin) {
+      // 保持 stdin 打开
+      terminalProcess.stdin.setDefaultEncoding('utf8');
+      // 监听 stdin 错误但不关闭
+      terminalProcess.stdin.on('error', (err) => {
+        console.warn(`[Terminal] stdin error (non-fatal): ${err.message}`);
+      });
+    }
+  } else {
+    // Windows: 直接 spawn
+    terminalProcess = spawn(shellCommand, [], {
+      cwd: normalizedCwd,
+      env: terminalEnv,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: false,
+    });
+  }
+  
+  console.log(`[Terminal] Spawning shell (pipe mode with script): ${shellCommand} in ${normalizedCwd}`);
+  
+  const safeDeleteSession = (onlyIfOurs: boolean) => {
+    const cur = terminalSessions.get(id);
+    if (!onlyIfOurs || cur?.process === terminalProcess) {
+      terminalSessions.delete(id);
+    }
+  };
+
+  terminalProcess.on('error', (error: Error) => {
+    console.error(`[Terminal] Process error for ${id}:`, error);
+    if (terminalSessions.get(id)?.process === terminalProcess) {
+      event.sender.send('terminal:exit', id);
+      terminalSessions.delete(id);
+    }
   });
-  process.stderr.on('data', (data: Buffer) => {
-    webContents.send('terminal:output', id, data.toString());
-  });
-  process.on('exit', () => {
-    webContents.send('terminal:exit', id);
-    terminalSessions.delete(id);
+
+  const exitHandler = (_code: number | null, _signal: string | null) => {
+    if (terminalSessions.get(id)?.process === terminalProcess) {
+      event.sender.send('terminal:exit', id);
+      terminalSessions.delete(id);
+    }
+  };
+  terminalProcess.on('exit', exitHandler);
+  
+  const webContents = event.sender;
+  terminalSessions.set(id, { 
+    process: terminalProcess, 
+    cwd: normalizedCwd, 
+    webContents, 
+    windowId,
+    processGroupId
+  } as TerminalSession);
+  setupTerminalListeners(id, terminalProcess, webContents);
+  
+  if (!terminalProcess.stdin || terminalProcess.stdin.destroyed) {
+    console.error(`[Terminal] stdin is not available for ${id}`);
+    safeDeleteSession(true);
+    return {
+      success: false,
+      error: 'Terminal stdin is not available. This may indicate a shell spawn issue.'
+    };
+  }
+  terminalProcess.stdin.setDefaultEncoding('utf8');
+
+  // 等待进程稳定
+  return new Promise<{ success: boolean; error?: string; mode?: 'pty' | 'pipe' }>((resolve) => {
+    // 增加等待时间，让 script 和 shell 有时间初始化
+    setTimeout(() => {
+      if (terminalProcess.killed || terminalProcess.exitCode !== null) {
+        const exitCode = terminalProcess.exitCode;
+        console.error(`[Terminal] Process ${id} exited immediately with code=${exitCode}`);
+        safeDeleteSession(true);
+        resolve({
+          success: false,
+          error: `Terminal process exited immediately (code: ${exitCode}). This may indicate a shell configuration issue.`
+        });
+      } else {
+        console.log(`[Terminal] Terminal ${id} started successfully (PID: ${terminalProcess.pid})`);
+        resolve({ success: true, mode: 'pipe' });
+      }
+    }, 800); // 增加等待时间到 800ms
   });
 }
 
-ipcMain.handle('terminal:create', async (event, { id, cwd }: { id: string, cwd: string }) => {
+function setupTerminalListeners(id: string, process: import('child_process').ChildProcess, webContents: Electron.WebContents) {
+  // 监听 stdout
+  if (process.stdout) {
+    process.stdout.on('data', (data: Buffer) => {
+      webContents.send('terminal:output', id, data.toString());
+    });
+    
+    // 监听 stdout 关闭
+    process.stdout.on('close', () => {
+      console.log(`[Terminal] stdout closed for ${id}`);
+    });
+    
+    // 监听 stdout 错误
+    process.stdout.on('error', (error: Error) => {
+      console.error(`[Terminal] stdout error for ${id}:`, error);
+    });
+  }
+  
+  // 监听 stderr
+  if (process.stderr) {
+    process.stderr.on('data', (data: Buffer) => {
+      webContents.send('terminal:output', id, data.toString());
+    });
+    
+    // 监听 stderr 关闭
+    process.stderr.on('close', () => {
+      console.log(`[Terminal] stderr closed for ${id}`);
+    });
+    
+    // 监听 stderr 错误
+    process.stderr.on('error', (error: Error) => {
+      console.error(`[Terminal] stderr error for ${id}:`, error);
+    });
+  }
+  
+  // 监听 stdin 错误
+  if (process.stdin) {
+    process.stdin.on('error', (error: Error) => {
+      console.error(`[Terminal] stdin error for ${id}:`, error);
+    });
+    
+    // 监听 stdin 关闭
+    process.stdin.on('close', () => {
+      console.log(`[Terminal] stdin closed for ${id}`);
+    });
+  }
+  
+  // 注意：exit 事件已经在 terminal:create 中处理，这里不再重复处理
+  // 避免重复删除会话和发送事件
+}
+
+ipcMain.handle('terminal:create', async (event, { id, cwd, windowId }: { id: string, cwd: string, windowId?: string }) => {
+  console.log(`[Terminal:Create] ===== terminal:create 开始 =====`);
+  console.log(`[Terminal:Create] id=${id}, cwd=${cwd}, windowId=${windowId}`);
+  console.log(`[Terminal:Create] isPackaged=${app.isPackaged}, resourcesPath=${process.resourcesPath}`);
   try {
+    // 验证 cwd 是否存在且为目录
+    if (!cwd || cwd.trim() === '') {
+      console.error('[Terminal:Create] cwd 为空');
+      return { success: false, error: 'Working directory is required' };
+    }
+    
+    const normalizedCwd = path.resolve(cwd.trim());
+    console.log(`[Terminal:Create] normalizedCwd=${normalizedCwd}`);
+    
+    // 检查目录是否存在
+    if (!fs.existsSync(normalizedCwd)) {
+      console.error(`[Terminal:Create] 目录不存在: ${normalizedCwd}`);
+      return { success: false, error: `Directory does not exist: ${normalizedCwd}` };
+    }
+    
+    const stats = fs.statSync(normalizedCwd);
+    if (!stats.isDirectory()) {
+      console.error(`[Terminal:Create] 路径不是目录: ${normalizedCwd}`);
+      return { success: false, error: `Path is not a directory: ${normalizedCwd}` };
+    }
+    
     // 权限检查
     const folders = configStore.getAll().authorizedFolders || [];
-    const isAuthorized = folders.some(f => cwd.startsWith(f.path));
+    const isAuthorized = folders.some(f => normalizedCwd.startsWith(path.resolve(f.path)));
     if (!isAuthorized) {
-      return { success: false, error: 'Path not authorized' };
+      // 如果路径未授权，尝试自动授权项目目录
+      const projectPath = normalizedCwd;
+      if (!folders.some(f => f.path === projectPath)) {
+        folders.push({ path: projectPath, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() });
+        configStore.set('authorizedFolders', folders);
+        console.log(`[Terminal] Auto-authorized project directory: ${projectPath}`);
+      }
     }
-    const shell = process.platform === 'win32' ? 'cmd.exe' : process.env.SHELL || '/bin/bash';
-    const { spawn } = await import('child_process');
-    const terminalProcess = spawn(shell, [], {
-      cwd,
-      env: { ...process.env, TERM: 'xterm-256color' }
-    });
-    const webContents = event.sender;
-    terminalSessions.set(id, { process: terminalProcess, cwd, webContents });
-    setupTerminalListeners(id, terminalProcess, webContents);
-    return { success: true };
+    
+    // 若已存在同 id 的会话，直接返回成功，避免重复创建导致历史丢失
+    const existing = terminalSessions.get(id);
+    if (existing) {
+      console.log(`[Terminal] Session ${id} already exists, skipping creation`);
+      // 更新 webContents（可能切换了窗口）
+      existing.webContents = event.sender;
+      return { success: true, mode: existing.pty ? 'pty' : 'pipe' };
+    }
+    
+    // 获取配置的终端模式
+    const terminalMode = configStore.get('terminalMode') || 'auto';
+    
+    // 根据配置选择模式
+    if (terminalMode === 'pipe' || process.platform === 'win32') {
+      // 强制使用 Pipe 模式（Windows 必须使用 Pipe）
+      console.log(`[Terminal] Using pipe mode (configured: ${terminalMode === 'pipe' ? 'pipe' : 'Windows'})`);
+      return await createPipeTerminal(id, normalizedCwd, event, windowId);
+    } else if (terminalMode === 'pty') {
+      // 强制使用 PTY 模式
+      console.log('[Terminal] Using PTY mode (configured: pty)');
+      const result = createPtyTerminal(id, normalizedCwd, event, windowId);
+      if (!result.success) {
+        return { success: false, error: `PTY mode failed: ${result.error}` };
+      }
+      return result;
+    } else {
+      // auto 模式：优先 PTY，失败则回退 Pipe
+      console.log('[Terminal:Create] auto 模式：优先尝试 PTY...');
+      const ptyResult = createPtyTerminal(id, normalizedCwd, event, windowId);
+      if (ptyResult.success) {
+        console.log('[Terminal:Create] PTY 模式创建成功');
+        return ptyResult;
+      }
+      console.warn(`[Terminal:Create] PTY 模式失败: ${ptyResult.error}, 回退到 Pipe 模式...`);
+      const pipeResult = await createPipeTerminal(id, normalizedCwd, event, windowId);
+      console.log(`[Terminal:Create] Pipe 模式结果: success=${pipeResult.success}, error=${pipeResult.error || 'none'}`);
+      return pipeResult;
+    }
   } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : String(error) };
+    const errMsg = error instanceof Error ? error.message : String(error);
+    const errStack = error instanceof Error ? error.stack : '';
+    console.error('[Terminal:Create] terminal:create 异常:', errMsg);
+    console.error('[Terminal:Create] 错误堆栈:', errStack);
+    return { success: false, error: errMsg };
   }
 });
 
@@ -1807,8 +3349,106 @@ ipcMain.handle('terminal:write', (_, id: string, data: string) => {
   if (!session) {
     return { success: false, error: 'Terminal session not found' };
   }
-  session.process.stdin.write(data);
-  return { success: true };
+  if (session.pty) {
+    try {
+      session.pty.write(data);
+      return { success: true };
+    } catch (error) {
+      console.error(`[Terminal] Error writing to PTY for ${id}:`, error);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  const proc = session.process;
+  if (!proc || proc.killed || proc.exitCode !== null) {
+    return { success: false, error: 'Terminal process has exited' };
+  }
+  if (!proc.stdin || proc.stdin.destroyed) {
+    return { success: false, error: 'Terminal stdin is not available' };
+  }
+  try {
+    proc.stdin.write(data);
+    return { success: true };
+  } catch (error) {
+    console.error(`[Terminal] Error writing to stdin for ${id}:`, error);
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('terminal:signal', async (_, id: string, signal: string) => {
+  const session = terminalSessions.get(id);
+  if (!session) {
+    return { success: false, error: 'Terminal session not found' };
+  }
+  if (session.pty) {
+    try {
+      // node-pty 不支持直接发送信号，需要 kill
+      if (signal === 'SIGINT') {
+        session.pty.kill('SIGINT');
+      } else {
+        session.pty.kill(signal as NodeJS.Signals);
+      }
+      return { success: true };
+    } catch (error) {
+      console.error(`[Terminal] Error sending signal to PTY for ${id}:`, error);
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  const proc = session.process;
+  if (!proc || proc.killed || proc.exitCode !== null) {
+    return { success: false, error: 'Terminal process has exited' };
+  }
+  try {
+    if (signal === 'SIGINT') {
+      // 在 pipe 模式下，最好的方法是发送 Ctrl+C 字符到 stdin
+      // 这样 shell 会正确处理并转发信号给前台进程组
+      // 这是最可靠的方法，因为 shell 知道如何将信号传递给子进程
+      if (proc.stdin && !proc.stdin.destroyed) {
+        try {
+          // 先发送 Ctrl+C 字符到 stdin，让 shell 处理
+          proc.stdin.write('\x03');
+        } catch (e) {
+          console.warn(`[Terminal] Failed to write Ctrl+C to stdin for ${id}:`, e);
+        }
+      }
+      
+      // 在非 Windows 系统上，尝试发送信号到进程组
+      if (process.platform !== 'win32' && proc.pid) {
+        // 优先使用保存的进程组 ID（如果使用了 setsid）
+        if (session.processGroupId) {
+          try {
+            // 发送信号到进程组（负数 PID 表示进程组）
+            process.kill(-session.processGroupId, 'SIGINT');
+            console.log(`[Terminal] Sent SIGINT to process group ${session.processGroupId} for ${id}`);
+          } catch (e) {
+            console.warn(`[Terminal] Failed to send SIGINT to process group ${session.processGroupId}:`, e);
+          }
+        }
+        
+        // 也尝试发送到进程本身的进程组
+        try {
+          process.kill(-proc.pid, 'SIGINT');
+          console.log(`[Terminal] Sent SIGINT to process group ${-proc.pid} for ${id}`);
+        } catch (e) {
+          // 如果进程组发送失败，发送到进程本身
+          try {
+            proc.kill('SIGINT');
+            console.log(`[Terminal] Sent SIGINT to process ${proc.pid} for ${id}`);
+          } catch (e2) {
+            console.warn(`[Terminal] Failed to send SIGINT to process ${proc.pid}:`, e2);
+          }
+        }
+      } else {
+        // Windows 系统：直接发送信号到进程
+        proc.kill('SIGINT');
+      }
+    } else {
+      proc.kill(signal as NodeJS.Signals);
+    }
+    return { success: true };
+  } catch (error) {
+    console.error(`[Terminal] Error sending signal to process for ${id}:`, error);
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 ipcMain.handle('terminal:resize', (_, id: string, _cols: number, _rows: number) => {
@@ -1816,9 +3456,28 @@ ipcMain.handle('terminal:resize', (_, id: string, _cols: number, _rows: number) 
   if (!session) {
     return { success: false, error: 'Terminal session not found' };
   }
-  // PTY resize (if using pty on Unix)
-  if (process.platform !== 'win32' && session.process.stdout.setDefaultEncoding) {
-    session.process.stdout.setDefaultEncoding('utf8');
+  if (session.pty) {
+    try {
+      session.pty.resize(cols, rows);
+    } catch (e) {
+      // ignore
+    }
+    return { success: true };
+  }
+  return { success: true };
+});
+
+ipcMain.handle('terminal:open-window', async (_, { cwd, instanceId }: { cwd?: string; instanceId?: string }) => {
+  const windowId = `terminal-window-${Date.now()}`;
+  const win = createTerminalWindow(cwd || process.cwd(), windowId, instanceId);
+  terminalWindows.set(windowId, win);
+  return { success: true, windowId };
+});
+
+ipcMain.handle('terminal:close-window', (_, windowId: string) => {
+  const win = terminalWindows.get(windowId);
+  if (win && !win.isDestroyed()) {
+    win.close();
   }
   return { success: true };
 });
@@ -1826,14 +3485,166 @@ ipcMain.handle('terminal:resize', (_, id: string, _cols: number, _rows: number) 
 ipcMain.handle('terminal:destroy', (_, id: string) => {
   const session = terminalSessions.get(id);
   if (session) {
-    session.process.kill();
+    if (session.pty) {
+      try {
+        session.pty.kill();
+      } catch (e) {
+        // ignore
+      }
+    } else if (session.process) {
+      session.process.kill();
+    }
     terminalSessions.delete(id);
   }
   return { success: true };
 });
 
-function initializeAgent() {
-  const apiKey = configStore.getApiKey() || process.env.ANTHROPIC_API_KEY
+/** 发送初始化进度到渲染进程 */
+function sendInitProgress(stage: string, progress: number, detail?: string) {
+  mainWin?.webContents.send('app:init-progress', { stage, progress, detail })
+}
+
+/**
+ * 延迟初始化：窗口渲染后先尽快展示 UI（含资源管理器），再在后台初始化 Agent
+ * 避免因 Agent 初始化耗时（Skills、MCP 等）导致用户长时间卡在启动页
+ */
+async function deferredInitialization() {
+  console.log('[Main] Starting deferred initialization...')
+  const startTime = Date.now()
+
+  try {
+    // Stage 1: 配置加载 (极快，已完成)
+    sendInitProgress('加载配置', 10)
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    // Stage 2: 提前设置项目工作目录，使资源管理器在 UI 展示后即可加载文件列表（fs:list-dir 依赖 authorizedFolders）
+    const currentProject = projectStore.getCurrentProject()
+    if (currentProject) {
+      applyProjectWorkingDirs(currentProject)
+      console.log('[Main] Project working dir applied for:', currentProject.name)
+    }
+
+    // 无论当前处于何种模式，确保 cowork workspace 目录始终在授权列表中
+    // 避免安装新版本后首次启动时，因前端 IPC 时序问题导致协作模式工作目录未生效
+    const coworkWorkspaceDir = directoryManager.getCoworkWorkspaceDir()
+    const currentFolders = configStore.getAll().authorizedFolders || []
+    const normalizedCowork = toAbsoluteFolderPath(coworkWorkspaceDir)
+    const coworkAlreadyExists = currentFolders.some(
+      (f: { path: string }) => toAbsoluteFolderPath(f.path) === normalizedCowork
+    )
+    if (!coworkAlreadyExists) {
+      configStore.setAll({
+        ...configStore.getAll(),
+        authorizedFolders: [
+          ...currentFolders,
+          { path: coworkWorkspaceDir, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() }
+        ]
+      })
+      console.log('[Main] Cowork workspace dir added to authorized folders:', coworkWorkspaceDir)
+    }
+
+    // Stage 3: 立即通知前端初始化完成，并附带当前项目，使首帧即可渲染资源管理器
+    sendInitProgress('启动完成', 100)
+    mainWin?.webContents.send('app:init-complete', currentProject ?? null)
+    const toFirstPaint = Date.now() - startTime
+    console.log(`[Main] App UI ready in ${toFirstPaint}ms (agent will init in background)`)
+
+    // Stage 4: 后台初始化 Agent（不阻塞 UI）
+    initializeAgentAsync()
+      .then((result) => {
+        const total = Date.now() - startTime
+        if (result?.skipped) {
+          console.warn(`[Main] Agent initialization skipped: ${result.reason}`)
+          mainWin?.webContents.send('agent:init-failed', { reason: result.reason })
+        } else {
+          console.log(`[Main] Agent initialization completed in ${total}ms`)
+          mainWin?.webContents.send('agent:ready')
+        }
+      })
+      .catch((err) => {
+        console.error('[Main] Agent initialization failed:', err)
+        mainWin?.webContents.send('agent:init-failed', { reason: err?.message || 'Unknown error' })
+      })
+  } catch (error) {
+    console.error('[Main] Deferred initialization failed:', error)
+    mainWin?.webContents.send('app:init-complete')
+  }
+}
+
+/** 自动加载最近一次会话 */
+function autoLoadLatestSession() {
+  try {
+    if (!mainAgent) {
+      console.log('[Main] Agent not ready, skip auto-load session')
+      return
+    }
+    
+    const sessions = sessionStore.getSessions()
+    const coworkWorkspaceDir = directoryManager.getCoworkWorkspaceDir()
+    if (sessions && sessions.length > 0) {
+      // 只加载 cowork 模式的会话，避免加载 project 模式任务历史
+      // 判断规则：
+      //   1. 有 mode 字段时：直接按 mode === 'cowork' 判断（新数据）
+      //   2. 无 mode 字段的旧数据：通过 workspaceDir 判断
+      //      - workspaceDir 为空 或 等于 ~/.qa-cowork 目录 → cowork 会话
+      //      - workspaceDir 是其他路径（项目目录）→ project 会话，排除
+      const coworkSessions = sessions.filter(s => {
+        if (s.mode) return s.mode === 'cowork'
+        // 旧数据兜底：workspaceDir 是 cowork 目录或为空才认定为 cowork 会话
+        if (!s.workspaceDir) return true
+        return s.workspaceDir === coworkWorkspaceDir || s.workspaceDir.endsWith('/.qa-cowork') || s.workspaceDir.endsWith('\\.qa-cowork')
+      })
+      const sortedSessions = [...coworkSessions].sort((a, b) => b.updatedAt - a.updatedAt)
+      const latestSession = sortedSessions[0]
+      
+      if (latestSession) {
+        console.log(`[Main] Auto-loading latest session: ${latestSession.id} (${latestSession.title})`)
+        sessionStore.setSessionId(latestSession.id, false)
+        const fullSession = sessionStore.getSession(latestSession.id)
+        if (fullSession && fullSession.messages.length > 0) {
+          mainAgent.loadHistory(fullSession.messages)
+          mainWin?.webContents.send('session:auto-loaded', latestSession.id)
+          console.log(`[Main] Successfully auto-loaded session: ${latestSession.title}`)
+        }
+      }
+    } else {
+      console.log('[Main] No cowork sessions found, skipping auto-load')
+    }
+  } catch (error) {
+    console.error('[Main] Error auto-loading latest session:', error)
+  }
+}
+
+/** 异步初始化 Agent，发送中间进度 */
+async function initializeAgentAsync() {
+  // #region agent log - API key source (H3,H4)
+  const fromConfig = configStore.getApiKey();
+  const fromEnv = process.env.ANTHROPIC_API_KEY || '';
+  const apiKey = fromConfig || fromEnv;
+  try {
+    const payload = {
+      location: 'main.ts:initializeAgentAsync',
+      message: 'API key source',
+      data: {
+        hasConfigKey: !!fromConfig,
+        configKeyLen: fromConfig ? fromConfig.length : 0,
+        hasEnvKey: !!fromEnv,
+        envKeyLen: fromEnv ? fromEnv.length : 0,
+        hasApiKey: !!apiKey,
+        activeProviderId: configStore.get('activeProviderId')
+      },
+      timestamp: Date.now(),
+      hypothesisId: 'H3,H4'
+    };
+    fs.appendFileSync(path.join(app.getPath('userData'), 'debug-launch.log'), JSON.stringify(payload) + '\n');
+    fetch('http://127.0.0.1:7242/ingest/c9da8242-409a-4cac-8926-c6d816aecb2e', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).catch(() => {});
+  } catch (_e) {}
+  // #endregion
+
   const model = configStore.getModel()
   const apiUrl = configStore.getApiUrl()
 
@@ -1843,27 +3654,66 @@ function initializeAgent() {
       console.log('Disposing previous main agent instance...');
       mainAgent.dispose();
     }
-    // Note: Don't dispose floatingBallAgent here as it will be created independently in createFloatingBallWindow
 
-    // Create separate agent for main window only
+    // Create agent instance (fast, no IO)
     const maxTokens = configStore.getMaxTokens();
     mainAgent = new AgentRuntime(apiKey, mainWin, model, apiUrl, maxTokens);
+    mainAgent.onShrinkWindow = () => shrinkMainWindowToBottomRight();
+    mainAgent.onMaximizeBrowserWindow = () => maximizeChromeForTesting();
 
-    // Initialize the agent asynchronously
-    mainAgent.initialize().then(() => {
-      console.log('Main agent initialized with model:', model);
-    }).catch(err => {
-      console.error('Main agent initialization failed:', err);
-    });
+    // Initialize Skills + MCP in parallel (the slow part)
+    sendInitProgress('加载 Skills', 30)
+    await mainAgent.initialize()
+    sendInitProgress('AI 引擎就绪', 70)
+    console.log('Main agent initialized with model:', model);
 
     // Set global references for backward compatibility
     (global as Record<string, unknown>).agent = mainAgent;
     (global as Record<string, unknown>).mainAgent = mainAgent;
 
     console.log('API URL:', apiUrl)
+    
+    // 主 agent 就绪后，立即初始化浮窗 agent（如果窗口已创建）
+    if (floatingBallWin && !floatingBallAgent) {
+      initializeFloatingBallAgent()
+    }
+    return { skipped: false }
   } else {
-    console.warn('No API Key found. Please configure in Settings.')
+    console.warn('[Main] No API Key found. Agent initialization skipped. Please configure API Key in Settings.')
+    return { skipped: true, reason: 'no_api_key' }
   }
+}
+
+/** 同步版本 - 仅供 IPC 重新初始化时使用 */
+function initializeAgent() {
+  initializeAgentAsync().catch(err => {
+    console.error('Agent initialization failed:', err)
+  })
+}
+
+/** 初始化浮窗 agent - 主 agent 就绪后调用，避免重复加载 skills */
+function initializeFloatingBallAgent() {
+  if (floatingBallAgent || !mainAgent) {
+    // 如果已创建或主 agent 未就绪，直接返回（不再循环等待）
+    return
+  }
+  
+  const apiKey = configStore.getApiKey() || process.env.ANTHROPIC_API_KEY
+  if (!apiKey || !floatingBallWin) return
+
+  console.log('[Main] Creating floating ball agent (main agent is ready)...')
+  floatingBallAgent = new AgentRuntime(apiKey, floatingBallWin, configStore.getModel(), configStore.getApiUrl(), configStore.getMaxTokens());
+  floatingBallAgent.onShrinkWindow = () => shrinkMainWindowToBottomRight();
+  floatingBallAgent.onMaximizeBrowserWindow = () => maximizeChromeForTesting();
+
+  // Skills 和 MCP 已被主 agent 加载过，这里的 initialize 会命中 SkillManager 的 cooldown 缓存
+  floatingBallAgent.initialize().then(() => {
+    console.log('Floating ball agent created independently');
+  }).catch(err => {
+    console.error('Floating ball agent initialization failed:', err);
+  });
+
+  (global as Record<string, unknown>).floatingBallAgent = floatingBallAgent
 }
 
 function createTray() {
@@ -1946,20 +3796,46 @@ function createMainWindow() {
   const DEFAULT_WINDOW_WIDTH = 560;
   const DEFAULT_WINDOW_HEIGHT = 720;
 
+  // ========== 浏览器预览诊断日志 ==========
+  const preloadPath = path.join(__dirname, 'preload.mjs');
+  console.log('[Browser:Diag] ==================== 浏览器预览诊断 ====================');
+  console.log('[Browser:Diag] preload 路径:', preloadPath);
+  console.log('[Browser:Diag] preload 存在:', fs.existsSync(preloadPath));
+  console.log('[Browser:Diag] __dirname:', __dirname);
+  console.log('[Browser:Diag] VITE_DEV_SERVER_URL:', VITE_DEV_SERVER_URL);
+  console.log('[Browser:Diag] RENDERER_DIST:', RENDERER_DIST);
+  console.log('[Browser:Diag] RENDERER_DIST 存在:', fs.existsSync(RENDERER_DIST));
+  console.log('[Browser:Diag] app.isPackaged:', app.isPackaged);
+  console.log('[Browser:Diag] process.resourcesPath:', process.resourcesPath);
+  
+  // 检查 dist 目录内容
+  if (fs.existsSync(RENDERER_DIST)) {
+    try {
+      const distFiles = fs.readdirSync(RENDERER_DIST);
+      console.log('[Browser:Diag] RENDERER_DIST 内容:', distFiles.join(', '));
+      // 检查 index.html 是否存在
+      const indexPath = path.join(RENDERER_DIST, 'index.html');
+      console.log('[Browser:Diag] index.html 存在:', fs.existsSync(indexPath));
+    } catch (e) {
+      console.error('[Browser:Diag] 读取 RENDERER_DIST 失败:', e);
+    }
+  }
+  console.log('[Browser:Diag] ==================== 浏览器预览诊断结束 ====================');
+
   mainWin = new BrowserWindow({
     width: DEFAULT_WINDOW_WIDTH,
     height: DEFAULT_WINDOW_HEIGHT,
-    minWidth: 400,
+    minWidth: 430,
     minHeight: 600,
     icon: iconImage || iconPath,
     frame: false, // Custom frame for consistent look
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden', // Mac: inset buttons, others: hidden
-    backgroundColor: '#ffffff',
+    backgroundColor: '#18181b', // 与 index.html 极简 loading 一致，无白屏/黑屏闪变
     webPreferences: {
-      preload: path.join(__dirname, 'preload.mjs'),
+      preload: preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: true
+      webSecurity: true,
     },
     show: false,
   })
@@ -2015,6 +3891,19 @@ function createMainWindow() {
         ]
       },
       {
+        label: 'Terminal',
+        submenu: [
+          {
+            label: 'New Terminal Window',
+            accelerator: 'CmdOrCtrl+Shift+T',
+            click: () => {
+              const cwd = mainWin ? (mainWin.webContents as any).cwd || process.cwd() : process.cwd();
+              createTerminalWindow(cwd, `terminal-window-${Date.now()}`);
+            }
+          }
+        ]
+      },
+      {
         label: 'Window',
         submenu: [
           { role: 'minimize' },
@@ -2046,21 +3935,32 @@ function createMainWindow() {
   }
 
   mainWin.once('ready-to-show', () => {
-    console.log('Main window ready.')
-    // 确保窗口显示在最前面
-    mainWin?.show()
-    mainWin?.focus()
+    console.log('Main window ready (staying hidden until did-finish-load).')
+    // 不在首帧显示，等 did-finish-load 后再显示，避免白屏；期间仅 dock/任务栏跳动
   })
 
-  // Handle external links：localhost 用内置浏览器打开，不启动系统默认浏览器
+  // Handle external links：localhost 和部署域名用内置浏览器打开，其他用系统浏览器
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
+    // localhost / 127.0.0.1 - 使用内置浏览器，不缩小窗口
     if (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1') ||
         url.startsWith('https://localhost') || url.startsWith('https://127.0.0.1')) {
       mainWin?.webContents.send('agent:open-browser-preview', url)
       return { action: 'deny' }
     }
+    // 部署相关域名 - 使用内置浏览器，不缩小窗口
+    if (url.includes('.autocode.test.sankuai.com') || url.includes('aie.sankuai.com/rdc_host')) {
+      mainWin?.webContents.send('agent:open-browser-preview', url)
+      return { action: 'deny' }
+    }
+    // 美团内网 - 使用内置浏览器打开，避免用系统默认浏览器导致「扫码用户登录」报错
+    if (url.includes('.sankuai.com') || url.includes('.meituan.com')) {
+      mainWin?.webContents.send('agent:open-browser-preview', url)
+      return { action: 'deny' }
+    }
+    // 其他外部链接 - 使用系统默认浏览器，缩小窗口至右下角
     if (url.startsWith('https:') || url.startsWith('http:')) {
       shell.openExternal(url)
+      shrinkMainWindowToBottomRight()
       return { action: 'deny' }
     }
     return { action: 'allow' }
@@ -2073,55 +3973,65 @@ function createMainWindow() {
     }
   })
 
+  // 监听主窗口加载状态，排查客户端打包后页面无法加载的问题（仅主 frame，iframe 失败不误报）
+  mainWin.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) {
+      // 内置预览 iframe 加载失败（如 ERR_CONNECTION_REFUSED），通知渲染进程立即显示错误，无需等待超时
+      console.warn('[Browser:Diag] 内置预览 iframe 加载失败:', { errorCode, errorDescription, validatedURL });
+      if (errorCode === -102) {
+        mainWin?.webContents.send('agent:iframe-load-failed', validatedURL);
+      }
+      return;
+    }
+    console.error('[Browser:Diag] 主窗口加载失败!', { errorCode, errorDescription, validatedURL });
+  });
+  mainWin.webContents.on('did-start-loading', () => {
+    console.log('[Browser:Diag] 主窗口开始加载...');
+  });
+  mainWin.webContents.on('did-stop-loading', () => {
+    console.log('[Browser:Diag] 主窗口停止加载');
+  });
+  mainWin.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Browser:Diag] 渲染进程已退出!', details);
+  });
+  mainWin.webContents.on('unresponsive', () => {
+    console.error('[Browser:Diag] 渲染进程无响应!');
+  });
+
   mainWin.webContents.on('did-finish-load', () => {
+    console.log('[Browser:Diag] 主窗口加载完成 (did-finish-load)');
+    // loading 页已就绪，此时再显示窗口，用户看到即为 loading 效果，无白屏
+    if (!mainWin?.isVisible()) {
+      mainWin?.show();
+      mainWin?.focus();
+    }
     mainWin?.webContents.send('main-process-message', (new Date).toLocaleString())
     
-    // 自动加载最近一次会话
-    const tryLoadLatestSession = () => {
-      try {
-        // 确保 agent 已初始化
-        if (!mainAgent) {
-          console.log('[Main] Agent not ready yet, retrying in 500ms...')
-          setTimeout(tryLoadLatestSession, 500)
-          return
-        }
-        
-        const sessions = sessionStore.getSessions()
-        if (sessions && sessions.length > 0) {
-          // 按更新时间排序，获取最近一次会话
-          const sortedSessions = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
-          const latestSession = sortedSessions[0]
-          
-          if (latestSession) {
-            console.log(`[Main] Auto-loading latest session: ${latestSession.id} (${latestSession.title})`)
-            // 设置当前会话ID
-            sessionStore.setSessionId(latestSession.id, false)
-            // 加载会话历史
-            const fullSession = sessionStore.getSession(latestSession.id)
-            if (fullSession && fullSession.messages.length > 0) {
-              mainAgent.loadHistory(fullSession.messages)
-              // 通知渲染进程会话已加载
-              mainWin?.webContents.send('session:auto-loaded', latestSession.id)
-              console.log(`[Main] Successfully auto-loaded session: ${latestSession.title}`)
-            }
-          }
-        } else {
-          console.log('[Main] No sessions found, skipping auto-load')
-        }
-      } catch (error) {
-        console.error('[Main] Error auto-loading latest session:', error)
-      }
-    }
-    
-    // 延迟一下确保 agent 已初始化
-    setTimeout(tryLoadLatestSession, 500)
+    // === 延迟初始化：窗口已显示后再执行重操作，避免白屏 ===
+    deferredInitialization()
   })
 
   if (VITE_DEV_SERVER_URL) {
+    console.log('[Browser:Diag] 开发模式: 加载 URL:', VITE_DEV_SERVER_URL);
     mainWin.loadURL(VITE_DEV_SERVER_URL)
   } else {
     const distPath = getRendererDistPath()
-    mainWin.loadFile(path.join(distPath, 'index.html'))
+    const indexPath = path.join(distPath, 'index.html');
+    console.log('[Browser:Diag] 生产模式: 加载文件:', indexPath);
+    console.log('[Browser:Diag] distPath:', distPath);
+    console.log('[Browser:Diag] index.html 存在:', fs.existsSync(indexPath));
+    if (!fs.existsSync(indexPath)) {
+      console.error('[Browser:Diag] ❌ index.html 不存在! 这是页面无法加载的原因!');
+      // 列出 distPath 下的文件
+      if (fs.existsSync(distPath)) {
+        console.log('[Browser:Diag] distPath 内容:', fs.readdirSync(distPath).join(', '));
+      } else {
+        console.error('[Browser:Diag] distPath 也不存在:', distPath);
+        // 列出 resourcesPath 下的文件
+        console.log('[Browser:Diag] resourcesPath 内容:', fs.readdirSync(process.resourcesPath).join(', '));
+      }
+    }
+    mainWin.loadFile(indexPath)
   }
 }
 
@@ -2139,6 +4049,7 @@ function createFloatingBallWindow() {
     resizable: false,
     hasShadow: false,
     skipTaskbar: true,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
     },
@@ -2162,22 +4073,12 @@ function createFloatingBallWindow() {
   })
 
   // Create independent agent for floating ball after window is created
+  // Note: Initialization is deferred until main agent is ready to avoid duplicate skill loading
   floatingBallWin.webContents.on('did-finish-load', () => {
-    if (!floatingBallAgent) {
-      // Create floating ball agent with same config as main agent
-      const apiKey = configStore.getApiKey() || process.env.ANTHROPIC_API_KEY
-      if (apiKey && floatingBallWin) {
-        floatingBallAgent = new AgentRuntime(apiKey, floatingBallWin, configStore.getModel(), configStore.getApiUrl(), configStore.getMaxTokens());
-
-        // Initialize the agent asynchronously
-        floatingBallAgent.initialize().then(() => {
-          console.log('Floating ball agent created independently');
-        }).catch(err => {
-          console.error('Floating ball agent initialization failed:', err);
-        });
-
-        (global as Record<string, unknown>).floatingBallAgent = floatingBallAgent
-      }
+    // 只有在主 agent 已就绪时才创建浮窗 agent
+    // 否则等待主 agent 初始化完成后主动调用
+    if (mainAgent) {
+      initializeFloatingBallAgent()
     }
   })
 }
@@ -2244,3 +4145,68 @@ setInterval(() => {
     floatingBallWin.setAlwaysOnTop(true, 'screen-saver')
   }
 }, 2000)
+
+function createTerminalWindow(cwd: string, windowId: string, instanceId?: string): BrowserWindow {
+  const iconPath = getIconPath()
+  let iconImage = undefined
+  try {
+    iconImage = nativeImage.createFromPath(iconPath)
+    if (iconImage.isEmpty()) {
+      iconImage = undefined
+    }
+  } catch (e) {
+    console.error('Failed to load icon:', e)
+  }
+
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize
+  const win = new BrowserWindow({
+    width: 800,
+    height: 600,
+    minWidth: 400,
+    minHeight: 300,
+    icon: iconImage || iconPath,
+    frame: true,
+    title: `Terminal - ${path.basename(cwd)}`,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.mjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  })
+
+  // Center window on screen
+  const x = Math.floor((screenWidth - 800) / 2)
+  const y = Math.floor((screenHeight - 600) / 2)
+  win.setPosition(x, y)
+
+  const instanceIdParam = instanceId ? `&instanceId=${encodeURIComponent(instanceId)}` : '';
+  if (VITE_DEV_SERVER_URL) {
+    win.loadURL(`${VITE_DEV_SERVER_URL}#/terminal-window?cwd=${encodeURIComponent(cwd)}&windowId=${encodeURIComponent(windowId)}${instanceIdParam}`)
+  } else {
+    const distPath = getRendererDistPath()
+    win.loadFile(path.join(distPath, 'index.html'), {
+      hash: `terminal-window?cwd=${encodeURIComponent(cwd)}&windowId=${encodeURIComponent(windowId)}${instanceIdParam}`,
+    })
+  }
+
+  win.on('closed', () => {
+    // Clean up all terminal sessions created in this window
+    terminalSessions.forEach((session, id) => {
+      if (session.windowId === windowId) {
+        if (session.pty) {
+          try {
+            session.pty.kill()
+          } catch (_) {
+            /* ignore */
+          }
+        } else if (session.process) {
+          session.process.kill()
+        }
+        terminalSessions.delete(id)
+      }
+    })
+    terminalWindows.delete(windowId)
+  })
+
+  return win
+}

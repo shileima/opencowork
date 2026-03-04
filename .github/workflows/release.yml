@@ -6,6 +6,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release 版本号（如 v1.0.11），用于手动触发时创建 Release'
+        required: true
+        default: 'v1.0.13'
 
 # 创建/上传 GitHub Release 必须显式声明 contents: write，否则 GITHUB_TOKEN 仅读会 403
 permissions:
@@ -15,11 +21,12 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     outputs:
       release_url: ${{ steps.create_release.outputs.url }}
+      tag_name: ${{ steps.extract_version.outputs.version }}
     steps:
       -
         name: Check out Git repository
@@ -28,11 +35,19 @@ jobs:
       -
         name: Extract version from tag
         id: extract_version
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "version=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
       -
         name: Create Release
         id: create_release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.extract_version.outputs.version }}
@@ -44,7 +59,7 @@ jobs:
   release:
     runs-on: ${{ matrix.os }}
     needs: create-release
-    if: always() && needs.create-release.result == 'success'
+    if: always() && (needs.create-release.result == 'success' || github.event_name == 'release')
     permissions:
       contents: write
 
@@ -84,51 +99,141 @@ jobs:
           node-version: 20
 
       -
+        name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      -
         name: Install dependencies
-        run: bun install --frozen-lockfile
+        env:
+          npm_config_registry: https://registry.npmjs.org
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+        run: pnpm install --frozen-lockfile
+
+      -
+        name: Download and prepare Node.js runtimes
+        run: node scripts/download-node.mjs
+
+      -
+        name: Prepare npm for Node.js runtimes
+        run: node scripts/prepare-node-npm.mjs
+
+      -
+        name: Prepare pnpm for Node.js runtimes
+        run: node scripts/prepare-pnpm.mjs
+
+      -
+        name: Prepare Playwright package
+        run: |
+          mkdir -p resources/playwright/package
+          cp -r node_modules/playwright resources/playwright/package/
 
       -
         name: Run TypeScript compiler check
-        run: bun run lint || echo "Lint check completed with warnings"
-
-      -
-        name: Verify resources
-        run: bun run verify:resources
+        run: pnpm run lint || true
 
       -
         name: Build and Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
         run: |
-          bun run verify:resources
-          npx tsc
-          npx vite build
-          # 必须加 --publish never，由下方 action-gh-release 统一上传；否则 electron-builder 会尝试发布到 electron-builder.json5 配置的 repo 导致 403
-          npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+          node scripts/verify-builtin-resources.cjs
+          pnpm exec tsc
+          pnpm exec vite build
+          pnpm exec electron-builder --${{ matrix.platform }} --publish never
 
       -
-        name: Rename artifacts for Mac
-        if: matrix.platform == 'macos'
+        name: Generate Resource Manifest
+        if: success()
+        run: pnpm run build:manifest
+
+      -
+        name: Package Resources
+        if: success() && matrix.platform == 'linux'  # 只在 Linux 平台执行一次
         run: |
-          cd release/*/ || true
-          for file in *.dmg; do
-            if [ -f "$file" ]; then
-              new_name="${file/x64/${{ matrix.arch_name }}}"
-              new_name="${new_name/arm64/${{ matrix.arch_name }}}"
-              mv "$file" "$new_name"
-            fi
-          done
+          # 提取版本号
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Packaging resources for version ${VERSION}"
+          
+          # 创建临时目录
+          mkdir -p temp-resources
+          
+          # 复制前端资源
+          if [ -d "dist" ]; then
+            echo "Copying dist/"
+            cp -r dist temp-resources/
+          fi
+          
+          # 创建 resources 目录
+          mkdir -p temp-resources/resources
+          
+          # 复制各个资源子目录(使用 || true 避免目录不存在时失败)
+          if [ -d "resources/skills" ]; then
+            echo "Copying resources/skills/"
+            cp -r resources/skills temp-resources/resources/
+          fi
+          
+          if [ -d "resources/mcp" ]; then
+            echo "Copying resources/mcp/"
+            cp -r resources/mcp temp-resources/resources/
+          fi
+          
+          if [ -d "resources/node" ]; then
+            echo "Copying resources/node/"
+            cp -r resources/node temp-resources/resources/
+          fi
+          
+          if [ -d "resources/playwright" ]; then
+            echo "Copying resources/playwright/"
+            cp -r resources/playwright temp-resources/resources/
+          fi
+          
+          if [ -d "resources/templates" ]; then
+            echo "Copying resources/templates/"
+            cp -r resources/templates temp-resources/resources/
+          fi
+          
+          # 打包为 zip
+          cd temp-resources
+          zip -r ../resources-v${VERSION}.zip . -x "*.DS_Store" -x "__MACOSX/*"
+          cd ..
+          
+          # 验证 zip 文件
+          ls -lh resources-v${VERSION}.zip
+          unzip -l resources-v${VERSION}.zip | head -20
+          
+          # 清理临时目录
+          rm -rf temp-resources
+          
+          echo "Resource package created: resources-v${VERSION}.zip"
 
       -
         name: Upload executables to Release
         uses: softprops/action-gh-release@v2
         if: success()
         with:
+          tag_name: ${{ needs.create-release.outputs.tag_name }}
           files: |
-            release/*/OpenCowork*.dmg
-            release/*/OpenCowork*.exe
-            release/*/OpenCowork*.AppImage
-            release/*/OpenCowork*.deb
+            release/*/*.dmg
+            release/*/*.exe
+            release/*/*.AppImage
+            release/*/*.deb
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      -
+        name: Upload resource files to Release (Linux only)
+        uses: softprops/action-gh-release@v2
+        if: success() && matrix.platform == 'linux'
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag_name }}
+          files: |
+            resource-manifest.json
+            resources-*.zip
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -134,9 +134,11 @@ export function FloatingChat({
                                             <div className="bg-stone-200/80 dark:bg-secondary text-stone-800 dark:text-foreground rounded-2xl px-5 py-4 text-sm leading-relaxed shadow-sm">
                                                 {msg.content}
                                             </div>
-                                            <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <CopyButton content={msg.content} size="sm" />
-                                            </div>
+                                            {msg.content && msg.content.trim().length > 0 && (
+                                                <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <CopyButton content={msg.content} size="sm" />
+                                                </div>
+                                            )}
                                         </div>
                                     ) : (
                                         <div className="space-y-4 w-full">
@@ -144,9 +146,11 @@ export function FloatingChat({
                                                 <p className="text-stone-700 dark:text-foreground text-base leading-7 pr-8">
                                                     {msg.content}
                                                 </p>
-                                                <div className="absolute right-0 bottom-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <CopyButton content={msg.content} size="sm" />
-                                                </div>
+                                                {msg.content && msg.content.trim().length > 0 && (
+                                                    <div className="absolute right-0 bottom-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <CopyButton content={msg.content} size="sm" />
+                                                    </div>
+                                                )}
                                             </div>
 
                                             {msg.stepsCount && msg.stepsCount > 0 && (

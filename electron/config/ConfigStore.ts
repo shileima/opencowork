@@ -1,5 +1,6 @@
 import Store from 'electron-store';
 import logger from '../services/Logger';
+import { decryptApiKey, isEncrypted, extractEncryptedData } from '../utils/encryption';
 
 export interface ToolPermission {
     tool: string;           // 'write_file', 'run_command', etc.
@@ -16,6 +17,7 @@ export interface ProviderConfig {
     maxTokens?: number;
     isCustom?: boolean;
     readonlyUrl?: boolean;
+    isPreset?: boolean; // 标识是否为预设配置（加密的 API Key）
 }
 
 export type TrustLevel = 'strict' | 'standard' | 'trust';
@@ -39,6 +41,12 @@ export interface AppConfig {
 
     // User Role
     userRole?: 'user' | 'admin'; // 用户角色：普通用户或超级管理员
+
+    // Terminal Mode
+    terminalMode?: 'pty' | 'pipe' | 'auto'; // 终端模式：pty=强制PTY，pipe=强制Pipe，auto=自动选择
+
+    // UI Layout
+    chatEditorSplitRatio?: number; // 聊天/编辑器分割比例（0-100，默认 50）
 }
 
 const DEFAULT_MAX_TOKENS = 131072;
@@ -84,12 +92,13 @@ const defaultProviders: Record<string, ProviderConfig> = {
     'custom': {
         id: 'custom',
         name: '自定义',
-        apiKey: '',
-        apiUrl: '',
-        model: '',
+        apiKey: 'ENCRYPTED:zGZwbvx1R37mveafnzwneQ==:lEy+LbvgUNPM3VDoDBWhdMXtyB78h3tTxDPTKJtwB2U+nXEmp7pTX6xGJ4H1y/ZB',
+        apiUrl: 'https://ccr.waimai.test.sankuai.com',
+        model: 'oneapi,aws.claude-sonnet-4.5',
         maxTokens: DEFAULT_MAX_TOKENS,
         isCustom: true,
-        readonlyUrl: false
+        readonlyUrl: false,
+        isPreset: true
     }
 };
 
@@ -105,8 +114,10 @@ const defaults: AppConfig = {
     networkAccess: true,
     shortcut: 'Alt+Space',
     allowedPermissions: [],
-    activeProviderId: 'minimax_intl', // Default to what we had
-    providers: defaultProviders
+    activeProviderId: 'custom', // 默认使用预设的自定义配置
+    providers: defaultProviders,
+    terminalMode: 'auto', // 默认自动选择模式
+    chatEditorSplitRatio: 50 // 默认聊天/编辑器各占 50%
 };
 
 class ConfigStore {
@@ -118,7 +129,40 @@ class ConfigStore {
             defaults: defaults as any
         });
 
+        this.decryptPresetKeys();
         this.migrate();
+    }
+
+    /**
+     * 解密预设的 API 密钥
+     * 在应用启动时自动解密加密的 API Key
+     */
+    private decryptPresetKeys() {
+        try {
+            const providers = this.store.get('providers') || defaultProviders;
+            let hasChanges = false;
+
+            for (const [id, provider] of Object.entries(providers) as [string, ProviderConfig][]) {
+                // Check if this provider has a preset config in defaults
+                const defaultProvider = defaultProviders[id];
+                if (defaultProvider?.isPreset) {
+                    // Ensure isPreset flag is set
+                    if (!provider.isPreset) {
+                        provider.isPreset = true;
+                        hasChanges = true;
+                    }
+                }
+
+                // Note: We do NOT decrypt here anymore. Decryption happens on-demand in getAllProviders()
+                // This ensures the encrypted key stays in the config file and is never saved as plaintext
+            }
+
+            if (hasChanges) {
+                this.store.set('providers', providers);
+            }
+        } catch (error) {
+            console.error('[ConfigStore] Failed to process preset keys:', error);
+        }
     }
 
     private migrate() {
@@ -142,6 +186,40 @@ class ConfigStore {
             this.store.delete('apiKey');
             this.store.delete('apiUrl');
             this.store.delete('model');
+        }
+
+        // Combined migration pass: ensure all defaultProviders exist AND clear stale encrypted keys.
+        // electron-store only fills missing top-level keys, so we deep-merge defaultProviders manually.
+        const storedProviders = this.store.get('providers');
+        if (storedProviders) {
+            let needsUpdate = false;
+            const updatedProviders = { ...storedProviders };
+
+            // 1. Add any new providers introduced in this app version
+            for (const [id, defaultProvider] of Object.entries(defaultProviders)) {
+                if (!updatedProviders[id]) {
+                    console.log(`[ConfigStore] migrate: adding missing provider '${id}' from defaults`);
+                    updatedProviders[id] = { ...defaultProvider };
+                    needsUpdate = true;
+                }
+            }
+
+            // 2. Clear keys that were encrypted with an old machine-based key (pre fixed-key scheme)
+            for (const [id, provider] of Object.entries(updatedProviders) as [string, ProviderConfig][]) {
+                if (provider.apiKey && isEncrypted(provider.apiKey)) {
+                    try {
+                        decryptApiKey(extractEncryptedData(provider.apiKey));
+                    } catch {
+                        console.warn(`[ConfigStore] Clearing stale encrypted key for provider ${id} (encrypted with old machine key)`);
+                        updatedProviders[id] = { ...provider, apiKey: '' };
+                        needsUpdate = true;
+                    }
+                }
+            }
+
+            if (needsUpdate) {
+                this.store.set('providers', updatedProviders);
+            }
         }
 
         // Migrate authorizedFolders from string[] to FolderAuthorization[]
@@ -197,16 +275,42 @@ class ConfigStore {
         const stored = providers[id];
         const def = defaultProviders[id];
 
+        const resolveApiKey = (raw: string | undefined): string => {
+            if (!raw || !isEncrypted(raw)) return raw || '';
+            try {
+                return decryptApiKey(extractEncryptedData(raw));
+            } catch (error) {
+                console.error(`[ConfigStore] Failed to decrypt API key for provider ${id}:`, error);
+                return '';
+            }
+        };
+
         if (stored && def && !stored.isCustom) {
-            // Force update built-in fields that shouldn't change
             return {
                 ...stored,
                 apiUrl: def.apiUrl,
                 model: def.model,
-                readonlyUrl: def.readonlyUrl
+                readonlyUrl: def.readonlyUrl,
+                apiKey: resolveApiKey(stored.apiKey || def.apiKey),
             };
         }
-        return stored;
+        if (stored) {
+            // For isCustom providers with isPreset flag, fall back to def.apiKey if stored is empty
+            const rawKey = stored.apiKey || (stored.isPreset && def?.apiKey ? def.apiKey : '');
+            return {
+                ...stored,
+                apiKey: resolveApiKey(rawKey),
+            };
+        }
+        // Fallback: provider not in store yet (e.g. new provider added in app update), use default
+        if (def) {
+            console.log(`[ConfigStore] getProvider: '${id}' not in store, falling back to default`);
+            return {
+                ...def,
+                apiKey: resolveApiKey(def.apiKey),
+            };
+        }
+        return undefined;
     }
 
     getAllProviders(): Record<string, ProviderConfig> {
@@ -220,25 +324,70 @@ class ConfigStore {
             if (s && d && !s.isCustom) {
                 // For built-in providers, merge stored user data (apiKey) with default configs
                 // Only preserve user-modifiable fields, keep defaults for others
+                let apiKey = s.apiKey || d.apiKey;
+                
+                // Decrypt if encrypted
+                if (apiKey && isEncrypted(apiKey)) {
+                    try {
+                        const encryptedData = extractEncryptedData(apiKey);
+                        apiKey = decryptApiKey(encryptedData);
+                    } catch (error) {
+                        console.error(`[ConfigStore] Failed to decrypt API key for provider ${key}:`, error);
+                        apiKey = '';
+                    }
+                }
+
                 merged[key] = {
                     ...d,  // Start with defaults (url, model, readonlyUrl)
                     ...s,  // Overlay user data (apiKey should be preserved)
                     // Explicitly preserve these user-modifiable fields
-                    apiKey: s.apiKey || d.apiKey,
+                    apiKey: apiKey,
                     // Keep default values for these fields
                     apiUrl: d.apiUrl,
                     model: d.model,
-                    readonlyUrl: d.readonlyUrl
+                    readonlyUrl: d.readonlyUrl,
+                    isPreset: s.isPreset || d.isPreset // Preserve isPreset flag
                 };
             } else {
-                merged[key] = s;
+                // For custom providers, preserve all fields including isPreset
+                // Fall back to default apiKey if stored is empty and provider has isPreset flag
+                let apiKey = s.apiKey || (s.isPreset && d?.apiKey ? d.apiKey : '');
+                
+                // Decrypt if encrypted
+                if (apiKey && isEncrypted(apiKey)) {
+                    try {
+                        const encryptedData = extractEncryptedData(apiKey);
+                        apiKey = decryptApiKey(encryptedData);
+                    } catch (error) {
+                        console.error(`[ConfigStore] Failed to decrypt API key for provider ${key}:`, error);
+                        apiKey = '';
+                    }
+                }
+
+                merged[key] = {
+                    ...s,
+                    apiKey: apiKey
+                };
             }
         }
 
         // Then add any missing default providers
         for (const key in defaultProviders) {
             if (!merged[key]) {
-                merged[key] = { ...defaultProviders[key] };
+                let provider = { ...defaultProviders[key] };
+                
+                // Decrypt if encrypted
+                if (provider.apiKey && isEncrypted(provider.apiKey)) {
+                    try {
+                        const encryptedData = extractEncryptedData(provider.apiKey);
+                        provider.apiKey = decryptApiKey(encryptedData);
+                    } catch (error) {
+                        console.error(`[ConfigStore] Failed to decrypt API key for default provider ${key}:`, error);
+                        provider.apiKey = '';
+                    }
+                }
+
+                merged[key] = provider;
             }
         }
 
@@ -315,13 +464,21 @@ class ConfigStore {
             // Update each provider from the input
             for (const [id, provider] of Object.entries(cfg.providers)) {
                 if (mergedProviders[id]) {
+                    // Preserve isPreset flag from existing config (cannot be changed by user)
+                    const existingIsPreset = mergedProviders[id].isPreset;
+                    const existingApiKey = mergedProviders[id].apiKey;
+                    
                     // Merge with existing, preserving user data
                     mergedProviders[id] = {
                         ...mergedProviders[id],
                         ...provider,
                         // Ensure required fields exist
                         id: provider.id || id,
-                        name: provider.name || mergedProviders[id].name
+                        name: provider.name || mergedProviders[id].name,
+                        // Preserve isPreset flag (cannot be overwritten)
+                        isPreset: existingIsPreset,
+                        // For preset providers, preserve the existing API key (don't allow updates)
+                        apiKey: existingIsPreset ? existingApiKey : provider.apiKey
                     };
                 } else {
                     // New provider
@@ -331,6 +488,10 @@ class ConfigStore {
 
             this.store.set('providers', mergedProviders);
             logger.debug('[ConfigStore] Updated providers, keys:', Object.keys(mergedProviders));
+        }
+        if (cfg.chatEditorSplitRatio !== undefined) {
+            this.store.set('chatEditorSplitRatio', cfg.chatEditorSplitRatio);
+            console.log('[ConfigStore] Updated chatEditorSplitRatio:', cfg.chatEditorSplitRatio);
         }
 
         // Verify the save

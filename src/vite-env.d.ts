@@ -15,3 +15,4 @@ declare global {
         platform: NodeJS.Platform
     }
 }
+

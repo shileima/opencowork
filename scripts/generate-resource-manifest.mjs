@@ -17,11 +17,12 @@ const rootDir = path.join(__dirname, '..')
  * 需要监控更新的目录
  */
 const WATCH_DIRS = [
-  'dist',           // 前端构建产物
-  'resources/skills',  // 技能
-  'resources/mcp',     // MCP 配置
-  'resources/node',    // 内置 Node.js
-  'resources/playwright' // Playwright 浏览器
+  'dist',                  // 前端构建产物
+  'resources/skills',      // 技能
+  'resources/mcp',         // MCP 配置
+  'resources/node',        // 内置 Node.js
+  'resources/playwright',  // Playwright 浏览器
+  'resources/templates'    // 项目模板
 ]
 
 /**
