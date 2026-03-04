@@ -135,7 +135,7 @@ async function main() {
     id: 'custom',
     name: '自定义',
     apiKey: 'ENCRYPTED:${encrypted}',
-    apiUrl: 'http://ccr.waimai.test.sankuai.com',
+    apiUrl: 'https://ccr.waimai.test.sankuai.com',
     model: 'oneapi,aws.claude-sonnet-4.5',
     maxTokens: 131072,
     isCustom: true,

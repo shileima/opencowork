@@ -12,7 +12,7 @@
     "id": "custom",
     "name": "自定义",
     "apiKey": "sk-IxmaHhECm3gk3lgCD12246316c1543B58",
-    "apiUrl": "http://ccr.waimai.test.sankuai.com",
+    "apiUrl": "https://ccr.waimai.test.sankuai.com",
     "model": "oneapi,aws.claude-sonnet-4.5",
     "maxTokens": 131072,
     "isCustom": true,
