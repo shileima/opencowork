@@ -2,15 +2,12 @@ import Anthropic from '@anthropic-ai/sdk';
 import { BrowserWindow } from 'electron';
 
 import { FileSystemTools, ReadFileSchema, WriteFileSchema, ListDirSchema, RunCommandSchema, OpenBrowserPreviewSchema, ValidatePageSchema, KillProjectDevServerSchema } from './tools/FileSystemTools';
-import { SDKTools, EditSchema, GlobSchema, GrepSchema, WebFetchSchema, WebSearchSchema, TodoWriteSchema, AskUserQuestionSchema } from './tools/SDKTools';
 import { ErrorDetector, DetectedError } from './tools/ErrorDetector';
 import { ErrorFixer } from './tools/ErrorFixer';
 import { SkillManager } from './skills/SkillManager';
 import { MCPClientService } from './mcp/MCPClientService';
-import { AutoMemoryManager } from '../memory/AutoMemoryManager';
 import { permissionManager } from './security/PermissionManager';
 import { configStore } from '../config/ConfigStore';
-import { backgroundTaskManager, BackgroundTask } from './BackgroundTaskManager';
 import { directoryManager } from '../config/DirectoryManager';
 import { projectStore } from '../config/ProjectStore';
 import { sessionStore } from '../config/SessionStore';
@@ -266,10 +263,8 @@ export class AgentRuntime {
     private history: Anthropic.MessageParam[] = [];
     private windows: BrowserWindow[] = [];
     private fsTools: FileSystemTools;
-    private sdkTools: SDKTools;
     private skillManager: SkillManager;
     private mcpService: MCPClientService;
-    private autoMemory: AutoMemoryManager;
     private abortController: AbortController | null = null;
     private isProcessing = false;
     private pendingConfirmations: Map<string, { resolve: (approved: boolean) => void }> = new Map();
@@ -303,10 +298,8 @@ export class AgentRuntime {
         this.maxTokens = maxTokens;
         this.windows = [window];
         this.fsTools = new FileSystemTools();
-        this.sdkTools = new SDKTools(permissionManager, this);
         this.skillManager = SkillManager.getInstance();
-        this.mcpService = MCPClientService.getInstance();
-        this.autoMemory = new AutoMemoryManager();
+        this.mcpService = new MCPClientService();
         // Note: IPC handlers are now registered in main.ts, not here
     }
 
@@ -2024,6 +2017,22 @@ ${skillInfo.instructions}
     public dispose() {
         this.abort();
         this.mcpService.dispose();
+    }
+
+    public cleanupDestroyedWindows() {
+        this.windows = this.windows.filter(w => !w.isDestroyed());
+    }
+
+    public setSessionId(sessionId: string) {
+        sessionStore.setSessionId(sessionId, false);
+    }
+
+    public isProcessingMessage(): boolean {
+        return this.isProcessing;
+    }
+
+    public getLastProcessTime(): number {
+        return this.lastProcessTime;
     }
 }
 

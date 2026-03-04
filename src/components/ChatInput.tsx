@@ -35,7 +35,7 @@ export function ChatInput({
     mode,
     config,
     setConfig,
-    lockedProjectName,
+    lockedProjectName: _lockedProjectName,
     prefillText,
     onPrefillConsumed
 }: ChatInputProps) {

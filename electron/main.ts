@@ -3451,7 +3451,7 @@ ipcMain.handle('terminal:signal', async (_, id: string, signal: string) => {
   }
 });
 
-ipcMain.handle('terminal:resize', (_, id: string, _cols: number, _rows: number) => {
+ipcMain.handle('terminal:resize', (_, id: string, cols: number, rows: number) => {
   const session = terminalSessions.get(id);
   if (!session) {
     return { success: false, error: 'Terminal session not found' };

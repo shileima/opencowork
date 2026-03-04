@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
-import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, MessageCircle, Download, Play, Edit2, RefreshCw, FolderOpen, Terminal, FileText, Search, Globe, Code2, Cpu, FolderSearch, Wrench, Copy, RotateCcw, Files, Brain } from 'lucide-react';
+import { Zap, AlertTriangle, Check, X, Settings, History, Plus, Trash2, ChevronDown, MessageCircle, Download, Play, Edit2, RefreshCw, FolderOpen, Terminal, FileText, Search, Globe, Code2, Cpu, FolderSearch, Wrench, Copy, RotateCcw } from 'lucide-react';
 import { ChatInput } from './ChatInput';
 import { useI18n } from '../i18n/I18nContext';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import Anthropic from '@anthropic-ai/sdk';
 import { CopyButton } from './CopyButton';
 import { useToast } from './Toast';
-import { FileCanvasPanel } from './FileCanvas/FileCanvasPanel';
+// import { FileCanvasPanel } from './FileCanvas/FileCanvasPanel';
 
 type Mode = 'chat' | 'work' | 'automation';
 
@@ -1043,7 +1043,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                 isProcessing={isProcessing || isInternalProcessing}
                 workingDir={workingDir}
                 onSelectFolder={handleSelectFolder}
-                mode={mode}
+                mode={mode === 'chat' ? 'memory' : 'work'}
                 config={config}
                 setConfig={(newConfig) => {
                     setConfig(newConfig);

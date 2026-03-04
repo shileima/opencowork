@@ -4,7 +4,18 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 import { FloatingInput } from './FloatingInput';
 import { useI18n } from '../i18n/I18nContext';
 import { useToast } from './Toast';
-import { logger } from '../services/logger';
+
+const isDevelopment = process.env.NODE_ENV === 'development';
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const log = (...args: any[]) => { if (isDevelopment) console.log(...args); };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const warn = (...args: any[]) => console.warn(...args);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const error = (...args: any[]) => console.error(...args);
+
+function computeHistoryHash(messages: { role: string; content: unknown }[]): string {
+    return messages.map(m => `${m.role}:${typeof m.content === 'string' ? m.content.slice(0, 50) : JSON.stringify(m.content).slice(0, 50)}`).join('|');
+}
 
 type BallState = 'collapsed' | 'input' | 'expanded';
 
@@ -61,7 +72,7 @@ export function FloatingBallPage() {
         log('File path clicked in floating ball:', filePath);
         // 使用 Electron API 打开主页窗口并传递文件路径
         window.ipcRenderer.invoke('open-main-with-file', { filePath });
-    }, [log]);
+    }, []);
 
     // Update ref when sessionId changes
     useEffect(() => {
@@ -203,7 +214,7 @@ export function FloatingBallPage() {
                 role: 'assistant',
                 content: `⚠️ **错误发生**
 
-${error}
+${err}
 
 请检查配置后重试。如果问题持续存在，请查看控制台日志获取更多信息。`
             };
