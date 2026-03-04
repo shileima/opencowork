@@ -42,7 +42,7 @@ node scripts/encrypt-api-key.mjs
     id: 'custom',
     name: '自定义',
     apiKey: 'ENCRYPTED:I/8TmhI7yKbUOwCFkVeVCQ==:eWCxb+AuF7rUt51Y44qw0Y5mpL4Hd9ZziwBFRuHT5EXnTaep80DG+upbdNwo9oAz',
-    apiUrl: 'http://ccr.waimai.test.sankuai.com',
+    apiUrl: 'https://ccr.waimai.test.sankuai.com',
     model: 'oneapi,aws.claude-sonnet-4.5',
     maxTokens: 131072,
     isCustom: true,

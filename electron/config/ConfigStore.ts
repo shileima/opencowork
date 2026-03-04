@@ -92,7 +92,7 @@ const defaultProviders: Record<string, ProviderConfig> = {
         id: 'custom',
         name: '自定义',
         apiKey: 'ENCRYPTED:zGZwbvx1R37mveafnzwneQ==:lEy+LbvgUNPM3VDoDBWhdMXtyB78h3tTxDPTKJtwB2U+nXEmp7pTX6xGJ4H1y/ZB',
-        apiUrl: 'http://ccr.waimai.test.sankuai.com',
+        apiUrl: 'https://ccr.waimai.test.sankuai.com',
         model: 'oneapi,aws.claude-sonnet-4.5',
         maxTokens: DEFAULT_MAX_TOKENS,
         isCustom: true,
