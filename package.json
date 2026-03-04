@@ -1,7 +1,7 @@
 {
   "name": "qacowork",
   "private": true,
-  "version": "1.0.32",
+  "version": "1.0.33",
   "description": "QACowork - 你的数字测试同事",
   "author": {
     "name": "shileima",
@@ -12,7 +12,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-"dev:win": "chcp 65001 && vite",
+    "dev:win": "chcp 65001 && vite",
     "build": "node scripts/verify-builtin-resources.cjs && tsc && vite build && electron-builder --publish never",
     "build:dir": "node scripts/prepare-playwright.mjs && node scripts/verify-builtin-resources.cjs && tsc && vite build && node scripts/copy-playwright-wrapper.mjs && electron-builder --dir",
     "build:icons": "node scripts/build-icons.mjs",
