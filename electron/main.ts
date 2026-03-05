@@ -1403,6 +1403,12 @@ ipcMain.handle('window:maximize', () => {
   }
 })
 ipcMain.handle('window:close', () => mainWin?.hide())
+// 关闭主窗口（无编辑器 tab 时 Cmd+W 由渲染进程调用）
+ipcMain.handle('window:request-close', () => mainWin?.close())
+// Cmd+W：渲染进程处理（有关闭 tab 则关闭 tab），无 tab 时发送 app:cmd-w-result false，此处关闭窗口
+ipcMain.on('app:cmd-w-result', (_e, handled: boolean) => {
+  if (!handled && mainWin && !mainWin.isDestroyed()) mainWin.close()
+})
 ipcMain.handle('window:set-maximized', (_event, maximized: boolean) => {
   if (mainWin) {
     if (maximized) {
@@ -1985,6 +1991,40 @@ ipcMain.handle('project:get-current', () => {
 ipcMain.handle('project:ensure-working-dir', () => {
   const project = projectStore.getCurrentProject();
   if (project) applyProjectWorkingDirs(project);
+});
+
+// 在项目目录执行 oxfmt + oxlint --fix，用于编辑器「格式化并修复」按钮
+ipcMain.handle('project:format-fix', async (_, projectPath: string) => {
+  try {
+    const folders = configStore.getAll().authorizedFolders || [];
+    const normalizedPath = toAbsoluteFolderPath(projectPath);
+    const isAuthorized = folders.some((f: { path: string }) => {
+      const fp = toAbsoluteFolderPath(f.path);
+      return normalizedPath === fp || normalizedPath.startsWith(fp + path.sep);
+    });
+    if (!isAuthorized) {
+      return { success: false, error: 'Path not authorized' };
+    }
+    if (!fs.existsSync(normalizedPath)) {
+      return { success: false, error: 'Project directory does not exist' };
+    }
+    const shell = process.platform === 'win32' ? 'cmd' : 'sh';
+    const shellArg = process.platform === 'win32' ? '/c' : '-c';
+    const cmd = process.platform === 'win32'
+      ? 'pnpm exec oxfmt . & pnpm exec oxlint --fix'
+      : 'pnpm exec oxfmt . 2>/dev/null; pnpm exec oxlint --fix 2>/dev/null; true';
+    return new Promise((resolve) => {
+      const proc = cpSpawn(shell, [shellArg, cmd], { cwd: normalizedPath, env: { ...process.env, FORCE_COLOR: '0' } });
+      let stderr = '';
+      proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      proc.on('close', (code) => {
+        resolve({ success: code === 0 || code === null, error: stderr.trim() || undefined });
+      });
+      proc.on('error', (err) => resolve({ success: false, error: err.message }));
+    });
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 // 协作/会话模式：切换到 cowork 视图时，将默认工作目录设置为 ~/.qa-cowork
@@ -3861,7 +3901,15 @@ function createMainWindow() {
       {
         label: 'File',
         submenu: [
-          { role: 'close' }
+          {
+            label: 'Close',
+            accelerator: 'CmdOrCtrl+W',
+            click: () => {
+              if (mainWin && !mainWin.isDestroyed()) {
+                mainWin.webContents.send('app:cmd-w')
+              }
+            }
+          }
         ]
       },
       {

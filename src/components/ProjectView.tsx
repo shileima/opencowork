@@ -31,6 +31,8 @@ interface ProjectViewProps {
     onRegisterDeployHandler?: (handler: () => void) => void;
     /** 部署状态变更回调，供父组件更新按钮样式 */
     onDeployStatusChange?: (status: 'idle' | 'deploying' | 'success' | 'error') => void;
+    /** 注册 Cmd+W 处理函数（有编辑器 tab 时关闭 tab，否则关闭窗口），供 App 和主进程菜单使用 */
+    onRegisterCmdWHandler?: (handler: (() => boolean) | null) => void;
 }
 
 // 跟踪新任务的第一条消息，用于重命名
@@ -76,6 +78,7 @@ export function ProjectView({
     onRegisterPreviewHandler,
     onRegisterDeployHandler,
     onDeployStatusChange,
+    onRegisterCmdWHandler,
 }: ProjectViewProps) {
     const { t } = useI18n();
     const { showToast } = useToast();
@@ -99,6 +102,7 @@ export function ProjectView({
         closeBrowserTab?: () => void;
         closeAllTabs?: () => void;
         closeTabByFilePath?: (filePath: string) => void;
+        closeCurrentTab?: () => boolean;
     } | null>(null);
     const [pendingOpenFile, setPendingOpenFile] = useState<{ filePath: string; content: string } | null>(null);
     const multiTabEditorRefRef = useRef<typeof multiTabEditorRef>(null);
@@ -435,6 +439,8 @@ export function ProjectView({
             setCurrentProject(result.project);
             setShowCreateDialog(false);
             await loadCurrentProject();
+        } else if (result.error) {
+            showToast(result.error, 'error');
         }
     };
 
@@ -498,6 +504,13 @@ export function ProjectView({
             });
         }
     }, [onRegisterPreviewHandler]);
+
+    useEffect(() => {
+        if (onRegisterCmdWHandler) {
+            onRegisterCmdWHandler(() => multiTabEditorRef?.closeCurrentTab?.() ?? false);
+            return () => onRegisterCmdWHandler(null);
+        }
+    }, [onRegisterCmdWHandler, multiTabEditorRef]);
 
     // ─── 部署逻辑 ────────────────────────────────────────────────────────────────
     const deployLogRef = useRef<string>('');
@@ -668,17 +681,26 @@ export function ProjectView({
         }
     };
 
-    const handleFileChange = (filePath: string, content: string) => {
+    const handleFileChange = useCallback((filePath: string, content: string) => {
         setFileContents(prev => ({ ...prev, [filePath]: content }));
-    };
+    }, []);
 
-    const handleFileSave = async (filePath: string, content: string) => {
+    const handleFileSave = useCallback(async (filePath: string, content: string) => {
+        // 乐观更新：先更新 UI，避免等待 IPC 的视觉延迟
+        setFileContents(prev => ({ ...prev, [filePath]: content }));
         const result = await window.ipcRenderer.invoke('fs:write-file', filePath, content) as { success: boolean; error?: string };
-        if (result.success) {
-            // 更新文件内容
-            setFileContents(prev => ({ ...prev, [filePath]: content }));
+        if (!result.success) {
+            // 写入失败时回滚：重新从磁盘读取
+            try {
+                const read = await window.ipcRenderer.invoke('fs:read-file', filePath) as { success: boolean; content?: string };
+                if (read.success && read.content !== undefined) {
+                    setFileContents(prev => ({ ...prev, [filePath]: read.content! }));
+                }
+            } catch {
+                // 读失败则保留当前显示，由用户决定
+            }
         }
-    };
+    }, []);
 
     // 检查是否需要显示创建项目对话框（当没有项目时）
     useEffect(() => {

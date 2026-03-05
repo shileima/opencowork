@@ -35,11 +35,13 @@ function App() {
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
   const [deployStatus, setDeployStatus] = useState<'idle' | 'deploying' | 'success' | 'error'>('idle');
   const [agentInitFailed, setAgentInitFailed] = useState<string | null>(null);
   const previewHandlerRef = useRef<(() => void) | null>(null);
   const deployHandlerRef = useRef<(() => void) | null>(null);
+  const cmdWHandlerRef = useRef<(() => boolean) | null>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
   const projectButtonRef = useRef<HTMLButtonElement>(null);
   const { pendingRequest, handleConfirm, handleDeny } = useConfirmations();
@@ -120,6 +122,32 @@ function App() {
       loadCurrentProject();
     }
   }, [activeView, projects]);
+
+  // Cmd+W：有编辑器 tab 时关闭当前 tab，否则关闭窗口（与 Cursor 一致）
+  useEffect(() => {
+    const handleCmdW = (): boolean => cmdWHandlerRef.current?.() ?? false;
+
+    const removeIpc = window.ipcRenderer.on('app:cmd-w', () => {
+      const handled = handleCmdW();
+      window.ipcRenderer.send('app:cmd-w-result', handled);
+    });
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
+        e.preventDefault();
+        const handled = handleCmdW();
+        if (!handled) {
+          window.ipcRenderer.invoke('window:request-close');
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      removeIpc();
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
 
   // 监听项目创建和切换事件
   useEffect(() => {
@@ -203,7 +231,8 @@ function App() {
 
   const handleCreateNewProject = async () => {
     const name = newProjectName.trim();
-    if (!name) return;
+    if (!name || isCreatingProject) return;
+    setIsCreatingProject(true);
     try {
       const result = await window.ipcRenderer.invoke('project:create-new', name) as { success: boolean; error?: string; project?: unknown };
       if (result.success) {
@@ -219,6 +248,8 @@ function App() {
       }
     } catch (error) {
       console.error('Failed to create project:', error);
+    } finally {
+      setIsCreatingProject(false);
     }
   };
 
@@ -799,6 +830,7 @@ ${err}
             onRegisterPreviewHandler={(handler) => { previewHandlerRef.current = handler; }}
             onRegisterDeployHandler={(handler) => { deployHandlerRef.current = handler; }}
             onDeployStatusChange={(status) => setDeployStatus(status)}
+            onRegisterCmdWHandler={(handler) => { cmdWHandlerRef.current = handler; }}
           />
         )}
         {showSettings && (
@@ -816,19 +848,21 @@ ${err}
           aria-modal="true"
           aria-labelledby="new-project-dialog-title"
           onClick={() => {
-            setShowNewProjectDialog(false);
-            setNewProjectName('');
+            if (!isCreatingProject) {
+              setShowNewProjectDialog(false);
+              setNewProjectName('');
+            }
           }}
         >
           <div
             className="bg-white dark:bg-zinc-800 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-700 p-5 w-[420px] max-w-[90vw]"
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') {
+              if (e.key === 'Escape' && !isCreatingProject) {
                 setShowNewProjectDialog(false);
                 setNewProjectName('');
               }
-              if (e.key === 'Enter') handleCreateNewProject();
+              if (e.key === 'Enter' && !isCreatingProject) handleCreateNewProject();
             }}
           >
             <h2 id="new-project-dialog-title" className="text-base font-semibold text-stone-800 dark:text-zinc-100 mb-3">
@@ -844,7 +878,8 @@ ${err}
                   value={newProjectName}
                   onChange={(e) => setNewProjectName(e.target.value)}
                   placeholder={t('newProjectNamePlaceholder')}
-                  className="w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-stone-900 dark:text-zinc-100 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-400"
+                  disabled={isCreatingProject}
+                  className="w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-stone-900 dark:text-zinc-100 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-400 disabled:opacity-60 disabled:cursor-not-allowed"
                   autoFocus
                   aria-label={t('projectName')}
                 />
@@ -865,20 +900,30 @@ ${err}
               <button
                 type="button"
                 onClick={() => {
-                  setShowNewProjectDialog(false);
-                  setNewProjectName('');
+                  if (!isCreatingProject) {
+                    setShowNewProjectDialog(false);
+                    setNewProjectName('');
+                  }
                 }}
-                className="px-3 py-1.5 text-sm text-stone-600 dark:text-zinc-400 hover:bg-stone-100 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                disabled={isCreatingProject}
+                className="px-3 py-1.5 text-sm text-stone-600 dark:text-zinc-400 hover:bg-stone-100 dark:hover:bg-zinc-700 rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {t('cancel')}
               </button>
               <button
                 type="button"
                 onClick={handleCreateNewProject}
-                disabled={!newProjectName.trim()}
-                className="px-3 py-1.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+                disabled={!newProjectName.trim() || isCreatingProject}
+                className="px-3 py-1.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors inline-flex items-center justify-center gap-1.5 min-w-[100px]"
               >
-                {t('createProject')}
+                {isCreatingProject ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin shrink-0" aria-hidden />
+                    {t('creatingProject')}
+                  </>
+                ) : (
+                  t('createProject')
+                )}
               </button>
             </div>
           </div>

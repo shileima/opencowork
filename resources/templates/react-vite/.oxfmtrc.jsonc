@@ -1,0 +1,15 @@
+{
+  // Oxfmt config - Prettier-compatible
+  // https://oxc.rs/docs/guide/usage/formatter/config-file-reference
+  "printWidth": 100,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": true,
+  "trailingComma": "es5",
+  "bracketSpacing": true,
+  "arrowParens": "always",
+  "endOfLine": "lf",
+  "insertFinalNewline": true,
+  "ignorePatterns": ["dist", "node_modules", "pnpm-lock.yaml"],
+}

@@ -314,6 +314,7 @@ export const translations = {
         projectNameRule: 'Must start with a letter; only letters, numbers, underscores, and hyphens allowed.',
         projectPath: 'Project Path',
         createProject: 'Create Project',
+        creatingProject: 'Creating project...',
         selectProjectPath: 'Select Project Path',
         projectCreatePathFixed: '~/Library/Application Support/qacowork/projects',
         projectCreatePathHint: 'Projects will be created in the above directory; path cannot be changed.',
@@ -384,6 +385,8 @@ export const translations = {
         // Project View - Editor
         noTabsOpen: 'No tabs open',
         openFileHint: 'Click a file in the file explorer to open it in the editor',
+        formatFix: 'Format & Fix',
+        formatFixTitle: 'Run oxfmt and oxlint --fix to auto-format and fix lint issues',
 
         // Preview
         preview: 'Preview',
@@ -723,6 +726,7 @@ export const translations = {
         projectNameRule: '英文开头，仅可包含英文、数字、下划线、横杠',
         projectPath: '项目路径',
         createProject: '创建项目',
+        creatingProject: '创建项目中...',
         selectProjectPath: '选择项目路径',
         projectCreatePathFixed: '~/Library/Application Support/qacowork/projects',
         projectCreatePathHint: '项目将创建在上述目录下，不支持修改路径。',
@@ -793,6 +797,8 @@ export const translations = {
         // Project View - Editor
         noTabsOpen: '没有打开的标签页',
         openFileHint: '点击文件资源管理器中的文件打开编辑器',
+        formatFix: '格式化并修复',
+        formatFixTitle: '执行 oxfmt 和 oxlint --fix 自动格式化并修复 lint 问题',
 
         // Preview
         preview: '预览',

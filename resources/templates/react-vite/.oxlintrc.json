@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["dist", "node_modules", "**/*.config.*"],
+  "env": {
+    "browser": true,
+    "es2022": true
+  },
+  "plugins": ["react", "typescript"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "style": "warn",
+    "pedantic": "off"
+  },
+  "rules": {
+    "eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "react/rules-of-hooks": "error",
+    "react/react-in-jsx-scope": "off",
+    "eslint/sort-imports": "off",
+    "eslint/func-style": "off"
+  }
+}

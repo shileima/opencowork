@@ -57,6 +57,7 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
     const newItemInputRef = useRef<HTMLInputElement>(null);
     const authRetryRef = useRef<string | null>(null); // 权限错误重试：避免同一路径无限重试
     const deletedPathsRef = useRef<Set<string>>(new Set()); // 刚删除的路径，用于跳过 fs:file-changed 触发的重复刷新
+    const filesRef = useRef<FileItem[]>([]);
 
     const loadDirectory = useCallback(async (dirPath: string, recursive: boolean = false) => {
         try {
@@ -128,6 +129,11 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
         }
     }, [projectPath, loadDirectory]);
 
+    // 保持 filesRef 与 files 同步
+    useEffect(() => {
+        filesRef.current = files;
+    }, [files]);
+
     // 内联新建时聚焦输入框
     useEffect(() => {
         if (pendingNewItem && newItemInputRef.current) {
@@ -166,12 +172,23 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
                 d => filePath === d || filePath.startsWith(d + '/')
             );
             if (isRecentlyDeleted) return;
+
+            const existingFile = filesRef.current.find(f => f.path === filePath && !f.isDirectory);
+            const isExistingFileSave = !!existingFile;
+
             setSavingFilePath(filePath);
-            setTimeout(() => {
-                handleRefresh().then(() => {
-                    setTimeout(() => setSavingFilePath(null), 1200);
-                });
-            }, 300);
+
+            if (isExistingFileSave) {
+                // 已有文件内容保存：目录结构未变，跳过全量 refresh，仅展示保存指示 400ms
+                setTimeout(() => setSavingFilePath(null), 400);
+            } else {
+                // 新文件创建或目录变化：需全量刷新
+                setTimeout(() => {
+                    handleRefresh().then(() => {
+                        setTimeout(() => setSavingFilePath(null), 400);
+                    });
+                }, 50);
+            }
         });
 
         return () => {
@@ -296,10 +313,53 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
         }
         const parentDir = editingPath.substring(0, editingPath.lastIndexOf('/'));
         const newPath = `${parentDir}/${editValue.trim()}`;
+        if (editingPath === newPath) {
+            setEditingPath(null);
+            return;
+        }
         try {
             await window.ipcRenderer.invoke('fs:rename', editingPath, newPath);
             setEditingPath(null);
-            handleRefresh();
+            // 乐观更新：只更新该文件/文件夹的名称，无需全量递归刷新
+            const editingItem = files.find(f => f.path === editingPath);
+            if (editingItem) {
+                setFiles(prev => {
+                    return prev.map(f => {
+                        if (f.path === editingPath) {
+                            return { ...f, path: newPath, name: editValue.trim() };
+                        }
+                        // 子项：若路径以旧目录开头，替换为新区段
+                        if (editingItem.isDirectory && f.path.startsWith(editingPath + '/')) {
+                            return { ...f, path: newPath + f.path.slice(editingPath.length), name: f.name };
+                        }
+                        return f;
+                    });
+                });
+                setExpandedDirs(prev => {
+                    const next = new Set<string>();
+                    for (const p of prev) {
+                        if (p === editingPath) {
+                            next.add(newPath);
+                        } else if (editingItem.isDirectory && p.startsWith(editingPath + '/')) {
+                            next.add(newPath + p.slice(editingPath.length));
+                        } else {
+                            next.add(p);
+                        }
+                    }
+                    return next;
+                });
+                // 同步更新 selectedPath，保持选中状态
+                if (selectedPath === editingPath || (editingItem.isDirectory && selectedPath.startsWith(editingPath + '/'))) {
+                    setSelectedPath(selectedPath === editingPath ? newPath : newPath + selectedPath.slice(editingPath.length));
+                }
+            }
+            // 避免 fs:file-changed 触发重复全量刷新
+            deletedPathsRef.current.add(editingPath);
+            deletedPathsRef.current.add(newPath);
+            setTimeout(() => {
+                deletedPathsRef.current.delete(editingPath);
+                deletedPathsRef.current.delete(newPath);
+            }, 800);
         } catch (error) {
             console.error('Failed to rename:', error);
         }

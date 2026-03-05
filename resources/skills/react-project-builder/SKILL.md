@@ -46,7 +46,7 @@ When creating new projects, use the following **default stack** unless the user 
 ### A. Template-Based (OpenCowork New Project)
 
 When the project was created via OpenCowork, the template already includes:
-- package.json, vite.config.ts, tsconfig*, tailwind.config.js, postcss.config.js, eslint.config.js
+- package.json, vite.config.ts, tsconfig*, tailwind.config.js, postcss.config.js, .oxlintrc.json, .oxfmtrc.jsonc
 - src/main.tsx (with ConfigProvider), src/App.tsx, src/index.css, src/App.css
 - Ant Design, TailwindCSS, PostCSS pre-configured
 

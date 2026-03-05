@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Shell, HatGlasses, Globe } from 'lucide-react';
+import { X, Shell, HatGlasses, Globe, Wand2, Loader2 } from 'lucide-react';
 import { MonacoEditor } from './MonacoEditor';
 import { getFileIconConfig } from './fileIcons';
 import { TerminalPanel } from './TerminalPanel';
@@ -52,6 +52,8 @@ interface MultiTabEditorProps {
         closeAllTabs: () => void;
         /** 根据文件路径关闭对应的编辑器 tab（如资源管理器中删除文件时调用） */
         closeTabByFilePath: (filePath: string) => void;
+        /** 关闭当前活动 tab（Cmd+W），有可关闭 tab 时返回 true */
+        closeCurrentTab: () => boolean;
     }) => void;
     /** 待打开文件（ref 未就绪时由父组件暂存，挂载后由此处消费） */
     pendingOpenFile?: { filePath: string; content: string } | null;
@@ -63,15 +65,21 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
     const [tabs, setTabs] = useState<Tab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [browserRefreshTrigger, setBrowserRefreshTrigger] = useState(0);
+    const [isFormatFixing, setIsFormatFixing] = useState(false);
     const tabsRef = useRef<Tab[]>([]);
+    const activeTabIdRef = useRef<string | null>(null);
     const tabScrollContainerRef = useRef<HTMLDivElement>(null);
     const onConsumePendingOpenFileRef = useRef(onConsumePendingOpenFile);
     onConsumePendingOpenFileRef.current = onConsumePendingOpenFile;
+    /** 刚保存的文件路径，用于跳过 fs:file-changed 触发的冗余磁盘读取 */
+    const recentlySavedRef = useRef<Set<string>>(new Set());
+    const isFormatFixingRef = useRef(false);
 
-    // 保持 tabsRef 与 tabs 同步
+    // 保持 tabsRef、activeTabIdRef 与 state 同步
     useEffect(() => {
         tabsRef.current = tabs;
-    }, [tabs]);
+        activeTabIdRef.current = activeTabId;
+    }, [tabs, activeTabId]);
 
     const openEditorTab = (filePath: string, content: string) => {
         setTabs(prevTabs => {
@@ -222,36 +230,97 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
         setActiveTabId(prev => (prev === tab.id ? (nextTabs.length > 0 ? nextTabs[nextTabs.length - 1].id : null) : prev));
     }, []);
 
-    const handleEditorChange = (tabId: string, content: string) => {
-        setTabs(tabs.map(tab => {
-            if (tab.id === tabId && tab.type === 'editor') {
-                return { ...tab, content, isModified: true };
-            }
-            return tab;
-        }));
-        const tab = tabs.find(t => t.id === tabId);
+    /** 关闭当前活动 tab（Cmd+W），有可关闭 tab 时返回 true */
+    const closeCurrentTab = useCallback((): boolean => {
+        const currentTabs = tabsRef.current;
+        const currentActiveId = activeTabIdRef.current;
+        if (!currentActiveId || currentTabs.length === 0) return false;
+        const tabToClose = currentTabs.find(tab => tab.id === currentActiveId);
+        if (tabToClose?.type === 'terminal') {
+            const terminalTabs = currentTabs.filter(tab => tab.type === 'terminal');
+            if (terminalTabs.length <= 1) return false;
+        }
+        const newTabs = currentTabs.filter(tab => tab.id !== currentActiveId);
+        setTabs(newTabs);
+        setActiveTabId(newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null);
+        return true;
+    }, []);
+
+    const handleEditorChange = useCallback((tabId: string, content: string) => {
+        setTabs(prevTabs => {
+            const tab = prevTabs.find(t => t.id === tabId && t.type === 'editor');
+            if (!tab) return prevTabs;
+            onFileChange(tab.filePath, content);
+            return prevTabs.map(t =>
+                t.id === tabId && t.type === 'editor'
+                    ? { ...t, content, isModified: true }
+                    : t
+            );
+        });
+    }, [onFileChange]);
+
+    const handleEditorSave = useCallback((tabId: string, contentFromEditor?: string) => {
+        setTabs(prevTabs => {
+            const tab = prevTabs.find(t => t.id === tabId && t.type === 'editor');
+            if (!tab || tab.type !== 'editor') return prevTabs;
+            const contentToSave = contentFromEditor ?? tab.content;
+            recentlySavedRef.current.add(tab.filePath);
+            onFileSave(tab.filePath, contentToSave);
+            setTimeout(() => recentlySavedRef.current.delete(tab.filePath), 500);
+            return prevTabs.map(t =>
+                t.id === tabId && t.type === 'editor'
+                    ? { ...t, content: contentToSave, isModified: false }
+                    : t
+            );
+        });
+    }, [onFileSave]);
+
+    /** 切换 tab 前由 MonacoEditor 卸载时调用，将编辑器缓冲区的最终内容持久化到 tab state，避免内容覆盖 */
+    const handleEditorPersistContent = useCallback((tabId: string, content: string) => {
+        setTabs(prevTabs =>
+            prevTabs.map(t =>
+                t.id === tabId && t.type === 'editor'
+                    ? { ...t, content, isModified: true }
+                    : t
+            )
+        );
+        const tab = tabsRef.current.find(t => t.id === tabId && t.type === 'editor');
         if (tab && tab.type === 'editor') {
             onFileChange(tab.filePath, content);
         }
-    };
-
-    const handleEditorSave = (tabId: string, contentFromEditor?: string) => {
-        const tab = tabs.find(t => t.id === tabId);
-        if (tab && tab.type === 'editor') {
-            const contentToSave = contentFromEditor ?? tab.content;
-            onFileSave(tab.filePath, contentToSave);
-            setTabs(prevTabs =>
-                prevTabs.map(t => {
-                    if (t.id === tabId && t.type === 'editor') {
-                        return { ...t, content: contentToSave, isModified: false };
-                    }
-                    return t;
-                })
-            );
-        }
-    };
+    }, [onFileChange]);
 
     const activeTab = tabs.find(tab => tab.id === activeTabId);
+
+    /** 执行 oxfmt + oxlint --fix，成功后重载所有已打开的编辑器 tab */
+    const handleFormatFix = useCallback(async () => {
+        if (!projectPath || isFormatFixingRef.current) return;
+        isFormatFixingRef.current = true;
+        setIsFormatFixing(true);
+        try {
+            const result = await window.ipcRenderer.invoke('project:format-fix', projectPath) as { success: boolean; error?: string };
+            if (!result.success) return;
+            const editorTabs = tabsRef.current.filter((tab): tab is EditorTab => tab.type === 'editor');
+            for (const tab of editorTabs) {
+                try {
+                    const read = await window.ipcRenderer.invoke('fs:read-file', tab.filePath) as { success: boolean; content?: string };
+                    if (read.success && read.content !== undefined) {
+                        setTabs(prev => prev.map(t =>
+                            t.id === tab.id && t.type === 'editor'
+                                ? { ...t, content: read.content!, isModified: false }
+                                : t
+                        ));
+                        onFileChange(tab.filePath, read.content);
+                    }
+                } catch {
+                    // 忽略单文件读取失败
+                }
+            }
+        } finally {
+            isFormatFixingRef.current = false;
+            setIsFormatFixing(false);
+        }
+    }, [projectPath, onFileChange]);
 
     // 监听文件系统变化，自动刷新已打开的文件
     useEffect(() => {
@@ -261,6 +330,9 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
             const filePath = args[0] as string;
             if (!filePath || !filePath.startsWith(projectPath || '')) return;
 
+            // 自身保存触发的 fs:file-changed 跳过冗余磁盘读取（内容已在 tab state 中）
+            if (recentlySavedRef.current.has(filePath)) return;
+
             // 使用 ref 获取最新的 tabs，避免闭包问题
             const currentTabs = tabsRef.current;
             const editorTab = currentTabs.find(tab => tab.type === 'editor' && tab.filePath === filePath) as EditorTab | undefined;
@@ -268,13 +340,12 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
             if (editorTab) {
                 // 如果文件正在被用户编辑，不自动覆盖（避免丢失用户的修改）
                 if (editorTab.isModified) {
-                    // 可以选择提示用户或静默跳过
-                    console.log(`File ${filePath} has been modified externally but is being edited, skipping auto-reload`);
                     return;
                 }
 
-                // 延迟一下，确保文件写入完成
+                // 外部修改：延迟读取磁盘以确认写入完成
                 setTimeout(async () => {
+                    if (recentlySavedRef.current.has(filePath)) return;
                     try {
                         const result = await window.ipcRenderer.invoke('fs:read-file', filePath) as { success: boolean; content?: string; error?: string };
                         if (result.success && result.content !== undefined) {
@@ -311,13 +382,13 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
     // openBrowserTab/closeBrowserTab/closeAllTabs/closeTabByFilePath 均为 useCallback 稳定引用，不会导致无限循环
     useEffect(() => {
         if (onRef) {
-            onRef({ openEditorTab, openBrowserTab, refreshBrowserTab, closeBrowserTab, closeAllTabs, closeTabByFilePath });
+            onRef({ openEditorTab, openBrowserTab, refreshBrowserTab, closeBrowserTab, closeAllTabs, closeTabByFilePath, closeCurrentTab });
         }
         if (pendingOpenFile) {
             openEditorTab(pendingOpenFile.filePath, pendingOpenFile.content);
             onConsumePendingOpenFileRef.current?.();
         }
-    }, [onRef, openBrowserTab, closeBrowserTab, closeAllTabs, closeTabByFilePath, pendingOpenFile]);
+    }, [onRef, openBrowserTab, closeBrowserTab, closeAllTabs, closeTabByFilePath, closeCurrentTab, pendingOpenFile]);
 
     // 激活 tab 时滚动到可视区域最右侧（参考 Cursor）
     useEffect(() => {
@@ -429,6 +500,22 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
                     >
                         <Globe size={16} />
                     </button>
+                    {activeTab?.type === 'editor' && (
+                        <button
+                            type="button"
+                            onClick={handleFormatFix}
+                            disabled={isFormatFixing}
+                            className="p-1.5 text-stone-400 hover:text-orange-500 dark:hover:text-orange-400 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:text-stone-400 dark:disabled:hover:text-zinc-400"
+                            title={t('formatFixTitle') || t('formatFix')}
+                            aria-label={t('formatFix')}
+                        >
+                            {isFormatFixing ? (
+                                <Loader2 size={16} className="animate-spin" aria-hidden />
+                            ) : (
+                                <Wand2 size={16} />
+                            )}
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -444,10 +531,12 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
                 ) : activeTab.type === 'editor' ? (
                     <div className="h-full pt-2 bg-[#1e1e1e]">
                         <MonacoEditor
+                            key={activeTab.id}
                             filePath={activeTab.filePath}
                             content={activeTab.content}
                             onChange={(content) => handleEditorChange(activeTab.id, content)}
                             onSave={(currentContent) => handleEditorSave(activeTab.id, currentContent)}
+                            onBeforeUnmount={(content) => handleEditorPersistContent(activeTab.id, content)}
                         />
                     </div>
                 ) : activeTab.type === 'terminal' ? (
