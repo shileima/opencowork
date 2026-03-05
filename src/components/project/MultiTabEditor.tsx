@@ -249,7 +249,7 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
     const handleEditorChange = useCallback((tabId: string, content: string) => {
         setTabs(prevTabs => {
             const tab = prevTabs.find(t => t.id === tabId && t.type === 'editor');
-            if (!tab) return prevTabs;
+            if (!tab || tab.type !== 'editor') return prevTabs;
             onFileChange(tab.filePath, content);
             return prevTabs.map(t =>
                 t.id === tabId && t.type === 'editor'

@@ -349,7 +349,7 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
                     return next;
                 });
                 // 同步更新 selectedPath，保持选中状态
-                if (selectedPath === editingPath || (editingItem.isDirectory && selectedPath.startsWith(editingPath + '/'))) {
+                if (selectedPath != null && (selectedPath === editingPath || (editingItem.isDirectory && selectedPath.startsWith(editingPath + '/')))) {
                     setSelectedPath(selectedPath === editingPath ? newPath : newPath + selectedPath.slice(editingPath.length));
                 }
             }
