@@ -1,0 +1,9 @@
+{
+  "name": "playwright-runtime",
+  "version": "1.0.0",
+  "description": "Built-in Playwright for OpenCowork automation (uses app-bundled Node + browsers)",
+  "private": true,
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

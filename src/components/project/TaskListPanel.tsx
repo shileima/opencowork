@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Plus, Loader2, CircleCheckBig, XCircle, Circle, X } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
+import { decodeDisplayText } from '../../utils/decodeDisplayText';
 import type { Project, ProjectTask } from '../../../electron/config/ProjectStore';
 
 interface TaskListPanelProps {
@@ -26,7 +27,10 @@ export function TaskListPanel({
 }: TaskListPanelProps) {
     const isBusy = isProcessing || isDeploying;
     const { t } = useI18n();
+    const TASK_LIST_PAGE_SIZE = 10;
     const [tasks, setTasks] = useState<ProjectTask[]>([]);
+    /** 默认展示条数，点击「...更多」每次 +10 */
+    const [displayedCount, setDisplayedCount] = useState(TASK_LIST_PAGE_SIZE);
     /** 原地重命名：正在编辑的任务 id，不弹框 */
     const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
     const [editValue, setEditValue] = useState('');
@@ -69,6 +73,7 @@ export function TaskListPanel({
         // 按更新时间倒序排序，最新的任务在最上面
         const sortedTasks = [...taskList].sort((a, b) => b.updatedAt - a.updatedAt);
         setTasks(sortedTasks);
+        setDisplayedCount(TASK_LIST_PAGE_SIZE);
     };
 
     /** 进入原地重命名：在名称处显示输入框（双击任务标题触发） */
@@ -105,7 +110,7 @@ export function TaskListPanel({
             console.error('No current project');
             return;
         }
-        const confirmMessage = `${t('delete')} "${task.title}"?`;
+        const confirmMessage = `${t('delete')} "${decodeDisplayText(task.title)}"?`;
         if (confirm(confirmMessage)) {
             try {
                 // 先获取剩余任务列表
@@ -184,134 +189,167 @@ export function TaskListPanel({
                     <div className="text-center py-8 text-sm text-stone-400 dark:text-zinc-500">
                         {t('noTasks')}
                     </div>
-                ) : (
-                    <div className="space-y-2">
-                        {tasks.map(task => (
-                            <div
-                                key={task.id}
-                                className={`group relative w-full text-left p-2 rounded-lg transition-colors border ${
-                                    currentTaskId === task.id
-                                        ? 'bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30'
-                                        : 'bg-stone-50 dark:bg-zinc-800 border-stone-200 dark:border-zinc-700 hover:bg-stone-100 dark:hover:bg-zinc-700'
-                                }`}
+                ) : (() => {
+                    const visibleTasks = tasks.slice(0, displayedCount);
+                    const now = Date.now();
+                    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+                    const within7 = visibleTasks.filter(t => t.updatedAt >= now - sevenDaysMs);
+                    const olderTasks = visibleTasks.filter(t => t.updatedAt < now - sevenDaysMs);
+
+                    const renderTask = (task: ProjectTask) => (
+                        <div
+                            key={task.id}
+                            className={`group relative w-full text-left p-2 rounded-lg transition-colors border ${
+                                currentTaskId === task.id
+                                    ? 'bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30'
+                                    : 'bg-stone-50 dark:bg-zinc-800 border-stone-200 dark:border-zinc-700 hover:bg-stone-100 dark:hover:bg-zinc-700'
+                            }`}
+                        >
+                            <button
+                                onClick={() => onSelectTask(task.id)}
+                                className="w-full text-left pr-10"
                             >
-                                <button
-                                    onClick={() => onSelectTask(task.id)}
-                                    className="w-full text-left pr-10"
-                                >
-                                    <div className="flex items-start gap-2">
-                                        <div
-                                            className="mt-0.5 flex items-center justify-center w-5 h-5 shrink-0"
-                                            title={
-                                                task.status === 'completed'
-                                                    ? t('taskCompleted')
-                                                    : task.status === 'failed'
-                                                    ? t('taskFailed')
-                                                    : t('taskActive')
-                                            }
-                                            aria-label={
-                                                task.status === 'completed'
-                                                    ? t('taskCompleted')
-                                                    : task.status === 'failed'
-                                                    ? t('taskFailed')
-                                                    : t('taskActive')
-                                            }
-                                        >
-                                            {task.status === 'completed' ? (
-                                                <CircleCheckBig size={18} className="text-green-500 dark:text-green-400 shrink-0" aria-hidden />
-                                            ) : task.status === 'failed' ? (
-                                                <XCircle size={18} className="text-red-500 dark:text-red-400 shrink-0" aria-hidden />
-                                            ) : currentTaskId === task.id && isBusy ? (
-                                                <Loader2 size={18} className="text-amber-500 dark:text-amber-400 animate-spin shrink-0" aria-hidden />
-                                            ) : (
-                                                <Circle size={18} className="text-stone-300 dark:text-zinc-500 shrink-0" strokeWidth={2} aria-hidden />
-                                            )}
-                                        </div>
-                                        <div className="flex-1 min-w-0 overflow-hidden">
-                                            {editingTaskId === task.id ? (
-                                                <input
-                                                    ref={renameInputRef}
-                                                    type="text"
-                                                    value={editValue}
-                                                    onChange={(e) => setEditValue(e.target.value)}
-                                                    onBlur={handleRenameConfirm}
-                                                    onKeyDown={(e) => {
-                                                        if (e.key === 'Enter') handleRenameConfirm();
-                                                        if (e.key === 'Escape') {
-                                                            setEditingTaskId(null);
-                                                            setEditValue('');
-                                                        }
-                                                    }}
-                                                    onClick={(e) => e.stopPropagation()}
-                                                    className="w-full px-1 py-0.5 text-xs font-medium bg-white dark:bg-zinc-900 border border-orange-500 dark:border-orange-500 rounded focus:outline-none focus:ring-1 focus:ring-orange-500 text-stone-700 dark:text-zinc-300"
-                                                    aria-label={t('rename')}
-                                                />
-                                            ) : (
-                                                <div
-                                                    title={`${task.title}（双击重命名）`}
-                                                    onDoubleClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handleRenameTask(task);
-                                                    }}
-                                                    className={`text-xs font-medium truncate ${
-                                                        task.status === 'completed'
-                                                            ? 'text-stone-500 dark:text-zinc-400'
-                                                            : task.status === 'failed'
-                                                            ? 'text-stone-600 dark:text-zinc-400'
-                                                            : 'text-stone-700 dark:text-zinc-300'
-                                                    }`}
-                                                >
-                                                    {task.title}
-                                                </div>
-                                            )}
+                                <div className="flex items-start gap-2">
+                                    <div
+                                        className="mt-0.5 flex items-center justify-center w-5 h-5 shrink-0"
+                                        title={
+                                            task.status === 'completed'
+                                                ? t('taskCompleted')
+                                                : task.status === 'failed'
+                                                ? t('taskFailed')
+                                                : t('taskActive')
+                                        }
+                                        aria-label={
+                                            task.status === 'completed'
+                                                ? t('taskCompleted')
+                                                : task.status === 'failed'
+                                                ? t('taskFailed')
+                                                : t('taskActive')
+                                        }
+                                    >
+                                        {task.status === 'completed' ? (
+                                            <CircleCheckBig size={18} className="text-green-500 dark:text-green-400 shrink-0" aria-hidden />
+                                        ) : task.status === 'failed' ? (
+                                            <XCircle size={18} className="text-red-500 dark:text-red-400 shrink-0" aria-hidden />
+                                        ) : currentTaskId === task.id && isBusy ? (
+                                            <Loader2 size={18} className="text-amber-500 dark:text-amber-400 animate-spin shrink-0" aria-hidden />
+                                        ) : (
+                                            <Circle size={18} className="text-stone-300 dark:text-zinc-500 shrink-0" strokeWidth={2} aria-hidden />
+                                        )}
+                                    </div>
+                                    <div className="flex-1 min-w-0 overflow-hidden">
+                                        {editingTaskId === task.id ? (
+                                            <input
+                                                ref={renameInputRef}
+                                                type="text"
+                                                value={editValue}
+                                                onChange={(e) => setEditValue(e.target.value)}
+                                                onBlur={handleRenameConfirm}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') handleRenameConfirm();
+                                                    if (e.key === 'Escape') {
+                                                        setEditingTaskId(null);
+                                                        setEditValue('');
+                                                    }
+                                                }}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="w-full px-1 py-0.5 text-xs font-medium bg-white dark:bg-zinc-900 border border-orange-500 dark:border-orange-500 rounded focus:outline-none focus:ring-1 focus:ring-orange-500 text-stone-700 dark:text-zinc-300"
+                                                aria-label={t('rename')}
+                                            />
+                                        ) : (
                                             <div
-                                                className={`text-[9px] mt-0.5 flex items-center gap-1 ${
+                                                title={`${decodeDisplayText(task.title)}（双击重命名）`}
+                                                onDoubleClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleRenameTask(task);
+                                                }}
+                                                className={`text-xs font-medium truncate ${
                                                     task.status === 'completed'
-                                                        ? 'text-stone-400 dark:text-zinc-500'
+                                                        ? 'text-stone-500 dark:text-zinc-400'
                                                         : task.status === 'failed'
-                                                        ? 'text-red-600 dark:text-red-400'
-                                                        : 'text-stone-400 dark:text-zinc-500'
+                                                        ? 'text-stone-600 dark:text-zinc-400'
+                                                        : 'text-stone-700 dark:text-zinc-300'
                                                 }`}
                                             >
-                                                {task.status === 'completed' ? (
-                                                    <span>{t('taskCompleted')}</span>
-                                                ) : task.status === 'failed' ? (
-                                                    <span>{t('taskFailed')}</span>
-                                                ) : (
-                                                    <span>{t('taskActive')}</span>
-                                                )}
-                                                <span className="text-stone-400 dark:text-zinc-500">
-                                                    · {new Date(task.updatedAt).toLocaleTimeString('zh-CN', {
-                                                        hour: '2-digit',
-                                                        minute: '2-digit'
-                                                    })}
-                                                </span>
+                                                {decodeDisplayText(task.title)}
                                             </div>
+                                        )}
+                                        <div
+                                            className={`text-[9px] mt-0.5 flex items-center gap-1 ${
+                                                task.status === 'completed'
+                                                    ? 'text-stone-400 dark:text-zinc-500'
+                                                    : task.status === 'failed'
+                                                    ? 'text-red-600 dark:text-red-400'
+                                                    : 'text-stone-400 dark:text-zinc-500'
+                                            }`}
+                                        >
+                                            {task.status === 'completed' ? (
+                                                <span>{t('taskCompleted')}</span>
+                                            ) : task.status === 'failed' ? (
+                                                <span>{t('taskFailed')}</span>
+                                            ) : (
+                                                <span>{t('taskActive')}</span>
+                                            )}
+                                            <span className="text-stone-400 dark:text-zinc-500">
+                                                · {new Date(task.updatedAt).toLocaleTimeString('zh-CN', {
+                                                    hour: '2-digit',
+                                                    minute: '2-digit'
+                                                })}
+                                            </span>
                                         </div>
                                     </div>
-                                </button>
-                                {/* 删除按钮（与权限列表删除样式一致） */}
-                                <div className="absolute right-2 top-1/2 -translate-y-1/2 z-10">
-                                    <button
-                                        type="button"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            e.preventDefault();
-                                            handleDeleteTask(task);
-                                        }}
-                                        className={`p-1.5 text-stone-300 dark:text-zinc-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-all ${
-                                            currentTaskId === task.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                                        }`}
-                                        title={t('deleteTask')}
-                                        aria-label={t('deleteTask')}
-                                    >
-                                        <X size={14} aria-hidden />
-                                    </button>
                                 </div>
+                            </button>
+                            <div className="absolute right-2 top-1/2 -translate-y-1/2 z-10">
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        handleDeleteTask(task);
+                                    }}
+                                    className={`p-1.5 text-stone-300 dark:text-zinc-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-all ${
+                                        currentTaskId === task.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                                    }`}
+                                    title={t('deleteTask')}
+                                    aria-label={t('deleteTask')}
+                                >
+                                    <X size={14} aria-hidden />
+                                </button>
                             </div>
-                        ))}
-                    </div>
-                )}
+                        </div>
+                    );
+
+                    return (
+                        <div className="space-y-2">
+                            {within7.length > 0 && (
+                                <>
+                                    <div className="text-xs font-medium text-stone-400 dark:text-zinc-500 px-2 py-1">
+                                        {t('withinSevenDays')}
+                                    </div>
+                                    {within7.map(renderTask)}
+                                </>
+                            )}
+                            {olderTasks.length > 0 && (
+                                <>
+                                    <div className="text-xs font-medium text-stone-400 dark:text-zinc-500 px-2 py-1">
+                                        {t('older')}
+                                    </div>
+                                    {olderTasks.map(renderTask)}
+                                </>
+                            )}
+                            {tasks.length > displayedCount && (
+                                <button
+                                    type="button"
+                                    onClick={() => setDisplayedCount(c => c + TASK_LIST_PAGE_SIZE)}
+                                    className="w-full py-2 text-center text-xs text-stone-500 dark:text-zinc-400 hover:text-orange-500 dark:hover:text-orange-400 transition-colors"
+                                >
+                                    {t('taskListMore')}
+                                </button>
+                            )}
+                        </div>
+                    );
+                })()}
             </div>
         </div>
         </>

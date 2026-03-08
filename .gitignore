@@ -31,8 +31,9 @@ build
 .qa-cowork
 .opencowork
 
-# playwright
-resources/playwright
+# playwright：只忽略构建产物，package.json 需提交供 CI 安装
+resources/playwright/node_modules
+resources/playwright/browsers
 
 # Node.js runtimes (downloaded during build)
 resources/node/*/node

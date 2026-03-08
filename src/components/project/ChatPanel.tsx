@@ -5,6 +5,7 @@ import { CopyButton } from '../CopyButton';
 import { Pencil } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import { useI18n } from '../../i18n/I18nContext';
+import { decodeDisplayText } from '../../utils/decodeDisplayText';
 
 interface ChatPanelProps {
     history: Anthropic.MessageParam[];
@@ -97,7 +98,7 @@ export function ChatPanel({
                                             {isUser ? (
                                                 <div className="relative group inline-block">
                                                     <div className="user-bubble">
-                                                        {content}
+                                                        {decodeDisplayText(content)}
                                                     </div>
                                                     {content && content.trim().length > 0 && (
                                                         <div className="flex items-center justify-end gap-0.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -116,7 +117,7 @@ export function ChatPanel({
                                             ) : (
                                                 <div className="text-stone-700 dark:text-zinc-300 text-xs leading-5 max-w-none">
                                                     <div className="relative group">
-                                                        <MarkdownRenderer content={content} isDark={true} className="prose-sm !text-xs !leading-5" />
+                                                        <MarkdownRenderer content={content} isDark={true} className="chat-message-prose prose-sm !text-xs !leading-5" />
                                                         {content && content.trim().length > 0 && (
                                                             <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                                 <CopyButton content={content} size="sm" />
@@ -134,7 +135,7 @@ export function ChatPanel({
                                 <div className="animate-in fade-in duration-200">
                                     <div className="text-stone-700 dark:text-zinc-300 text-xs leading-5 max-w-none">
                                         <div className="relative group">
-                                            <MarkdownRenderer content={streamingText} isDark={true} className="prose-sm !text-xs !leading-5" />
+                                            <MarkdownRenderer content={streamingText} isDark={true} className="chat-message-prose prose-sm !text-xs !leading-5" />
                                             <span className="inline-block w-[3px] h-[1em] bg-current ml-0.5 align-middle rounded-sm animate-[blink_1s_step-end_infinite]" />
                                             {streamingText && streamingText.trim().length > 0 && (
                                                 <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -147,17 +148,13 @@ export function ChatPanel({
                             )}
 
                             {isProcessing && !streamingText && (
-                                <div className="flex items-end gap-1 text-stone-400 dark:text-zinc-600">
-                                    <svg className="w-2.5 h-2.5 shrink-0 opacity-50 mb-px" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                        <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
-                                        <path d="M9 18h6" />
-                                        <path d="M10 22h4" />
+                                <div className="flex items-center gap-2 text-sm">
+                                    <svg className="w-3 h-3 shrink-0 text-stone-400 dark:text-zinc-500 animate-spin" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="31.4 31.4" strokeDashoffset="0" />
                                     </svg>
-                                    <span className="text-[10px] font-light tracking-wide leading-none">{t('thinking')}</span>
-                                    <span className="flex items-end gap-[2px] pb-px">
-                                        <span className="w-[3px] h-[3px] rounded-full bg-stone-400 dark:bg-zinc-600 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '0ms'}} />
-                                        <span className="w-[3px] h-[3px] rounded-full bg-stone-400 dark:bg-zinc-600 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '200ms'}} />
-                                        <span className="w-[3px] h-[3px] rounded-full bg-stone-400 dark:bg-zinc-600 animate-[bounce_1.2s_ease-in-out_infinite]" style={{animationDelay: '400ms'}} />
+                                    <span className="text-[11px] select-none flex items-baseline gap-0">
+                                        <span className="shimmer-thinking-text">{t('thinking')}</span>
+                                        <span className="animate-[ellipsis_1.5s_steps(4,end)_infinite] overflow-hidden whitespace-nowrap inline-block w-[1.5em] align-bottom text-stone-400 dark:text-zinc-500 font-normal">...</span>
                                     </span>
                                 </div>
                             )}

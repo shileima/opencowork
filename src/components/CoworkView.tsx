@@ -381,7 +381,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     const relevantHistory = history.filter(m => (m.role as string) !== 'system');
 
     return (
-        <div className="flex flex-col h-full bg-[#FAF8F5] dark:bg-zinc-950 relative">
+        <div className="flex-1 min-h-0 flex flex-col bg-[#FAF8F5] dark:bg-zinc-950 relative">
             {/* Permission Dialog Overlay */}
             {permissionRequest && (
                 <div className="absolute inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -931,7 +931,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
 
             {/* Messages Area - Narrower for better readability */}
             <div className="flex-1 overflow-y-auto px-4 py-6" ref={scrollRef}>
-                <div className="max-w-xl mx-auto space-y-5">
+                <div className="max-w-xl mx-auto flex flex-col gap-5">
                     {/* Resource Update Notification Banner */}
                     {resourceUpdateAvailable && (
                         <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 border-2 border-amber-300 dark:border-amber-700 rounded-xl p-4 shadow-lg animate-in slide-in-from-top-2 fade-in duration-300">
@@ -988,31 +988,36 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                     ) : (
                         <>
                             {relevantHistory.map((msg, idx) => (
-                                <MessageItem
-                                    key={idx}
-                                    message={msg}
-                                    expandedBlocks={expandedBlocks}
-                                    toggleBlock={toggleBlock}
-                                    showTools={mode === 'work'}
-                                    onImageClick={setSelectedImage}
-                                    onEdit={(text) => setPrefillText(text)}
-                                />
+                                <div key={idx} className="block w-full min-h-0 break-after-avoid">
+                                    <MessageItem
+                                        message={msg}
+                                        expandedBlocks={expandedBlocks}
+                                        toggleBlock={toggleBlock}
+                                        showTools={mode === 'work'}
+                                        onImageClick={setSelectedImage}
+                                        onEdit={(text) => setPrefillText(text)}
+                                    />
+                                </div>
                             ))}
 
                             {streamingText && streamingText.trim().length > 0 && (
-                                <div className="animate-in fade-in duration-200">
-                                    <div className="text-stone-700 dark:text-zinc-300 text-[12px] leading-6 max-w-none">
-                                        <div className="relative group">
-                                            <MarkdownRenderer content={streamingText} isDark={true} className="prose-sm" />
-                                            <span className="inline-block w-[3px] h-[1em] bg-current ml-0.5 align-middle rounded-sm animate-[blink_1s_step-end_infinite]" />
-                                            {streamingText && streamingText.trim().length > 0 && (
-                                                <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <CopyButton content={streamingText} size="sm" />
-                                                </div>
-                                            )}
+                                <>
+                                    {/* 空行：用户消息与 AI 回复之间保持明显分隔 */}
+                                    {relevantHistory.length > 0 && <div className="h-5 shrink-0" aria-hidden />}
+                                    <div className="animate-in fade-in duration-200 block w-full">
+                                        <div className="text-stone-700 dark:text-zinc-300 text-[12px] leading-6 max-w-none">
+                                            <div className="relative group">
+                                                <MarkdownRenderer content={streamingText} isDark={true} className="prose-sm" />
+                                                <span className="inline-block w-[3px] h-[1em] bg-current ml-0.5 align-middle rounded-sm animate-[blink_1s_step-end_infinite]" />
+                                                {streamingText && streamingText.trim().length > 0 && (
+                                                    <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <CopyButton content={streamingText} size="sm" />
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
+                                </>
                             )}
                         </>
                     )}
@@ -1022,8 +1027,9 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                             <svg className="w-3 h-3 shrink-0 text-stone-400 dark:text-zinc-500 animate-spin" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                                 <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="31.4 31.4" strokeDashoffset="0" />
                             </svg>
-                            <span className="text-[11px] select-none shimmer-thinking-text">
-                                {t('thinking')}<span className="animate-[ellipsis_1.5s_steps(4,end)_infinite] overflow-hidden whitespace-nowrap inline-block w-[1.5em] align-bottom">...</span>
+                            <span className="text-[11px] select-none flex items-baseline gap-0">
+                                <span className="shimmer-thinking-text">{t('thinking')}</span>
+                                <span className="animate-[ellipsis_1.5s_steps(4,end)_infinite] overflow-hidden whitespace-nowrap inline-block w-[1.5em] align-bottom text-stone-400 dark:text-zinc-500 font-normal">...</span>
                             </span>
                         </div>
                     )}

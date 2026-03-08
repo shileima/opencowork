@@ -1,20 +1,37 @@
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { app } from 'electron';
 
 /**
- * Playwright 安装根目录（固定）：~/.qa-cowork/skills/agent-browser/
- * PlaywrightManager 安装时也使用此目录，保证路径一致。
+ * 用户目录下的 Playwright 安装目录（点击「立即安装」时使用）
+ * ~/.qa-cowork/skills/agent-browser/
  */
-const AGENT_BROWSER_SKILL_DIR = path.join(os.homedir(), '.qa-cowork', 'skills', 'agent-browser');
+export const AGENT_BROWSER_SKILL_DIR = path.join(os.homedir(), '.qa-cowork', 'skills', 'agent-browser');
+
+/**
+ * 应用内置 Playwright 目录（优先使用，与内置 Node 一致，不依赖用户本机 npm）
+ * 开发：<项目>/resources/playwright，打包后：<app>/Contents/Resources/playwright
+ */
+export function getAppPlaywrightDir(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'playwright');
+  }
+  return path.join(app.getAppPath(), 'resources', 'playwright');
+}
 
 /**
  * 获取 Playwright 包路径（node_modules/playwright 所在的父目录）
- * 固定为 ~/.qa-cowork/skills/agent-browser/
+ * 优先使用应用内置 resources/playwright，否则使用用户目录 ~/.qa-cowork/skills/agent-browser/
  */
 export function getBuiltinPlaywrightPath(): string | null {
-  const nodeModulesPlaywright = path.join(AGENT_BROWSER_SKILL_DIR, 'node_modules', 'playwright', 'package.json');
-  if (fs.existsSync(nodeModulesPlaywright)) {
+  const appDir = getAppPlaywrightDir();
+  const appPkg = path.join(appDir, 'node_modules', 'playwright', 'package.json');
+  if (fs.existsSync(appPkg)) {
+    return appDir;
+  }
+  const userPkg = path.join(AGENT_BROWSER_SKILL_DIR, 'node_modules', 'playwright', 'package.json');
+  if (fs.existsSync(userPkg)) {
     return AGENT_BROWSER_SKILL_DIR;
   }
   return null;
@@ -22,15 +39,18 @@ export function getBuiltinPlaywrightPath(): string | null {
 
 /**
  * 获取 Playwright 浏览器路径
- * 固定为 ~/.qa-cowork/skills/agent-browser/browsers/
+ * 优先应用内置 resources/playwright/browsers，否则 ~/.qa-cowork/skills/agent-browser/browsers/
  */
 export function getBuiltinPlaywrightBrowsersPath(): string | null {
-  const browsersPath = path.join(AGENT_BROWSER_SKILL_DIR, 'browsers');
-  if (fs.existsSync(browsersPath)) {
-    const hasChromium = fs.readdirSync(browsersPath).some((f) => f.startsWith('chromium-'));
-    if (hasChromium) {
-      return browsersPath;
-    }
+  const appBrowsers = path.join(getAppPlaywrightDir(), 'browsers');
+  if (fs.existsSync(appBrowsers)) {
+    const hasChromium = fs.readdirSync(appBrowsers).some((f) => f.startsWith('chromium-'));
+    if (hasChromium) return appBrowsers;
+  }
+  const userBrowsers = path.join(AGENT_BROWSER_SKILL_DIR, 'browsers');
+  if (fs.existsSync(userBrowsers)) {
+    const hasChromium = fs.readdirSync(userBrowsers).some((f) => f.startsWith('chromium-'));
+    if (hasChromium) return userBrowsers;
   }
   return null;
 }

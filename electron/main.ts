@@ -11,6 +11,7 @@ import { configStore, TrustLevel } from './config/ConfigStore'
 import { sessionStore } from './config/SessionStore'
 import { scriptStore } from './config/ScriptStore'
 import { projectStore } from './config/ProjectStore'
+import { rpaProjectStore } from './config/RPAProjectStore'
 import { directoryManager } from './config/DirectoryManager'
 import { permissionService } from './config/PermissionService'
 import { ssoStore } from './config/SsoStore'
@@ -513,28 +514,64 @@ app.whenReady().then(() => {
 
 // IPC Handlers
 
-ipcMain.handle('agent:send-message', async (event, message: string | { content: string, images: string[] }, viewContext?: 'cowork' | 'project') => {
+ipcMain.handle('agent:send-message', async (event, message: string | { content: string, images: string[] }, viewContext?: 'cowork' | 'project' | 'automation') => {
   // Determine which agent to use based on sender window
   const isFloatingBall = event.sender === floatingBallWin?.webContents
   const targetAgent = isFloatingBall ? floatingBallAgent : mainAgent
-  console.log('[Preview:Debug] agent:send-message received, viewContext:', viewContext, 'isFloatingBall:', isFloatingBall, 'targetAgent exists:', !!targetAgent, 'currentTaskIdForSession:', currentTaskIdForSession)
+  console.log('[Preview:Debug] agent:send-message received, viewContext:', viewContext, 'isFloatingBall:', isFloatingBall, 'targetAgent exists:', !!targetAgent, 'currentTaskIdForSession:', currentTaskIdForSession, 'currentRpaTaskIdForSession:', currentRpaTaskIdForSession)
   if (!targetAgent) return { error: 'Agent not initialized' }
-  // 仅在项目视图（非协作视图）下才传入当前任务 ID 与项目 ID
+  // 协作视图：无项目/任务；项目视图：projectStore；自动化视图：rpaProjectStore
   const isCoworkView = viewContext === 'cowork' || isFloatingBall
-  const currentProject = isCoworkView ? null : projectStore.getCurrentProject()
-  const taskId = isCoworkView ? undefined : (currentProject && currentTaskIdForSession ? currentTaskIdForSession : undefined)
-  const projectId = currentProject?.id
-  console.log('[Preview:Debug] agent:send-message params, isCoworkView:', isCoworkView, 'projectId:', projectId, 'taskId:', taskId)
-  // 开始处理时立即将任务状态设为进行中，左侧任务卡片显示正确图标
-  if (projectId && taskId) {
-    projectStore.updateTask(projectId, taskId, { status: 'active' })
-    const targetWindow = isFloatingBall ? floatingBallWin : mainWin
-    if (targetWindow && !targetWindow.isDestroyed()) {
-      targetWindow.webContents.send('project:task:updated', { projectId, taskId, updates: { status: 'active' } })
+  const isAutomationView = viewContext === 'automation'
+  let currentProject = null
+  let taskId: string | undefined
+  let projectId: string | undefined
+  if (isCoworkView) {
+    // 协作模式：无项目/任务
+  } else if (isAutomationView) {
+    const rpaProject = rpaProjectStore.getCurrentProject()
+    currentProject = rpaProject ? { id: rpaProject.id, path: rpaProject.path } : null
+    taskId = rpaProject && currentRpaTaskIdForSession ? currentRpaTaskIdForSession : undefined
+    projectId = currentProject?.id
+    if (projectId && taskId) {
+      rpaProjectStore.updateTask(projectId, taskId, { status: 'active' })
+      const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+      if (targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('rpa:task:updated', { projectId, taskId, updates: { status: 'active' } })
+      }
+    }
+  } else {
+    currentProject = projectStore.getCurrentProject()
+    taskId = currentProject && currentTaskIdForSession ? currentTaskIdForSession : undefined
+    projectId = currentProject?.id
+    if (projectId && taskId) {
+      projectStore.updateTask(projectId, taskId, { status: 'active' })
+      const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+      if (targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('project:task:updated', { projectId, taskId, updates: { status: 'active' } })
+      }
     }
   }
-  const viewCtx: 'cowork' | 'project' = isCoworkView ? 'cowork' : 'project'
-  return await targetAgent.processUserMessage(message, taskId, projectId, isFloatingBall, viewCtx)
+  const viewCtx: 'cowork' | 'project' | 'automation' = isCoworkView ? 'cowork' : (isAutomationView ? 'automation' : 'project')
+  try {
+    return await targetAgent.processUserMessage(message, taskId, projectId, isFloatingBall, viewCtx)
+  } catch (apiError: unknown) {
+    const err = apiError as { status?: number; message?: string; error?: { message?: string } }
+    const targetWindow = (isFloatingBall && floatingBallWin && !floatingBallWin.isDestroyed()) ? floatingBallWin : mainWin
+    const payload = { message: '', taskId, projectId }
+    if (err?.status === 400 && targetWindow?.webContents && !targetWindow.isDestroyed()) {
+      const raw = err?.error?.message || err?.message || String(apiError)
+      const friendly = /provider_response_error|upstream_error|bad response status code/i.test(raw)
+        ? '代理或上游服务返回 400，请检查 OneAPI/代理与模型配置。'
+        : `${(raw as string).slice(0, 150)}…`
+      payload.message = friendly
+      targetWindow.webContents.send('agent:error', payload)
+    } else if (targetWindow?.webContents && !targetWindow.isDestroyed()) {
+      payload.message = err?.message || (apiError instanceof Error ? apiError.message : String(apiError))
+      targetWindow.webContents.send('agent:error', payload)
+    }
+    throw apiError
+  }
 })
 
 ipcMain.handle('agent:is-ready', (event) => {
@@ -546,6 +583,10 @@ ipcMain.handle('agent:abort', (event) => {
   // Determine which agent to abort based on sender window
   const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
   targetAgent?.abort()
+})
+
+ipcMain.handle('app:set-active-view', (_, view: 'cowork' | 'project' | 'automation') => {
+  currentActiveView = view
 })
 
 ipcMain.handle('agent:confirm-response', (_, { id, approved, remember, tool, path }: { id: string, approved: boolean, remember?: boolean, tool?: string, path?: string }) => {
@@ -614,6 +655,42 @@ ipcMain.handle('agent:append-assistant', (event, content: string) => {
   return { success: true }
 })
 
+/** 向当前最后一条 assistant 消息内容末尾追加文本（用于自动化执行输出到聊天区） */
+ipcMain.handle('agent:append-to-last-assistant', (event, text: string) => {
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
+  if (!targetAgent || typeof text !== 'string') return { success: false }
+  const history = targetAgent.getHistory()
+  const updated = history.slice()
+  for (let i = updated.length - 1; i >= 0; i--) {
+    if (updated[i].role === 'assistant') {
+      const msg = updated[i] as { role: 'assistant'; content: string | Anthropic.ContentBlock[] }
+      if (typeof msg.content === 'string') {
+        updated[i] = { role: 'assistant', content: msg.content + text }
+      } else if (Array.isArray(msg.content)) {
+        const blocks = msg.content.slice()
+        const lastText = blocks.findIndex((b: { type?: string }) => b.type === 'text')
+        if (lastText !== -1) {
+          const block = blocks[lastText] as { type: 'text'; text: string }
+          blocks[lastText] = { type: 'text', text: block.text + text }
+        } else {
+          blocks.push({ type: 'text', text })
+        }
+        updated[i] = { role: 'assistant', content: blocks }
+      } else {
+        updated[i] = { role: 'assistant', content: String(msg.content || '') + text }
+      }
+      break
+    }
+  }
+  targetAgent.loadHistory(updated)
+  const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.webContents.send('agent:history-update', updated)
+  }
+  return { success: true }
+})
+
 /** 部署专用：获取 Agent 当前 history */
 ipcMain.handle('agent:get-history', (event) => {
   const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
@@ -664,9 +741,11 @@ ipcMain.handle('session:save', (event, messages: Anthropic.MessageParam[]) => {
   console.log(`[Session] Saving session for ${isFloatingBall ? 'floating ball' : 'main window'}: ${messages.length} messages, workspaceDir: ${currentWorkspaceDir}`)
 
   try {
-    // 根据当前是否处于 project 模式来标记 session 来源
-    const currentProject = projectStore.getCurrentProject()
+    // 根据当前视图模式来标记 session 来源并关联任务
+    const isAutomation = currentActiveView === 'automation'
+    const currentProject = isAutomation ? rpaProjectStore.getCurrentProject() : projectStore.getCurrentProject()
     const sessionMode: 'cowork' | 'project' = currentProject ? 'project' : 'cowork'
+    const taskIdForSession = isAutomation ? currentRpaTaskIdForSession : currentTaskIdForSession
 
     // Use the smart save method that only saves if there's meaningful content
     const sessionId = sessionStore.saveSession(currentId, messages, currentWorkspaceDir, sessionMode)
@@ -675,22 +754,29 @@ ipcMain.handle('session:save', (event, messages: Anthropic.MessageParam[]) => {
     if (sessionId) {
       sessionStore.setSessionId(sessionId, isFloatingBall)
       
-      // 如果是项目视图，尝试更新当前任务的 sessionId
-      if (currentProject && currentTaskIdForSession) {
-        const task = projectStore.getTasks(currentProject.id).find(t => t.id === currentTaskIdForSession)
+      // 如果是项目/自动化视图，尝试更新当前任务的 sessionId
+      if (currentProject && taskIdForSession) {
+        const tasks = isAutomation ? rpaProjectStore.getTasks(currentProject.id) : projectStore.getTasks(currentProject.id)
+        const task = tasks.find((t: { id: string; sessionId?: string }) => t.id === taskIdForSession)
         if (task && (!task.sessionId || task.sessionId === '')) {
-          // 关联 session 到当前任务
-          projectStore.updateTask(currentProject.id, currentTaskIdForSession, { sessionId })
-          console.log(`[Project] Associated session ${sessionId} with task ${currentTaskIdForSession} (${task.title})`)
+          if (isAutomation) {
+            rpaProjectStore.updateTask(currentProject.id, taskIdForSession, { sessionId })
+          } else {
+            projectStore.updateTask(currentProject.id, taskIdForSession, { sessionId })
+          }
+          console.log(`[${isAutomation ? 'RPA' : 'Project'}] Associated session ${sessionId} with task ${taskIdForSession} (${task.title})`)
         }
       } else if (currentProject) {
-        // 如果没有当前任务ID，尝试找到最新的没有 sessionId 的任务
-        const tasks = projectStore.getTasks(currentProject.id)
-        const tasksWithoutSession = tasks.filter(t => !t.sessionId || t.sessionId === '').sort((a, b) => b.updatedAt - a.updatedAt)
+        const tasks = isAutomation ? rpaProjectStore.getTasks(currentProject.id) : projectStore.getTasks(currentProject.id)
+        const tasksWithoutSession = tasks.filter((t: { sessionId?: string; updatedAt: number }) => !t.sessionId || t.sessionId === '').sort((a: { updatedAt: number }, b: { updatedAt: number }) => b.updatedAt - a.updatedAt)
         if (tasksWithoutSession.length > 0) {
           const taskToUpdate = tasksWithoutSession[0]
-          projectStore.updateTask(currentProject.id, taskToUpdate.id, { sessionId })
-          console.log(`[Project] Associated session ${sessionId} with latest task without session ${taskToUpdate.id} (${taskToUpdate.title})`)
+          if (isAutomation) {
+            rpaProjectStore.updateTask(currentProject.id, taskToUpdate.id, { sessionId })
+          } else {
+            projectStore.updateTask(currentProject.id, taskToUpdate.id, { sessionId })
+          }
+          console.log(`[${isAutomation ? 'RPA' : 'Project'}] Associated session ${sessionId} with latest task without session ${taskToUpdate.id} (${taskToUpdate.title})`)
         }
       }
     }
@@ -698,6 +784,53 @@ ipcMain.handle('session:save', (event, messages: Anthropic.MessageParam[]) => {
     return { success: true, sessionId: sessionId || undefined }
   } catch (error) {
     console.error('[Session] Error saving session:', error)
+    return { success: false, error: (error as Error).message }
+  }
+})
+
+/** 使用当前 Agent 的 history 保存会话（用于执行结束后把输出持久化到当前任务） */
+ipcMain.handle('session:save-current', (event) => {
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  if (!targetAgent) return { success: false, error: 'Agent not initialized' }
+  const messages = targetAgent.getHistory()
+  const currentId = sessionStore.getSessionId(isFloatingBall)
+  const authorizedFolders = configStore.getAll().authorizedFolders || []
+  const currentWorkspaceDir = authorizedFolders.length > 0 ? authorizedFolders[0].path : undefined
+  try {
+    const isAutomation = currentActiveView === 'automation'
+    const currentProject = isAutomation ? rpaProjectStore.getCurrentProject() : projectStore.getCurrentProject()
+    const sessionMode: 'cowork' | 'project' = currentProject ? 'project' : 'cowork'
+    const taskIdForSession = isAutomation ? currentRpaTaskIdForSession : currentTaskIdForSession
+    const sessionId = sessionStore.saveSession(currentId, messages, currentWorkspaceDir, sessionMode)
+    if (sessionId) {
+      sessionStore.setSessionId(sessionId, isFloatingBall)
+      if (currentProject && taskIdForSession) {
+        const tasks = isAutomation ? rpaProjectStore.getTasks(currentProject.id) : projectStore.getTasks(currentProject.id)
+        const task = tasks.find((t: { id: string; sessionId?: string }) => t.id === taskIdForSession)
+        if (task && (!task.sessionId || task.sessionId === '')) {
+          if (isAutomation) {
+            rpaProjectStore.updateTask(currentProject.id, taskIdForSession, { sessionId })
+          } else {
+            projectStore.updateTask(currentProject.id, taskIdForSession, { sessionId })
+          }
+        }
+      } else if (currentProject) {
+        const tasks = isAutomation ? rpaProjectStore.getTasks(currentProject.id) : projectStore.getTasks(currentProject.id)
+        const tasksWithoutSession = tasks.filter((t: { sessionId?: string; updatedAt: number }) => !t.sessionId || t.sessionId === '').sort((a: { updatedAt: number }, b: { updatedAt: number }) => b.updatedAt - a.updatedAt)
+        if (tasksWithoutSession.length > 0) {
+          const taskToUpdate = tasksWithoutSession[0]
+          if (isAutomation) {
+            rpaProjectStore.updateTask(currentProject.id, taskToUpdate.id, { sessionId })
+          } else {
+            projectStore.updateTask(currentProject.id, taskToUpdate.id, { sessionId })
+          }
+        }
+      }
+    }
+    return { success: true, sessionId: sessionId || undefined }
+  } catch (error) {
+    console.error('[Session] Error saving current session:', error)
     return { success: false, error: (error as Error).message }
   }
 })
@@ -834,6 +967,7 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
     
     // 构建执行消息
     let executeMessage = `请执行以下自动化脚本：\n\n\`\`\`bash\n${command}\n\`\`\`\n\n脚本路径：${script.filePath}`;
+    executeMessage += `\n\n📌 **数据时效**：若本脚本依赖本地数据文件（如 .json）生成 PDF/报表，且用户需要「每次生成新内容、用最新数据」，请先执行抓取最新数据的步骤或脚本，再执行本脚本；不要默认使用本地已有 JSON 作为数据源。详见 ai-playwright 与 generate-file 技能。`;
     
     // 如果没有明确要求关闭浏览器，添加提示保持浏览器打开
     if (!shouldClose) {
@@ -1793,10 +1927,30 @@ ipcMain.handle('project:create', async (event, { name, path: projectPath }: { na
     const project = projectStore.createProject(name, projectPath);
     // Project 模式：授权目录，主工作目录为 ~/.qa-cowork
     notifyProjectSwitched(event, project);
-    // 通知前端项目已创建
     const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
+    const isFloatingBall = event.sender === floatingBallWin?.webContents;
     if (targetWindow && !targetWindow.isDestroyed()) {
       targetWindow.webContents.send('project:created', project);
+      targetWindow.webContents.send('project:switched', project);
+    }
+    // 新建项目后自动初始化一个任务卡片
+    try {
+      const taskTitle = '新任务';
+      const task = projectStore.createTask(project.id, taskTitle, '');
+      if (task) {
+        currentTaskIdForSession = task.id;
+        if (targetAgent) {
+          targetAgent.clearHistory();
+          sessionStore.setSessionId(null, isFloatingBall);
+        }
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', []);
+          targetWindow.webContents.send('project:task:created', task);
+        }
+      }
+    } catch (taskError) {
+      console.error('[Project] Failed to auto-create initial task:', taskError);
     }
     return { success: true, project };
   } catch (error) {
@@ -1987,6 +2141,19 @@ ipcMain.handle('project:ensure-working-dir', () => {
   if (project) applyProjectWorkingDirs(project);
 });
 
+// 自动化模式：切换到 automation 视图时，将工作目录设置为当前 RPA 项目路径
+ipcMain.handle('rpa:ensure-working-dir', () => {
+  const currentProject = rpaProjectStore.getCurrentProject();
+  const projectPath = currentProject?.path || rpaProjectStore.ensureRpaProjectsDir();
+  const folders = configStore.getAll().authorizedFolders || [];
+  const normalizedRpa = path.resolve(projectPath);
+  const toAbs = (p: string) => path.resolve(p);
+  const existing = folders.find((f: { path: string }) => toAbs(f.path) === normalizedRpa);
+  const rpaFolder = existing || { path: normalizedRpa, trustLevel: 'strict' as TrustLevel, addedAt: Date.now() };
+  const otherFolders = folders.filter((f: { path: string }) => toAbs(f.path) !== normalizedRpa);
+  configStore.setAll({ ...configStore.getAll(), authorizedFolders: [rpaFolder, ...otherFolders] });
+});
+
 // 协作/会话模式：切换到 cowork 视图时，将默认工作目录设置为 ~/.qa-cowork
 ipcMain.handle('cowork:ensure-working-dir', () => {
   const coworkWorkspaceDir = directoryManager.getCoworkWorkspaceDir();
@@ -2094,6 +2261,8 @@ ipcMain.handle('project:task:list', (_, projectId: string) => {
 
 // 存储当前任务ID，用于 session 绑定
 let currentTaskIdForSession: string | null = null;
+let currentRpaTaskIdForSession: string | null = null;
+let currentActiveView: 'cowork' | 'project' | 'automation' = 'cowork';
 
 registerContextSwitchHandler((taskId) => {
     currentTaskIdForSession = taskId;
@@ -2148,7 +2317,8 @@ ipcMain.handle('project:task:switch', async (event, projectId: string, taskId: s
           targetWindow.webContents.send('agent:history-update', session.messages);
         }
       } else {
-        // Session 不存在，清空历史
+        // Session 不存在（可能未持久化或已被清理），清空历史并打日志便于排查「聊天历史未加载」问题
+        console.warn(`[Project] Task "${task.id}" (${task.title}) has sessionId ${task.sessionId} but session not found in store; clearing chat.`);
         targetAgent.clearHistory();
         sessionStore.setSessionId(null, isFloatingBall);
         // clearHistory 会触发 notifyUpdate，但为了确保前端收到更新，我们再次发送
@@ -2205,6 +2375,414 @@ ipcMain.handle('project:rename-current-task', (event, title: string) => {
     }
   }
   return { success };
+});
+
+// ═══════════════════════════════════════
+// RPA / Automation Handlers
+// ═══════════════════════════════════════
+
+ipcMain.handle('rpa:get-current-project', () => {
+  return rpaProjectStore.getCurrentProject();
+});
+
+/** 查找 RPA 项目目录下最近修改的 .js/.py 脚本（用于 agent:done 后兜底加载） */
+ipcMain.handle('rpa:find-recent-scripts', async (_, projectPath: string, withinMinutes = 10) => {
+  try {
+    const dir = path.resolve(projectPath);
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
+    const cutoff = Date.now() - withinMinutes * 60 * 1000;
+    const files: { path: string; mtime: number }[] = [];
+    const walk = (d: string) => {
+      const entries = fs.readdirSync(d, { withFileTypes: true });
+      for (const e of entries) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (/\.(js|py)$/i.test(e.name)) {
+          const stat = fs.statSync(full);
+          if (stat.mtimeMs >= cutoff) files.push({ path: full, mtime: stat.mtimeMs });
+        }
+      }
+    };
+    walk(dir);
+    return files.sort((a, b) => b.mtime - a.mtime).map(f => f.path);
+  } catch {
+    return [];
+  }
+});
+
+/** 返回项目目录下修改时间最近的一个 .js/.py 脚本路径（切换项目时默认加载） */
+ipcMain.handle('rpa:get-latest-script-in-project', async (_, projectPath: string): Promise<{ path: string } | null> => {
+  try {
+    const dir = path.resolve(projectPath);
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return null;
+    const files: { path: string; mtime: number }[] = [];
+    const walk = (d: string) => {
+      const entries = fs.readdirSync(d, { withFileTypes: true });
+      for (const e of entries) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (/\.(js|py)$/i.test(e.name)) {
+          const stat = fs.statSync(full);
+          files.push({ path: full, mtime: stat.mtimeMs });
+        }
+      }
+    };
+    walk(dir);
+    if (files.length === 0) return null;
+    const sorted = files.sort((a, b) => b.mtime - a.mtime);
+    return { path: sorted[0].path };
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('rpa:project:list', () => {
+  // 确保至少有一个默认项目（首次使用时）
+  rpaProjectStore.getCurrentProject();
+  return rpaProjectStore.getProjects();
+});
+
+ipcMain.handle('rpa:project:open', (event, id: string) => {
+  const success = rpaProjectStore.setCurrentProject(id);
+  if (success) {
+    const project = rpaProjectStore.getProject(id);
+    if (project) {
+      const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+      if (targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('rpa:project:switched', project);
+      }
+    }
+  }
+  return { success };
+});
+
+ipcMain.handle('rpa:project:create', async (event, name: string) => {
+  if (!name || typeof name !== 'string') return { success: false, error: 'Invalid project name' };
+  const project = rpaProjectStore.createProject(name);
+  if (!project) return { success: false, error: 'Failed to create project' };
+  const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+  const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
+  const isFloatingBall = event.sender === floatingBallWin?.webContents;
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.webContents.send('rpa:project:created', project);
+    targetWindow.webContents.send('rpa:project:switched', project);
+  }
+  // 新建自动化项目后自动初始化一个任务卡片，便于直接在聊天里输入描述生成脚本
+  try {
+    const taskTitle = '新任务';
+    const task = rpaProjectStore.createTask(project.id, taskTitle, '');
+    if (task) {
+      currentRpaTaskIdForSession = task.id;
+      if (targetAgent) {
+        targetAgent.clearHistory();
+        sessionStore.setSessionId(null, isFloatingBall);
+      }
+      if (targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('agent:history-update', []);
+        targetWindow.webContents.send('rpa:task:created', task);
+      }
+    }
+  } catch (taskError) {
+    console.error('[RPA] Failed to auto-create initial task:', taskError);
+  }
+  return { success: true, project };
+});
+
+ipcMain.handle('rpa:project:delete', async (event, id: string) => {
+  try {
+    const project = rpaProjectStore.getProject(id);
+    if (!project) return { success: false, error: 'Project not found' };
+
+    const deleteResult = rpaProjectStore.deleteProject(id);
+    if (!deleteResult.success) return { success: false, error: 'Failed to delete project' };
+
+    // 删除项目目录（仅当 path 是 rpaProjects 下的子目录时）
+    const baseDir = rpaProjectStore.getDefaultRpaPath();
+    if (project.path && project.path !== baseDir && project.path.startsWith(baseDir + path.sep)) {
+      try {
+        if (fs.existsSync(project.path)) {
+          fs.rmSync(project.path, { recursive: true, force: true });
+        }
+      } catch (err) {
+        console.error('[RPA] Failed to delete project directory:', project.path, err);
+        return {
+          success: true,
+          switchedToProjectId: deleteResult.switchedToProjectId,
+          warning: `项目记录已删除，但删除本地目录时出错：${err instanceof Error ? err.message : String(err)}`
+        };
+      }
+    }
+
+    const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('rpa:project:deleted', id);
+      if (deleteResult.switchedToProjectId) {
+        const next = rpaProjectStore.getProject(deleteResult.switchedToProjectId);
+        if (next) targetWindow.webContents.send('rpa:project:switched', next);
+      }
+    }
+
+    return { success: true, switchedToProjectId: deleteResult.switchedToProjectId };
+  } catch (error) {
+    console.error('[RPA] Error deleting project:', error);
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('rpa:task:create', async (event, projectId: string, title: string) => {
+  try {
+    const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
+    const isFloatingBall = event.sender === floatingBallWin?.webContents;
+    const targetWindow = isFloatingBall ? floatingBallWin : mainWin;
+
+    const task = rpaProjectStore.createTask(projectId, title, '');
+    if (!task) return { success: false, error: 'Project not found' };
+
+    currentRpaTaskIdForSession = task.id;
+
+    if (targetAgent) {
+      targetAgent.clearHistory();
+      sessionStore.setSessionId(null, isFloatingBall);
+    }
+    if (targetWindow && !targetWindow.isDestroyed() && targetAgent) {
+      targetWindow.webContents.send('agent:history-update', []);
+      targetWindow.webContents.send('rpa:task:created', task);
+    }
+    return { success: true, task };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('rpa:task:list', (_, projectId: string) => {
+  return rpaProjectStore.getTasks(projectId);
+});
+
+ipcMain.handle('rpa:task:switch', async (event, projectId: string, taskId: string) => {
+  try {
+    const tasks = rpaProjectStore.getTasks(projectId);
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return { success: false, error: 'Task not found' };
+
+    const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent;
+    const isFloatingBall = event.sender === floatingBallWin?.webContents;
+    const previousTaskId = currentRpaTaskIdForSession;
+    currentRpaTaskIdForSession = taskId;
+    const targetWindow = isFloatingBall ? floatingBallWin : mainWin;
+
+    if (task.sessionId) {
+      const session = sessionStore.getSession(task.sessionId);
+      if (session) {
+        sessionStore.setSessionId(task.sessionId, isFloatingBall);
+        targetAgent?.loadHistory(session.messages);
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', session.messages);
+        }
+      } else {
+        targetAgent?.clearHistory();
+        sessionStore.setSessionId(null, isFloatingBall);
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', []);
+        }
+      }
+    } else {
+      if (previousTaskId === taskId) {
+        const currentHistory = targetAgent?.getHistory() ?? [];
+        if (currentHistory.length > 0 && targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', currentHistory);
+        }
+      } else {
+        targetAgent?.clearHistory();
+        sessionStore.setSessionId(null, isFloatingBall);
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:history-update', []);
+        }
+      }
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle('rpa:task:update', (event, projectId: string, taskId: string, updates: { title?: string; status?: 'active' | 'completed' | 'failed'; scriptFileName?: string; scriptVersion?: number }) => {
+  const success = rpaProjectStore.updateTask(projectId, taskId, updates);
+  if (success) {
+    const targetWindow = event.sender === floatingBallWin?.webContents ? floatingBallWin : mainWin;
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('rpa:task:updated', { projectId, taskId, updates });
+    }
+  }
+  return { success };
+});
+
+ipcMain.handle('rpa:task:increment-script-version', (_, projectId: string, taskId: string) => {
+  rpaProjectStore.incrementScriptVersion(projectId, taskId);
+  return { success: true };
+});
+
+ipcMain.handle('rpa:task:get-next-script-version', (_, projectId: string, taskId: string) => {
+  return rpaProjectStore.getNextScriptVersion(projectId, taskId);
+});
+
+ipcMain.handle('rpa:task:delete', (_, projectId: string, taskId: string) => {
+  return { success: rpaProjectStore.deleteTask(projectId, taskId) };
+});
+
+/** 执行完成后默认等待时长（毫秒），然后关闭 Playwright 浏览器再标记完成 */
+const RPA_POST_EXECUTE_WAIT_MS = 10_000;
+
+/**
+ * 当 RPA 脚本因缺少文件（如 ENOENT + .json）失败时，在错误信息后追加友好提示。
+ */
+function enhanceRpaMissingFileError(rawError: string): string {
+  const isENOENT = /ENOENT|no such file or directory/i.test(rawError);
+  const hasJson = /\.json['"]?\s*\)?$/m.test(rawError) || /\b[\w.-]+\.json\b/.test(rawError);
+  if (isENOENT && hasJson) {
+    return (
+      rawError +
+      '\n\n💡 若本脚本依赖前置任务生成的数据文件（如 .json），请先运行对应前置任务生成该文件后再执行本脚本；生成 PDF/文件请使用 generate-file 技能或独立脚本。'
+    );
+  }
+  return rawError;
+}
+
+/**
+ * 对 .js 脚本注入：执行完成后等待 RPA_POST_EXECUTE_WAIT_MS，再关闭 context/browser，避免浏览器常驻。
+ * 若脚本末尾为 })();（async IIFE），则链上 .then(等待).then(关闭).catch(退出)。
+ */
+function injectRpaAutoClose(scriptContent: string, waitMs: number): string {
+  if (scriptContent.includes('RPA_AUTO_CLOSE_AFTER')) return scriptContent;
+  // 必须保留 })() 里的调用括号，让 IIFE 执行后返回 Promise，再链 .then；否则 .then 会挂在函数对象上导致 .then is not a function
+  const closeSnippet = `})().then(() => { console.log('\\n__RPA_SCRIPT_DONE__\\n'); return new Promise(r => setTimeout(r, ${waitMs})); }).then(async () => { try { if (typeof context !== 'undefined' && context.close) await context.close(); } catch(e){} try { if (typeof browser !== 'undefined' && browser.close) await browser.close(); } catch(e){} }).catch(e => { console.error(e); process.exit(1); });`;
+  const replaced = scriptContent.replace(/\}\s*\)\s*\(\s*\)\s*;\s*$/, closeSnippet);
+  return replaced !== scriptContent ? replaced : scriptContent;
+}
+
+/** 执行 RPA Playwright 脚本：支持 .js 和 .py，优先使用 Node.js 执行（更高效） */
+/** 向发起执行的窗口发送运行输出（若提供了 runId） */
+function sendRunOutput(sender: Electron.WebContents, runId: string | undefined, event: 'rpa:run:start' | 'rpa:run:output' | 'rpa:run:end', payload: object) {
+  if (!runId || sender.isDestroyed()) return;
+  sender.send(event, payload);
+}
+
+ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: string) => {
+  const sender = event.sender;
+  try {
+    if (!scriptPath || !fs.existsSync(scriptPath)) {
+      return { success: false, error: 'Script file not found' };
+    }
+    sendRunOutput(sender, runId, 'rpa:run:start', { runId, scriptPath });
+
+    const ext = path.extname(scriptPath).toLowerCase();
+    const scriptDir = path.dirname(scriptPath);
+    const nodePath = getBuiltinNodePath();
+    // 优先使用脚本目录的 node_modules，其次使用 agent-browser 的 playwright（~/.qa-cowork/skills/agent-browser/node_modules）
+    const agentBrowserModules = path.join(os.homedir(), '.qa-cowork', 'skills', 'agent-browser', 'node_modules');
+    const localModules = path.join(scriptDir, 'node_modules');
+    const nodePathParts = [localModules];
+    if (fs.existsSync(agentBrowserModules)) {
+      nodePathParts.push(agentBrowserModules);
+    }
+    const nodePathEnv = nodePathParts.join(path.delimiter);
+
+    if (ext === '.js') {
+      let content = fs.readFileSync(scriptPath, 'utf-8');
+      const injected = injectRpaAutoClose(content, RPA_POST_EXECUTE_WAIT_MS);
+      const useTmp = injected !== content;
+      const scriptToRun = useTmp
+        ? (() => {
+            const tmpFile = path.join(scriptDir, `.rpa-exec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.js`);
+            fs.writeFileSync(tmpFile, injected, 'utf-8');
+            return tmpFile;
+          })()
+        : scriptPath;
+      const child = cpSpawn(nodePath, [path.basename(scriptToRun)], {
+        cwd: scriptDir,
+        env: { ...process.env, NODE_PATH: nodePathEnv },
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      if (useTmp) {
+        const tmpFile = scriptToRun;
+        const cleanup = () => { try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch {} };
+        child.on('close', () => cleanup());
+      }
+      let stdout = '';
+      let stderr = '';
+      let runEndSent = false;
+      const sendRunEndIfNeeded = (success: boolean, error?: string) => {
+        if (runEndSent) return;
+        runEndSent = true;
+        sendRunOutput(sender, runId, 'rpa:run:end', { runId, success, error, stdout, stderr });
+      };
+      child.stdout?.on('data', (d) => {
+        const s = d.toString();
+        stdout += s;
+        if (s.includes('__RPA_SCRIPT_DONE__')) {
+          sendRunEndIfNeeded(true);
+        }
+        const dataToShow = s.replace(/__RPA_SCRIPT_DONE__/g, '');
+        sendRunOutput(sender, runId, 'rpa:run:output', { runId, data: dataToShow, stream: 'stdout' });
+      });
+      child.stderr?.on('data', (d) => {
+        const s = d.toString();
+        stderr += s;
+        sendRunOutput(sender, runId, 'rpa:run:output', { runId, data: s, stream: 'stderr' });
+      });
+      return new Promise<{ success: boolean; error?: string; stdout?: string; stderr?: string }>((resolve) => {
+        child.on('close', (code) => {
+          const success = code === 0;
+          const error = !success ? enhanceRpaMissingFileError(stderr || stdout || `Exit code ${code}`) : undefined;
+          sendRunEndIfNeeded(success, error);
+          if (!success) {
+            resolve({ success: false, error, stdout, stderr });
+          } else {
+            resolve({ success: true, stdout, stderr });
+          }
+        });
+      });
+    } else if (ext === '.py') {
+      const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+      const child = cpSpawn(pythonCmd, [path.basename(scriptPath)], {
+        cwd: scriptDir,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (d) => {
+        const s = d.toString();
+        stdout += s;
+        sendRunOutput(sender, runId, 'rpa:run:output', { runId, data: s, stream: 'stdout' });
+      });
+      child.stderr?.on('data', (d) => {
+        const s = d.toString();
+        stderr += s;
+        sendRunOutput(sender, runId, 'rpa:run:output', { runId, data: s, stream: 'stderr' });
+      });
+      return new Promise<{ success: boolean; error?: string; stdout?: string; stderr?: string }>((resolve) => {
+        child.on('close', (code) => {
+          const success = code === 0;
+          const error = !success ? enhanceRpaMissingFileError(stderr || stdout || `Exit code ${code}`) : undefined;
+          sendRunOutput(sender, runId, 'rpa:run:end', { runId, success, error, stdout, stderr });
+          if (!success) {
+            resolve({ success: false, error, stdout, stderr });
+          } else {
+            resolve({ success: true, stdout, stderr });
+          }
+        });
+      });
+    } else {
+      return { success: false, error: `Unsupported script type: ${ext}. Use .js or .py` };
+    }
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    sendRunOutput(sender, runId, 'rpa:run:end', { runId, success: false, error: errMsg, stdout: '', stderr: '' });
+    return { success: false, error: errMsg };
+  }
+});
+
+ipcMain.handle('rpa:get-projects-path', () => {
+  return rpaProjectStore.getDefaultRpaPath();
 });
 
 // ═══════════════════════════════════════
@@ -2656,6 +3234,28 @@ ipcMain.handle('fs:write-file', async (_, filePath: string, content: string) => 
       floatingBallWin.webContents.send('fs:file-changed', filePath);
     }
     return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+/** 读取图片文件为 data URL，用于执行卡片中展示截图 */
+ipcMain.handle('fs:read-image-data-url', async (_, filePath: string) => {
+  try {
+    const folders = configStore.getAll().authorizedFolders || [];
+    const isAuthorized = folders.some((f: { path: string }) => filePath.startsWith(f.path));
+    if (!isAuthorized) {
+      return { success: false, error: 'Path not authorized' };
+    }
+    const ext = path.extname(filePath).toLowerCase();
+    const mime = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.gif' ? 'image/gif' : ext === '.webp' ? 'image/webp' : null;
+    if (!mime) {
+      return { success: false, error: 'Not an image file' };
+    }
+    const buf = await fs.promises.readFile(filePath);
+    const base64 = buf.toString('base64');
+    const dataUrl = `data:${mime};base64,${base64}`;
+    return { success: true, dataUrl };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -3559,6 +4159,10 @@ async function deferredInitialization() {
         } else {
           console.log(`[Main] Agent initialization completed in ${total}ms`)
           mainWin?.webContents.send('agent:ready')
+          // 首次打开时渲染端可能尚未注册 agent:ready 监听，主进程主动加载最近会话并下发历史，确保聊天区能显示
+          if (currentActiveView === 'cowork') {
+            autoLoadLatestSession()
+          }
         }
       })
       .catch((err) => {
