@@ -17,23 +17,54 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
-const browsersPath = path.join(projectRoot, 'resources', 'playwright', 'browsers');
+const playwrightRoot = path.join(projectRoot, 'resources', 'playwright');
+const browsersPath = path.join(playwrightRoot, 'browsers');
 
-console.log('📦 准备 Playwright 浏览器二进制文件...');
-console.log(`目标目录: ${browsersPath}`);
+console.log('📦 准备 Playwright（内置 Node 同目录，避免「找不到 playwright」）...');
+console.log(`Playwright 根目录: ${playwrightRoot}`);
+console.log(`浏览器目录: ${browsersPath}`);
+
+// 1) 确保 resources/playwright 存在且已安装 playwright 包（供应用内 require('playwright')）
+const pkgJson = path.join(playwrightRoot, 'package.json');
+const nodeModulesPlaywright = path.join(playwrightRoot, 'node_modules', 'playwright', 'package.json');
+if (!fs.existsSync(playwrightRoot)) {
+  fs.mkdirSync(playwrightRoot, { recursive: true });
+}
+if (!fs.existsSync(pkgJson)) {
+  console.error('❌ 缺少 resources/playwright/package.json');
+  process.exit(1);
+}
+if (!fs.existsSync(nodeModulesPlaywright)) {
+  console.log('正在 resources/playwright 下安装 playwright 包...');
+  try {
+    execSync('npm install --no-package-lock --no-save', {
+      cwd: playwrightRoot,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
+        PLAYWRIGHT_BROWSERS_PATH: browsersPath
+        // 不下载浏览器，下面会单独处理
+      },
+      timeout: 120000
+    });
+    console.log('✅ playwright 包安装完成');
+  } catch (err) {
+    console.warn('⚠️  npm install 失败，将仅准备浏览器:', err?.message || err);
+  }
+}
 
 // 快速检测：浏览器已存在则直接跳过，避免每次 build/postinstall 都重复安装
 if (fs.existsSync(browsersPath)) {
   const existing = fs.readdirSync(browsersPath).filter(f => f.startsWith('chromium-'));
   if (existing.length > 0) {
     console.log(`✅ 浏览器已存在 (${existing[0]})，跳过安装`);
-    // 仍然确保软链接存在
     ensureSkillSymlink(browsersPath);
     process.exit(0);
   }
 }
 
-// 确保目录存在
+// 确保浏览器目录存在
 if (!fs.existsSync(browsersPath)) {
   fs.mkdirSync(browsersPath, { recursive: true });
 }
@@ -75,7 +106,7 @@ if (!hasCache) {
   while (retries > 0 && !success) {
     try {
       execSync('npx playwright install chromium', {
-        cwd: projectRoot,
+        cwd: playwrightRoot,
         stdio: 'inherit',
         env: {
           ...process.env,

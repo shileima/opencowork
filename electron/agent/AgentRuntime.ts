@@ -10,6 +10,7 @@ import { permissionManager } from './security/PermissionManager';
 import { configStore } from '../config/ConfigStore';
 import { directoryManager } from '../config/DirectoryManager';
 import { projectStore } from '../config/ProjectStore';
+import { rpaProjectStore } from '../config/RPAProjectStore';
 import { sessionStore } from '../config/SessionStore';
 import { ssoStore } from '../config/SsoStore';
 import { setCurrentTaskIdForContextSwitch } from '../contextSwitchCoordinator';
@@ -276,7 +277,7 @@ export class AgentRuntime {
     private userWantsCloseBrowser: boolean = false; // 用户是否要求关闭浏览器
     private runUsedKillProjectDevServer: boolean = false; // 本次 run 是否调用了 kill_project_dev_server，用于 agent:done 时跳过刷新内置浏览器
     private language: string = 'en'; // UI 语言，用于指导 AI 回复语言
-    private currentViewContext: 'cowork' | 'project' = 'cowork'; // 当前消息来源视图，协作视图不注入项目模式约束
+    private currentViewContext: 'cowork' | 'project' | 'automation' = 'cowork'; // 当前消息来源视图
     private contextSwitchRetryCount: number = 0; // 本轮消息的上下文切换重试次数，防止 400 死循环
 
     // 打开本地应用时缩小主窗口至右下角的回调（由 main.ts 注入）
@@ -404,9 +405,9 @@ export class AgentRuntime {
         return this.history.slice();
     }
 
-    public async processUserMessage(input: string | { content: string, images: string[] }, taskId?: string, projectId?: string, isFloatingBall?: boolean, viewContext?: 'cowork' | 'project') {
-        // 根据来源视图设置上下文，协作视图不注入项目模式约束
-        this.currentViewContext = (isFloatingBall || viewContext === 'cowork') ? 'cowork' : 'project';
+    public async processUserMessage(input: string | { content: string, images: string[] }, taskId?: string, projectId?: string, isFloatingBall?: boolean, viewContext?: 'cowork' | 'project' | 'automation') {
+        // 根据来源视图设置上下文
+        this.currentViewContext = (isFloatingBall || viewContext === 'cowork') ? 'cowork' : (viewContext === 'automation' ? 'automation' : 'project');
         // 如果提供了 taskId，使用任务级别的并发控制；否则使用全局控制（向后兼容）
         const useTaskLevelConcurrency = taskId !== undefined;
         const restoreRef = { originalHistory: this.history };
@@ -465,7 +466,7 @@ export class AgentRuntime {
                 this.isProcessing = originalIsProcessing;
                 this.abortController = originalAbortController;
                 this.activeTasks.delete(taskId);
-                this.broadcast('agent:done', { timestamp: Date.now(), taskId: effectiveTaskIdForDone, projectId, skipBrowserRefresh: this.runUsedKillProjectDevServer });
+                this.broadcast('agent:done', { timestamp: Date.now(), taskId: effectiveTaskIdForDone, projectId, skipBrowserRefresh: this.runUsedKillProjectDevServer, artifacts: [...this.artifacts] });
             }
         } else {
             // 全局并发控制（向后兼容）：保持原有逻辑
@@ -489,11 +490,11 @@ export class AgentRuntime {
                 this.isProcessing = false;
                 this.abortController = null;
                 this.notifyUpdate();
-                this.broadcast('agent:done', { timestamp: Date.now(), skipBrowserRefresh: this.runUsedKillProjectDevServer });
+                this.broadcast('agent:done', { timestamp: Date.now(), skipBrowserRefresh: this.runUsedKillProjectDevServer, artifacts: [...this.artifacts] });
             }
         }
     }
-    
+
     /**
      * @returns effectiveTaskId 若发生上下文切换创建了新任务，返回新任务 ID，供 agent:done 使用
      */
@@ -584,7 +585,7 @@ export class AgentRuntime {
                 };
                 this.history.push(friendlyMessage);
                 this.notifyUpdate();
-                this.broadcast('agent:done', { timestamp: Date.now(), taskId: taskId || undefined, projectId, skipBrowserRefresh: this.runUsedKillProjectDevServer });
+                this.broadcast('agent:done', { timestamp: Date.now(), taskId: taskId || undefined, projectId, skipBrowserRefresh: this.runUsedKillProjectDevServer, artifacts: [...this.artifacts] });
                 return;
             }
 
@@ -631,6 +632,15 @@ export class AgentRuntime {
                     return { effectiveTaskId };
                 } catch (retryError) {
                     console.error('[AgentRuntime] Context switch retry failed:', retryError);
+                    // 重试仍失败时也要向界面发送友好错误，否则用户只会看到控制台堆栈
+                    const errorTaskId = taskId || undefined;
+                    const errorPayload = (msg: string) => ({ message: msg, taskId: errorTaskId, projectId });
+                    const detail = err.error?.message || err.message || '';
+                    const isUpstream = /provider_response_error|upstream_error|bad response status code/i.test(detail);
+                    const friendly400 = isUpstream
+                        ? '代理或上游服务返回 400。请检查：\n- OneAPI/代理配置与模型名称（如 aws.claude-sonnet-4.5）\n- 上游服务是否正常、请求格式是否被支持'
+                        : `请求错误 (400): ${detail.slice(0, 200)}${detail.length > 200 ? '…' : ''}\n\n请检查：\n- API Key 是否正确\n- API 地址是否有效\n- 模型名称是否正确`;
+                    this.broadcast('agent:error', errorPayload(friendly400));
                     throw error;
                 }
             }
@@ -644,7 +654,11 @@ export class AgentRuntime {
                 this.broadcast('agent:error', errorPayload(`配置错误: MCP 工具名称格式不正确\n\n详细信息: ${err.error.message}\n\n这通常是因为 MCP 服务器返回的工具名称包含了特殊字符（如中文）。请尝试：\n1. 禁用有问题的 MCP 服务器\n2. 或联系开发者修复此问题\n\n错误代码: ${err.status || 400}`));
             } else if (err.status === 400) {
                 const details = err.error?.message || err.message || 'Unknown error';
-                this.broadcast('agent:error', errorPayload(`请求错误 (400): ${details}\n\n请检查：\n- API Key 是否正确\n- API 地址是否有效\n- 模型名称是否正确`));
+                const isUpstream = /provider_response_error|upstream_error|bad response status code/i.test(details);
+                const msg = isUpstream
+                    ? '代理或上游服务返回 400。请检查：\n- OneAPI/代理配置与模型名称（如 aws.claude-sonnet-4.5）\n- 上游服务是否正常、请求格式是否被支持'
+                    : `请求错误 (400): ${details.slice(0, 200)}${details.length > 200 ? '…' : ''}\n\n请检查：\n- API Key 是否正确\n- API 地址是否有效\n- 模型名称是否正确`;
+                this.broadcast('agent:error', errorPayload(msg));
             } else if (err.status === 401) {
                 this.broadcast('agent:error', errorPayload('认证失败 (401): API Key 无效或已过期\n\n请检查您的 API Key 配置。'));
             } else if (err.status === 429) {
@@ -871,10 +885,12 @@ export class AgentRuntime {
                 ...(await this.mcpService.getTools() as Anthropic.Tool[])
             ];
 
-            // Build working directory context (Project 模式下 Primary = 当前已选项目路径)
+            // Build working directory context (Project/Automation 模式下 Primary = 当前已选项目路径)
             const authorizedFolders = permissionManager.getAuthorizedFolders();
-            // 协作视图不注入项目模式约束，避免 AI 误以为处于项目模式而拒绝执行协作任务
-            const currentProject = this.currentViewContext === 'cowork' ? null : projectStore.getCurrentProject();
+            const isAutomation = this.currentViewContext === 'automation';
+            const currentProject = this.currentViewContext === 'cowork' ? null
+                : isAutomation ? rpaProjectStore.getCurrentProject()
+                : projectStore.getCurrentProject();
             const projectContext = currentProject 
                 ? `\n\nCURRENT PROJECT:\n- Project Name: "${currentProject.name}"\n- Project Path: ${currentProject.path}\n\n⚠️ CRITICAL: You are working INSIDE an existing project. When the user asks to create code, a website, or an application, you MUST create files directly in the current project directory (${currentProject.path}), NOT create a new project directory. Only create a NEW project if the user explicitly asks to "create a new project" or "新建项目".`
                 : '';
@@ -968,7 +984,7 @@ When creating new projects or generating code, if the user does NOT specify a te
 **When to deviate**: Only use a different stack if the user explicitly specifies it (e.g., "use Next.js", "use Vue", "use npm instead of pnpm").
 
 ### Tool Usage Protocol
-${currentProject ? `⚠️ **PROJECT MODE - STRICT CONSTRAINTS**:
+${currentProject && !isAutomation ? `⚠️ **PROJECT MODE - STRICT CONSTRAINTS**:
 You are in **Project Mode**. Your ONLY purpose is to generate code files for the user's project.
 - **FORBIDDEN**: Do NOT use browser automation skills (agent-browser, webapp-testing, etc.)
 - **FORBIDDEN**: Do NOT use web search or information retrieval skills
@@ -976,6 +992,16 @@ You are in **Project Mode**. Your ONLY purpose is to generate code files for the
 - **ALLOWED**: Only use \`write_file\`, \`read_file\`, \`list_dir\`, \`run_command\` (for pnpm install/dev), \`open_browser_preview\`, \`kill_project_dev_server\`
 - **ALLOWED**: Only use \`react-project-builder\` skill if needed for project structure guidance
 - If the user asks something unrelated to code generation (e.g., searching for information, querying external services), politely explain that Project Mode is focused on code generation and ask them to clarify what code they need.
+` : currentProject && isAutomation ? `⚠️ **AUTOMATION MODE - RPA 自动化脚本**:
+You are in **Automation Mode**. **Default**: Create and execute Playwright scripts (follow **ai-playwright** skill: task analysis → DOM probe → generate script → install deps + run → screenshot each step). Do NOT use agent-browser unless the user explicitly asks for it or Playwright execution fails.
+- **PREFER**: ai-playwright (Playwright scripts). **FALLBACK**: agent-browser only when user explicitly requests or Playwright unavailable.
+- **ALLOWED**: write_file, read_file, list_dir, run_command (node/pnpm for Playwright), agent-browser only when needed as above.
+- **Script storage**: Save ALL automation scripts to the project directory: \`${currentProject.path}\`
+- **Naming rule**: Use \`<base>_v<version>.js\` format. Current version for this task: **\`_v${(currentProject && _taskId ? rpaProjectStore.getNextScriptVersion(currentProject.id, _taskId) : 1)}\`**. Example: \`task_v1.js\`, \`task_v2.js\` (first chat=_v1, each subsequent chat increments)
+- **Project SKILL.md**: Read \`${path.join(currentProject.path, 'SKILL.md')}\` for project-specific instructions before generating scripts.
+- **Generate PDF/file**: Do NOT put PDF or file generation logic inside the automation script. Use **generate-file** skill for that; automation script only does web operations. Each run executes only the main script to re-do web operations.
+- **Fresh data on each run**: If the script to run reads local JSON/data to produce PDF or reports and the user wants "latest content" each time, run the **data-fetch/crawl** step or script first (e.g. open page, scrape, write JSON), then run the current script. Do NOT assume local JSON is up-to-date unless the user explicitly says "use local data". See ai-playwright and generate-file skills.
+- **New tab / active tab**: When generating scripts, you MUST explicitly mark which step opens a new browser tab (e.g. \`opensNewTab: true\`). Before each step, verify: (1) whether a new tab has opened and switch to it if needed, (2) that you are operating on the active tab. See ai-playwright skill for \`waitForEvent('page')\` and tab verification.
 ` : `1. **Skills First**: Before any task, check for relevant skills in \`${skillsDir}\`
 `}2. **MCP Integration**: Leverage available MCP servers for enhanced capabilities
 3. **Tool Prefixes**: MCP tools use namespace prefixes (e.g., \`tool_name__action\`)
@@ -1262,6 +1288,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                             const fileName = args.path.split(/[\\/]/).pop() || 'file';
                                             this.artifacts.push({ path: args.path, name: fileName, type: 'file' });
                                             this.broadcast('agent:artifact-created', { path: args.path, name: fileName, type: 'file' });
+                                            this.broadcast('fs:file-changed', args.path);
                                         }
                                     } else {
                                         // 如果路径在已授权的文件夹中，直接写入，无需确认（定制化：简化写入流程）
@@ -1269,6 +1296,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         const fileName = args.path.split(/[\\/]/).pop() || 'file';
                                         this.artifacts.push({ path: args.path, name: fileName, type: 'file' });
                                         this.broadcast('agent:artifact-created', { path: args.path, name: fileName, type: 'file' });
+                                        this.broadcast('fs:file-changed', args.path);
                                     }
                                 } else if (toolUse.name === 'list_dir') {
                                     const args = toolUse.input as { path: string };
@@ -1413,7 +1441,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         if (isCliBrowserSkill) {
                                             result = `[SKILL LOADED: ${toolUse.name}]
 
-IMPORTANT: This is a CLI skill. Use run_command to execute agent-browser commands directly. 优先使用 agent-browser，可不使用 Playwright；Do NOT create Python or Playwright scripts.
+IMPORTANT: Use this skill ONLY when the user explicitly requests agent-browser or when Playwright script execution has failed. In Automation Mode, prefer creating and running Playwright scripts (ai-playwright); do not use agent-browser by default. When used, execute via run_command.
 
 Correct usage examples:
   run_command: agent-browser open "https://example.com" --headed --no-sandbox
@@ -2085,11 +2113,15 @@ async function buildWorkspaceContextSection(
         // SSO 信息读取失败不影响正常流程
     }
 
-    // 4. 项目级指引（当前工作目录/CLAUDE.md，仅当与全局工作空间不同时）
+    // 4. 项目级指引（当前工作目录/CLAUDE.md 或 SKILL.md，仅当与全局工作空间不同时）
     if (primaryWorkingDir && primaryWorkingDir !== coworkWorkspaceDir) {
         const projectGuide = await readFileOptional(path.join(primaryWorkingDir, 'CLAUDE.md'));
         if (projectGuide) {
             sections.push(`## Project Instructions (${primaryWorkingDir})\n${projectGuide.trim()}`);
+        }
+        const skillGuide = await readFileOptional(path.join(primaryWorkingDir, 'SKILL.md'));
+        if (skillGuide) {
+            sections.push(`## RPA Project Skill Instructions (${primaryWorkingDir})\n${skillGuide.trim()}`);
         }
     }
 

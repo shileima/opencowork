@@ -1,6 +1,6 @@
 ---
 name: agent-browser
-description: Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use ONLY in Cowork (协作) mode when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications, or extract information from web pages. DO NOT use in Project (项目) mode - Project mode is exclusively for code generation. When agent-browser encounters connection errors, CLI failures, or "looks like Playwright was just installed" errors, immediately switch to Playwright script mode (see ## Playwright Fallback section).
+description: 浏览器自动化备用方案。仅在用户明确要求使用 agent-browser、或 Playwright 脚本执行失败时使用。自动化模式默认应使用 ai-playwright（Playwright 脚本），不要默认使用本技能。Cowork 模式下若用户明确要求用 agent-browser 则可使用。Project 模式禁止使用。
 allowed-tools: Bash(agent-browser:*,node:*)
 ---
 
@@ -8,12 +8,12 @@ allowed-tools: Bash(agent-browser:*,node:*)
 
 > 版本：v0.15.2（2026-03-03 最新）｜[官方文档](https://agent-browser.dev) ｜[GitHub](https://github.com/vercel-labs/agent-browser)
 
-## 执行策略：优先 agent-browser，失败自动切换 Playwright
+## 执行策略：默认 Playwright 脚本，agent-browser 仅作备用
 
-**第一选择：agent-browser CLI**（快速、支持 session/cookies）
-**自动降级：Playwright 脚本**（当 agent-browser 不可用时，无需告知用户，直接切换执行）
+**默认选择：Playwright 脚本**（ai-playwright 技能：DOM 探测 → 生成脚本 → 执行 → 截图验证）
+**备用选择：agent-browser CLI**（仅当用户明确要求「用 agent-browser」、或 Playwright 不可用/执行失败时使用）
 
-> 两种方式都能完成任务，区别仅在执行机制。切换时不要停下来解释，直接用 Playwright 继续完成任务。
+> 自动化任务应优先创建并执行 Playwright 脚本，尽量不使用 agent-browser。仅在用户明确指定或 Playwright 失败时再使用 agent-browser。
 
 - 命令参考：[agent-browser 官方命令](https://agent-browser.dev/commands)
 - 带鉴权打开：使用 `agent-browser open <url> --session <name>` 或由本应用自动添加 `--session meituan-sso` 并注入 SSO cookies，无需额外 Playwright 脚本。
@@ -253,6 +253,13 @@ agent-browser tab close [n]        # Close tab
 agent-browser window new           # New window
 agent-browser click @e1 --new-tab  # Open link in new tab
 ```
+
+**多标签页与当前激活 tab**：点击、导航等操作可能在本 tab 或新 tab 打开；关闭 tab 后激活 tab 会变化。**【重要】** 下一步的 DOM 探测（snapshot）和截图**必须**在当前激活的 tab 上进行，否则会错位。
+
+- **脚本/步骤标注**：若某一步会打开新浏览器 tab（如搜索、带 `target="_blank"` 的链接），必须在步骤中**明确标注**「本步会打开新 tab」，并在执行该步后先 `agent-browser tab` 查看列表，再用 `agent-browser tab <N>` 切换到新 tab，再在该 tab 上执行 snapshot/screenshot 并继续；未明确标注会导致在错误 tab 上继续操作而执行出错。
+- **每步执行前核实**：在知情每一步前，先核实「是否有新 tab 已打开需要切换？」以及「当前是否在激活的 tab 下操作？」再在当前激活的 tab 上进行 snapshot 与后续点击/填写。
+
+若用 `click --new-tab` 或操作后新 tab 已打开，先用 `agent-browser tab` 查看列表，再用 `agent-browser tab <N>` 切换到新 tab，再在该 tab 上执行 snapshot/screenshot 并继续后续步骤；关闭 tab 后同样先 `tab` 确认当前激活 tab，再在该 tab 上探测与截图。
 
 ### Frames
 ```bash
@@ -590,20 +597,40 @@ agent-browser profiler stop profile.json  # Stop and save profile
 
 ---
 
-## Playwright Fallback（agent-browser 不可用时）
+## 何时使用 agent-browser（备用）
 
-当出现以下任意情况时，**立即切换 Playwright 脚本，不要停下来告知用户，直接继续完成任务**：
+仅在以下情况使用 agent-browser，其余情况一律使用 Playwright 脚本（ai-playwright）：
+
+- 用户明确说「用 agent-browser」「不要用 Playwright」等
+- Playwright 脚本执行失败（如依赖安装失败、node 不可用）
+- agent-browser 已由用户在前序步骤中打开，需要继续用 CLI 操作同一会话
+
+## Playwright 为默认时的降级说明（本技能被选用时）
+
+若因上述原因选用了 agent-browser，当出现以下情况时，**可再切换回 Playwright 脚本**（无需告知用户，直接继续）：
 
 - `agent-browser` 命令返回连接错误 / ECONNREFUSED
 - "Looks like Playwright Test or Playwright was just installed or updated"
 - agent-browser 进程启动失败或无响应
-- 用户明确要求使用 Playwright / ai-playwright
+- 用户随后明确要求改用 Playwright / ai-playwright
 
 ### 切换后的执行流程
 
 ```
-1. DOM探测 → 2. 生成脚本 → 3. node执行 → 4. 截图验证
+0. 解析路径(可选) → 1. DOM探测 → 2. 生成脚本 → 3. 安装依赖+node执行 → 4. 截图验证
 ```
+
+### Node/npm/pnpm 绝对路径（减少查找与重试）
+
+在**安装依赖**或**执行 node 脚本**前，先解析可执行文件绝对路径，再用绝对路径执行，避免因 PATH 未设置导致的 "command not found" 和多轮回退（如「npm 有问题→手动创建 package.json→尝试绝对路径 npm」）。
+
+- **解析命令**（一次执行即可，后续复用）：
+  - macOS/Linux：`NODE=$(which node); NPM=$(which npm 2>/dev/null); PNPM=$(which pnpm 2>/dev/null); echo "NODE=$NODE NPM=$NPM PNPM=$PNPM"`
+  - Windows：`where node`、`where npm`、`where pnpm`（或 PowerShell `(Get-Command node).Source`）
+- **使用方式**：若得到绝对路径，则用其执行，例如：
+  - 安装：`"$NPM" install playwright --no-package-lock` 或 `"$PNPM" add playwright`（优先 pnpm）
+  - 运行：`"$NODE" /tmp/pw-task.js`
+- **未找到时**：若 `which npm` 和 `which pnpm` 都为空，再创建 `package.json` 并用系统 `node` 执行 `node script.js`（Playwright 可能已全局或已在应用内置环境中可用）。
 
 **步骤1：DOM 探测**（获取真实选择器，避免猜测）
 

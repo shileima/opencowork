@@ -771,6 +771,18 @@ export class FileSystemTools {
             console.warn('[FileSystemTools] Failed to detect project Node.js version, using builtin:', error);
         }
 
+        // 执行 Playwright/自动化脚本时强制使用内置 Node + 内置 Playwright，避免项目 node/npm 异常导致「找不到 playwright」
+        const isPlaywrightRelated =
+            this.isAutomationTestCommand(args.command) ||
+            this.isAutomationScriptCommand(args.command, workingDir) ||
+            this.isLikelyPlaywrightScriptCommand(args.command);
+        if (isPlaywrightRelated) {
+            projectNodePath = getBuiltinNodePath();
+            projectNpmPath = null;
+            projectEnv = {};
+            console.log('[FileSystemTools] Playwright/automation command: using built-in Node and Playwright');
+        }
+
         // 如果命令包含 'node' 或 'npm'，替换为项目需要的版本路径
         let command = args.command;
         const nodePath = projectNodePath || getBuiltinNodePath();
@@ -1310,6 +1322,21 @@ export class FileSystemTools {
         return cmdLower.includes('playwright') ||
                cmdLower.includes('chromium') ||
                (cmdLower.includes('node') && cmdLower.includes('.js') && cmdLower.includes('chrome'));
+    }
+
+    /**
+     * 检测是否为「运行 Playwright 临时脚本」类命令（如 node /tmp/pw-task.js），
+     * 此类命令应使用内置 Node + Playwright 环境。
+     */
+    private isLikelyPlaywrightScriptCommand(command: string): boolean {
+        const normalized = command.trim();
+        const nodeScriptMatch = normalized.match(/node\s+([^\s]+\.js)/);
+        if (!nodeScriptMatch) return false;
+        const scriptArg = nodeScriptMatch[1].trim().replace(/^["']|["']$/g, '');
+        // 常见 AI 生成的 Playwright 临时脚本路径
+        return /[/\\]tmp[/\\]pw[-_]?\w*\.js$/i.test(scriptArg) ||
+               /[/\\]pw[-_]?task\.js$/i.test(scriptArg) ||
+               /[/\\]pw[-_]?instructions\.js$/i.test(scriptArg);
     }
 
     /**

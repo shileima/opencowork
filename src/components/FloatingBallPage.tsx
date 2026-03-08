@@ -604,7 +604,7 @@ ${error}
 
                     {/* Processing indicator */}
                     {isProcessing && !streamingText && (
-                        <div className="flex items-center gap-2 text-xs text-stone-400">
+                        <div className="flex items-center gap-2 text-xs text-white">
                             <div className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-bounce" />
                             {t('thinking')}
                         </div>

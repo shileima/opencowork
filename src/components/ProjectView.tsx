@@ -119,8 +119,15 @@ export function ProjectView({
     onToggleExplorerPanelRef.current = onToggleExplorerPanel;
 
     // 用 App 的 currentProject 尽早驱动渲染；删除项目后 App 置为 null 时也同步清空，避免资源管理器仍显示已删项目
+    const prevAppProjectIdRef = useRef<string | null>(null);
     useEffect(() => {
         setCurrentProject(appCurrentProject ?? null);
+        const nextId = appCurrentProject?.id ?? null;
+        // 仅当从 A 项目切换到 B 项目时重新加载任务列表并拉取该项目的聊天历史，避免切换项目后历史不加载
+        if (prevAppProjectIdRef.current !== null && prevAppProjectIdRef.current !== nextId) {
+            loadCurrentProject();
+        }
+        prevAppProjectIdRef.current = nextId;
     }, [appCurrentProject?.id, appCurrentProject?.path]);
 
     // 处理左侧悬停展开侧栏
@@ -696,7 +703,7 @@ export function ProjectView({
     }, []); // 只在组件挂载时执行一次
 
     return (
-        <div className="h-full w-full flex flex-col bg-[#FAF8F5] dark:bg-zinc-950">
+        <div className="flex-1 min-h-0 flex flex-col bg-[#FAF8F5] dark:bg-zinc-950">
             {/* Resource Update Notification */}
             {resourceUpdateAvailable && (
                 <UpdateNotification

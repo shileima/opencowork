@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Minus, Square, X, Zap, FolderKanban, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, ChevronDown, FolderOpen, FolderPlus, Trash2, Loader2, Rocket, CheckCircle, Monitor } from 'lucide-react';
+import { Minus, Square, X, Zap, FolderKanban, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, ChevronDown, FolderOpen, FolderPlus, Trash2, Loader2, Rocket, CheckCircle, Monitor, Bot } from 'lucide-react';
 import { CoworkView } from './components/CoworkView';
 import { SettingsView } from './components/SettingsView';
 import { ConfirmDialog, useConfirmations } from './components/ConfirmDialog';
 import { FloatingBallPage } from './components/FloatingBallPage';
 import { ProjectView } from './components/ProjectView';
+import { AutomationView } from './components/AutomationView';
 import { TerminalWindow } from './pages/TerminalWindow';
 import { SplashScreen } from './components/SplashScreen';
 import { SsoLoginView } from './components/SsoLoginView';
@@ -18,7 +19,7 @@ interface SsoUserInfo {
   expire: number;
 }
 
-type ViewType = 'cowork' | 'project';
+type ViewType = 'cowork' | 'project' | 'automation';
 
 function App() {
   const [isAppReady, setIsAppReady] = useState(false);
@@ -27,7 +28,7 @@ function App() {
   const [history, setHistory] = useState<Anthropic.MessageParam[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [activeView, setActiveView] = useState<ViewType>('cowork');
+  const [activeView, setActiveView] = useState<ViewType>('automation');
   const [isTaskPanelHidden, setIsTaskPanelHidden] = useState(false);
   const [isExplorerPanelHidden, setIsExplorerPanelHidden] = useState(false);
   const [projects, setProjects] = useState<any[]>([]);
@@ -35,6 +36,11 @@ function App() {
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [rpaProjects, setRpaProjects] = useState<any[]>([]);
+  const [currentRpaProject, setCurrentRpaProject] = useState<any | null>(null);
+  const [showRpaProjectDropdown, setShowRpaProjectDropdown] = useState(false);
+  const [showNewRpaProjectDialog, setShowNewRpaProjectDialog] = useState(false);
+  const [newRpaProjectName, setNewRpaProjectName] = useState('');
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
   const [deployStatus, setDeployStatus] = useState<'idle' | 'deploying' | 'success' | 'error'>('idle');
   const [agentInitFailed, setAgentInitFailed] = useState<string | null>(null);
@@ -42,6 +48,10 @@ function App() {
   const deployHandlerRef = useRef<(() => void) | null>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
   const projectButtonRef = useRef<HTMLButtonElement>(null);
+  const rpaProjectDropdownRef = useRef<HTMLDivElement>(null);
+  const rpaProjectButtonRef = useRef<HTMLButtonElement>(null);
+  const activeViewRef = useRef<ViewType>(activeView);
+  activeViewRef.current = activeView;
   const { pendingRequest, handleConfirm, handleDeny } = useConfirmations();
   const { t } = useI18n();
 
@@ -55,15 +65,24 @@ function App() {
       if (narrow) {
         setIsTaskPanelHidden(true);
         setIsExplorerPanelHidden(true);
+      } else {
+        // 窗口足够宽时，默认展开左侧任务列表
+        setIsTaskPanelHidden(false);
       }
     };
+    handleResize(); // 初始化时执行一次，确保默认展开
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 当切换到 Project 模式时最大化窗口，切换回 Cowork 时恢复窗口大小
+  // 当切换到 Project 或 Automation 模式时最大化窗口，切换回 Cowork 时恢复窗口大小
   useEffect(() => {
-    window.ipcRenderer.invoke('window:set-maximized', activeView === 'project');
+    window.ipcRenderer.invoke('window:set-maximized', activeView === 'project' || activeView === 'automation');
+  }, [activeView]);
+
+  // 通知主进程当前视图，用于 session 保存时关联正确的任务
+  useEffect(() => {
+    window.ipcRenderer.invoke('app:set-active-view', activeView);
   }, [activeView]);
 
   // 切换到协作/会话模式时，将默认工作目录设为 ~/.qa-cowork
@@ -75,12 +94,12 @@ function App() {
     }
   }, [activeView]);
 
-  // 从 project 模式切换回 cowork 时，自动加载最近的历史任务
+  // 从 project/automation 模式切换回 cowork 时，自动加载最近的历史任务
   const prevActiveViewRef = useRef<ViewType | null>(null);
   useEffect(() => {
     const prev = prevActiveViewRef.current;
     prevActiveViewRef.current = activeView;
-    if (prev === 'project' && activeView === 'cowork') {
+    if ((prev === 'project' || prev === 'automation') && activeView === 'cowork') {
       setHistory([]);
       window.ipcRenderer.invoke('session:auto-load').catch((err) => {
         console.warn('[App] session:auto-load on switch failed:', err);
@@ -88,24 +107,22 @@ function App() {
     }
   }, [activeView]);
 
-  // 从 localStorage 加载任务面板与资源管理器隐藏状态；切换 project 模式后默认展开右侧资源管理器
+  // 从 localStorage 加载资源管理器隐藏状态；任务列表面板默认展示，不恢复隐藏状态
   useEffect(() => {
-    if (activeView === 'project') {
-      const savedTask = localStorage.getItem('projectView:taskPanelHidden');
-      if (savedTask === 'true') setIsTaskPanelHidden(true);
-      const savedExplorer = localStorage.getItem('projectView:explorerPanelHidden');
-      // 默认展开资源管理器，仅当用户曾保存为收起时才设为收起
-      setIsExplorerPanelHidden(savedExplorer === 'true');
+    if (activeView === 'project' || activeView === 'automation') {
+      if (activeView === 'project') {
+        const savedExplorer = localStorage.getItem('projectView:explorerPanelHidden');
+        setIsExplorerPanelHidden(savedExplorer === 'true');
+      }
     }
   }, [activeView]);
 
-  // 保存任务面板与资源管理器隐藏状态到 localStorage
+  // 保存资源管理器隐藏状态到 localStorage（任务列表面板默认展示，不持久化隐藏状态）
   useEffect(() => {
     if (activeView === 'project') {
-      localStorage.setItem('projectView:taskPanelHidden', String(isTaskPanelHidden));
       localStorage.setItem('projectView:explorerPanelHidden', String(isExplorerPanelHidden));
     }
-  }, [isTaskPanelHidden, isExplorerPanelHidden, activeView]);
+  }, [isExplorerPanelHidden, activeView]);
 
   // 加载项目列表
   useEffect(() => {
@@ -113,6 +130,20 @@ function App() {
       loadProjects();
     }
   }, [activeView]);
+
+  // 加载 RPA 项目列表
+  useEffect(() => {
+    if (activeView === 'automation') {
+      loadRpaProjects();
+    }
+  }, [activeView]);
+
+  // 加载当前 RPA 项目
+  useEffect(() => {
+    if (activeView === 'automation') {
+      loadCurrentRpaProject();
+    }
+  }, [activeView, rpaProjects]);
 
   // 加载当前项目
   useEffect(() => {
@@ -141,6 +172,25 @@ function App() {
     }
   }, [activeView]);
 
+  // 监听 RPA 项目创建和切换事件
+  useEffect(() => {
+    if (activeView === 'automation') {
+      const removeRpaCreated = window.ipcRenderer.on('rpa:project:created', () => {
+        setHistory([]);
+        loadRpaProjects();
+        loadCurrentRpaProject();
+      });
+      const removeRpaSwitched = window.ipcRenderer.on('rpa:project:switched', () => {
+        setHistory([]);
+        loadCurrentRpaProject();
+      });
+      return () => {
+        removeRpaCreated();
+        removeRpaSwitched();
+      };
+    }
+  }, [activeView]);
+
   // 窗口缩小到右下角时，自动收起左侧任务面板和右侧资源管理器
   useEffect(() => {
     const removeMiniModeListener = window.ipcRenderer.on('window:enter-mini-mode', () => {
@@ -155,19 +205,23 @@ function App() {
   // 点击外部关闭项目下拉菜单
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (projectDropdownRef.current && !projectDropdownRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (showProjectDropdown && projectDropdownRef.current && !projectDropdownRef.current.contains(target)) {
         setShowProjectDropdown(false);
+      }
+      if (showRpaProjectDropdown && rpaProjectDropdownRef.current && !rpaProjectDropdownRef.current.contains(target)) {
+        setShowRpaProjectDropdown(false);
       }
     };
 
-    if (showProjectDropdown) {
+    if (showProjectDropdown || showRpaProjectDropdown) {
       document.addEventListener('mousedown', handleClickOutside);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showProjectDropdown]);
+  }, [showProjectDropdown, showRpaProjectDropdown]);
 
   const loadProjects = async () => {
     try {
@@ -232,6 +286,86 @@ function App() {
       }
     } catch (error) {
       console.error('Failed to load current project:', error);
+    }
+  };
+
+  const loadRpaProjects = async () => {
+    try {
+      const list = await window.ipcRenderer.invoke('rpa:project:list') as any[];
+      setRpaProjects(list);
+    } catch (error) {
+      console.error('Failed to load RPA projects:', error);
+    }
+  };
+
+  const loadCurrentRpaProject = async () => {
+    try {
+      const project = await window.ipcRenderer.invoke('rpa:get-current-project') as any | null;
+      setCurrentRpaProject(project);
+    } catch (error) {
+      console.error('Failed to load current RPA project:', error);
+    }
+  };
+
+  const handleSelectRpaProject = async (projectId: string) => {
+    try {
+      const result = await window.ipcRenderer.invoke('rpa:project:open', projectId) as { success: boolean };
+      if (result.success) {
+        await loadCurrentRpaProject();
+        setShowRpaProjectDropdown(false);
+      }
+    } catch (error) {
+      console.error('Failed to switch RPA project:', error);
+    }
+  };
+
+  const handleNewRpaProjectClick = () => {
+    setShowNewRpaProjectDialog(true);
+    setNewRpaProjectName('');
+  };
+
+  const handleDeleteRpaProject = async (e: React.MouseEvent, project: { id: string; name: string; path?: string }) => {
+    e.stopPropagation();
+    const confirmMessage = `确定要删除 RPA 项目 "${project.name}" 吗？\n\n此操作将：\n1. 从列表中删除该项目\n2. 删除该项目的所有任务\n3. 永久删除项目目录及文件\n\n此操作无法撤销。`;
+    if (!window.confirm(confirmMessage)) return;
+    try {
+      const result = await window.ipcRenderer.invoke('rpa:project:delete', project.id) as {
+        success: boolean;
+        error?: string;
+        warning?: string;
+        switchedToProjectId?: string;
+      };
+      if (result.success) {
+        if (result.warning) window.alert(`⚠️ ${result.warning}`);
+        await loadRpaProjects();
+        await loadCurrentRpaProject();
+        setShowRpaProjectDropdown(false);
+      } else {
+        if (result.error) window.alert(`删除失败：${result.error}`);
+      }
+    } catch (error) {
+      console.error('Failed to delete RPA project:', error);
+      window.alert(`删除时发生错误：${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const handleCreateNewRpaProject = async () => {
+    const name = newRpaProjectName.trim();
+    if (!name) return;
+    try {
+      const result = await window.ipcRenderer.invoke('rpa:project:create', name) as { success: boolean; error?: string; project?: unknown };
+      if (result.success) {
+        setHistory([]);
+        await loadRpaProjects();
+        await loadCurrentRpaProject();
+        setShowRpaProjectDropdown(false);
+        setShowNewRpaProjectDialog(false);
+        setNewRpaProjectName('');
+      } else {
+        if (result.error) window.alert(result.error);
+      }
+    } catch (error) {
+      console.error('Failed to create RPA project:', error);
     }
   };
 
@@ -350,15 +484,25 @@ function App() {
       const projectId = typeof payload === 'object' && payload?.projectId ? payload.projectId : undefined;
       console.error("Agent Error:", err);
 
-      // 项目视图：将当前任务标记为失败
+      // 项目/自动化视图：将当前任务标记为失败
+      const view = activeViewRef.current;
       if (taskId) {
         if (projectId) {
-          window.ipcRenderer.invoke('project:task:update', projectId, taskId, { status: 'failed' });
+          if (view === 'automation') {
+            window.ipcRenderer.invoke('rpa:task:update', projectId, taskId, { status: 'failed' });
+          } else {
+            window.ipcRenderer.invoke('project:task:update', projectId, taskId, { status: 'failed' });
+          }
         } else {
-          window.ipcRenderer.invoke('project:get-current').then((result) => {
-            const project = result as { id: string } | null;
-            if (project?.id) {
-              window.ipcRenderer.invoke('project:task:update', project.id, taskId, { status: 'failed' });
+          const store = view === 'automation' ? 'rpa:get-current-project' : 'project:get-current';
+          window.ipcRenderer.invoke(store).then((result: unknown) => {
+            const r = result as { id: string } | null;
+            if (r?.id) {
+              if (view === 'automation') {
+                window.ipcRenderer.invoke('rpa:task:update', r.id, taskId, { status: 'failed' });
+              } else {
+                window.ipcRenderer.invoke('project:task:update', r.id, taskId, { status: 'failed' });
+              }
             }
           });
         }
@@ -381,18 +525,28 @@ ${err}
       setIsProcessing(false);
     });
 
-    // Only reset isProcessing when processing is truly done; 项目视图：将当前任务标记为完成
+    // Only reset isProcessing when processing is truly done; 项目/自动化视图：将当前任务标记为完成
     const removeDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
       const payload = args[0] as { taskId?: string; projectId?: string } | undefined;
+      const view = activeViewRef.current;
       if (payload?.taskId) {
         const projectId = payload.projectId;
         if (projectId) {
-          window.ipcRenderer.invoke('project:task:update', projectId, payload.taskId, { status: 'completed' });
+          if (view === 'automation') {
+            window.ipcRenderer.invoke('rpa:task:update', projectId, payload.taskId, { status: 'completed' });
+          } else {
+            window.ipcRenderer.invoke('project:task:update', projectId, payload.taskId, { status: 'completed' });
+          }
         } else {
-          window.ipcRenderer.invoke('project:get-current').then((result) => {
-            const project = result as { id: string } | null;
-            if (project?.id) {
-              window.ipcRenderer.invoke('project:task:update', project.id, payload.taskId, { status: 'completed' });
+          const store = view === 'automation' ? 'rpa:get-current-project' : 'project:get-current';
+          window.ipcRenderer.invoke(store).then((result: unknown) => {
+            const r = result as { id: string } | null;
+            if (r?.id) {
+              if (view === 'automation') {
+                window.ipcRenderer.invoke('rpa:task:update', r.id, payload.taskId!, { status: 'completed' });
+              } else {
+                window.ipcRenderer.invoke('project:task:update', r.id, payload.taskId!, { status: 'completed' });
+              }
             }
           });
         }
@@ -499,8 +653,8 @@ ${err}
           <img src="./icon.png" alt="Logo" className="w-4 h-4 rounded-sm object-cover" />
           <span className="font-medium text-stone-700 dark:text-zinc-200 text-xs mr-2">QACowork</span>
           
-          {/* Task Panel Toggle Button - Only show in Project view */}
-          {activeView === 'project' && (
+          {/* Task Panel Toggle Button - Show in Project and Automation view */}
+          {(activeView === 'project' || activeView === 'automation') && (
             <button
               onClick={() => setIsTaskPanelHidden(!isTaskPanelHidden)}
               className="p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 rounded transition-colors"
@@ -509,6 +663,107 @@ ${err}
             >
               {isTaskPanelHidden ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
             </button>
+          )}
+
+          {/* RPA Project Selector - Only show in Automation view when wide enough */}
+          {activeView === 'automation' && !isNarrowWindow && (
+            <div className="relative" ref={rpaProjectDropdownRef}>
+              <button
+                ref={rpaProjectButtonRef}
+                onClick={() => {
+                  if (rpaProjectButtonRef.current) {
+                    const rect = rpaProjectButtonRef.current.getBoundingClientRect();
+                    setDropdownPosition({ top: rect.bottom + 4, left: rect.left });
+                  }
+                  setShowRpaProjectDropdown(!showRpaProjectDropdown);
+                }}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-stone-700 dark:text-zinc-200 hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
+              >
+                <Bot size={14} />
+                <span className="max-w-[200px] truncate">
+                  {currentRpaProject?.name || t('noProjectSelected')}
+                </span>
+                <ChevronDown size={14} className={`transition-transform ${showRpaProjectDropdown ? 'rotate-180' : ''}`} />
+              </button>
+
+              {showRpaProjectDropdown && (
+                <div
+                  className="fixed bg-white dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 rounded-lg shadow-lg py-1 z-[9999] min-w-[260px] max-w-[340px] max-h-[420px] overflow-y-auto"
+                  style={{
+                    top: `${dropdownPosition.top}px`,
+                    left: `${dropdownPosition.left}px`
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={handleNewRpaProjectClick}
+                    className="w-full text-left px-4 py-2.5 text-sm text-stone-700 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-700 flex items-center gap-2 transition-colors"
+                  >
+                    <Bot size={16} />
+                    {t('newProject')}
+                  </button>
+                  <div className="border-t border-stone-200 dark:border-zinc-700 my-1" />
+                  <div className="px-3 py-1.5 text-xs font-medium text-stone-400 dark:text-zinc-500">
+                    {t('recent')}
+                  </div>
+                  {rpaProjects.length === 0 ? (
+                    <div className="px-4 py-3 text-sm text-stone-400 dark:text-zinc-500 text-center">
+                      {t('noProjects')}
+                    </div>
+                  ) : (
+                    [...rpaProjects]
+                      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+                      .map(project => (
+                        <div
+                          key={project.id}
+                          className={`group relative flex items-center rounded-md ${
+                            currentRpaProject?.id === project.id
+                              ? 'bg-orange-50 dark:bg-orange-500/10'
+                              : 'hover:bg-stone-50 dark:hover:bg-zinc-700'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleSelectRpaProject(project.id)}
+                            className={`flex-1 w-full text-left px-4 py-2 text-sm transition-colors flex items-center gap-2 ${
+                              currentRpaProject?.id === project.id
+                                ? 'text-orange-600 dark:text-orange-400 font-medium'
+                                : 'text-stone-700 dark:text-zinc-300'
+                            }`}
+                          >
+                            <Bot size={14} />
+                            <span className="flex-1 truncate" title={project.path}>{project.name}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.ipcRenderer.invoke('directory:open-path', project.path);
+                            }}
+                            className="p-1.5 text-stone-400 hover:text-amber-500 dark:hover:text-amber-400 rounded transition-colors opacity-0 group-hover:opacity-100"
+                            title={t('openFolder')}
+                            aria-label={t('openFolder')}
+                          >
+                            <FolderOpen size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteRpaProject(e, project)}
+                            className="p-1.5 text-stone-400 hover:text-red-500 dark:hover:text-red-400 rounded transition-colors opacity-0 group-hover:opacity-100"
+                            title={t('delete')}
+                            aria-label={t('delete')}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                          {currentRpaProject?.id === project.id && (
+                            <span className="text-orange-500 dark:text-orange-400 shrink-0 mr-2" aria-hidden>✓</span>
+                          )}
+                        </div>
+                      ))
+                  )}
+                </div>
+              )}
+            </div>
           )}
 
           {/* Project Selector - Only show in Project view when wide enough */}
@@ -590,19 +845,19 @@ ${err}
                             >
                               <FolderOpen size={14} />
                               <span className="flex-1 truncate" title={project.path}>{project.name}</span>
-                              {currentProject?.id === project.id && (
-                                <span className="text-orange-500 dark:text-orange-400 shrink-0">✓</span>
-                              )}
                             </button>
                             <button
                               type="button"
                               onClick={(e) => handleDeleteProject(e, project)}
-                              className="p-1.5 mr-2 text-stone-400 hover:text-red-500 dark:hover:text-red-400 rounded transition-colors opacity-0 group-hover:opacity-100"
+                              className="p-1.5 text-stone-400 hover:text-red-500 dark:hover:text-red-400 rounded transition-colors opacity-0 group-hover:opacity-100"
                               title={t('delete')}
                               aria-label={t('delete')}
                             >
                               <Trash2 size={14} />
                             </button>
+                            {currentProject?.id === project.id && (
+                              <span className="text-orange-500 dark:text-orange-400 shrink-0 mr-2" aria-hidden>✓</span>
+                            )}
                           </div>
                         ))}
                     </>
@@ -640,6 +895,16 @@ ${err}
             >
               <FolderKanban size={12} />
               {t('project')}
+            </button>
+            <button
+              onClick={() => setActiveView('automation')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'automation'
+                ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
+                : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
+                }`}
+            >
+              <Bot size={12} />
+              {t('automation')}
             </button>
           </div>
           {/* SSO 用户信息 */}
@@ -773,7 +1038,7 @@ ${err}
       )}
 
       {/* Main Content */}
-      <main className="flex-1 overflow-hidden relative">
+      <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
         {activeView === 'cowork' ? (
           <CoworkView
             history={history}
@@ -781,6 +1046,16 @@ ${err}
             onAbort={handleAbort}
             isProcessing={isProcessing}
             onOpenSettings={() => setShowSettings(true)}
+          />
+        ) : activeView === 'automation' ? (
+          <AutomationView
+            history={history}
+            onSendMessage={handleSendMessage}
+            onAbort={handleAbort}
+            isProcessing={isProcessing}
+            isTaskPanelHidden={isTaskPanelHidden}
+            onToggleTaskPanel={() => setIsTaskPanelHidden(!isTaskPanelHidden)}
+            isNarrowWindow={isNarrowWindow}
           />
         ) : (
           <ProjectView
@@ -807,6 +1082,80 @@ ${err}
           </div>
         )}
       </main>
+
+      {/* New RPA Project Dialog */}
+      {showNewRpaProjectDialog && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-rpa-project-dialog-title"
+          onClick={() => {
+            setShowNewRpaProjectDialog(false);
+            setNewRpaProjectName('');
+          }}
+        >
+          <div
+            className="bg-white dark:bg-zinc-800 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-700 p-5 w-[420px] max-w-[90vw]"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setShowNewRpaProjectDialog(false);
+                setNewRpaProjectName('');
+              }
+              if (e.key === 'Enter') handleCreateNewRpaProject();
+            }}
+          >
+            <h2 id="new-rpa-project-dialog-title" className="text-base font-semibold text-stone-800 dark:text-zinc-100 mb-3">
+              新建自动化项目
+            </h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-zinc-300 mb-2">
+                  {t('projectName')}
+                </label>
+                <input
+                  type="text"
+                  value={newRpaProjectName}
+                  onChange={(e) => setNewRpaProjectName(e.target.value)}
+                  placeholder={t('newProjectNamePlaceholder')}
+                  className="w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-stone-900 dark:text-zinc-100 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-400"
+                  autoFocus
+                  aria-label={t('projectName')}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-700 dark:text-zinc-300 mb-2">
+                  创建位置
+                </label>
+                <div className="px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-stone-50 dark:bg-zinc-900/50 text-stone-600 dark:text-zinc-400 text-sm">
+                  ~/Library/Application Support/qacowork/rpaProjects
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNewRpaProjectDialog(false);
+                  setNewRpaProjectName('');
+                }}
+                className="px-3 py-1.5 text-sm text-stone-600 dark:text-zinc-400 hover:bg-stone-100 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateNewRpaProject}
+                disabled={!newRpaProjectName.trim()}
+                className="px-3 py-1.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+              >
+                {t('createProject')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* New Project Dialog */}
       {showNewProjectDialog && (
