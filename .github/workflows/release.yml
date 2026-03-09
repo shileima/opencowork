@@ -192,6 +192,12 @@ jobs:
             cp -r resources/templates temp-resources/resources/
           fi
           
+          # 诊断：打包前各目录大小（便于排查为何超过 2GB）
+          echo "=== Package size breakdown (before zip) ==="
+          du -sh temp-resources temp-resources/dist temp-resources/resources 2>/dev/null || true
+          du -sh temp-resources/resources/skills temp-resources/resources/mcp temp-resources/resources/templates 2>/dev/null || true
+          echo "=== End breakdown ==="
+          
           # 打包为 zip
           cd temp-resources
           zip -r ../resources-v${VERSION}.zip . -x "*.DS_Store" -x "__MACOSX/*"
@@ -201,10 +207,23 @@ jobs:
           ls -lh resources-v${VERSION}.zip
           unzip -l resources-v${VERSION}.zip | head -20
           
+          # GitHub Release 单文件上限 2GB，超过则拆分为 1.5GB 分卷
+          MAX_ZIP_BYTES=1950000000
+          ZIP_SIZE=$(stat -c%s "resources-v${VERSION}.zip" 2>/dev/null || stat -f%z "resources-v${VERSION}.zip" 2>/dev/null)
+          if [ "$ZIP_SIZE" -ge "$MAX_ZIP_BYTES" ]; then
+            echo "Zip size >= 2GB limit (${ZIP_SIZE} bytes), creating split archive (1.5GB per part)..."
+            rm -f "resources-v${VERSION}.zip"
+            cd temp-resources
+            zip -s 1500m -r ../resources-v${VERSION}.zip . -x "*.DS_Store" -x "__MACOSX/*"
+            cd ..
+            ls -lh resources-v${VERSION}.z* resources-v${VERSION}.zip 2>/dev/null || true
+            echo "Split archive created."
+          fi
+          
           # 清理临时目录
           rm -rf temp-resources
           
-          echo "Resource package created: resources-v${VERSION}.zip"
+          echo "Resource package created: resources-v${VERSION}.zip (possibly split)"
 
       -
         name: Upload executables to Release
@@ -231,6 +250,8 @@ jobs:
           files: |
             resource-manifest.json
             resources-*.zip
+            resources-*.z*
           fail_on_unmatched_files: false
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

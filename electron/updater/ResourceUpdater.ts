@@ -11,8 +11,14 @@
 import { app } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import { execSync } from 'node:child_process'
 import AdmZip from 'adm-zip'
 import { directoryManager } from '../config/DirectoryManager'
+
+/** 单个 zip 或分卷 zip 的资产信息 */
+type ResourceAssetsInfo =
+  | { type: 'single'; asset: { name: string; browser_download_url: string; size: number }; totalSize: number }
+  | { type: 'split'; assets: Array<{ name: string; browser_download_url: string; size: number }>; totalSize: number }
 
 interface ResourceManifest {
   version: string
@@ -729,23 +735,52 @@ export class ResourceUpdater {
   }
 
   /**
-   * 获取缓存的 zip 包路径
+   * 从 release 中解析资源包：单个 zip 或分卷 zip（.z01, .z02, ..., .zip）
+   * 支持资源名 resources-1.1.20.* 与 resources-v1.1.20.*（与 CI 产物一致）
    */
-  private getCachedZipPath(version: string): string {
-    return path.join(this.tempDir, `resources-${version}.zip`)
+  private getResourceAssets(release: any, version: string): ResourceAssetsInfo | null {
+    const base = `resources-${version}`
+    const baseV = `resources-v${version}`
+    const all = (release.assets || []).filter((a: any) => {
+      const n = a.name
+      if (!(n.startsWith(base + '.') || n.startsWith(baseV + '.'))) return false
+      return n === `${base}.zip` || n === `${baseV}.zip` || /\.z\d+$/.test(n)
+    })
+    if (all.length === 0) return null
+    const singleZip = all.find((a: any) => a.name.endsWith('.zip'))
+    const parts = all.filter((a: any) => !a.name.endsWith('.zip'))
+    // 若存在 .z01 等分卷，则按分卷处理；否则按单文件
+    if (parts.length > 0) {
+      const sorted = parts.slice().sort((a: any, b: any) => {
+        const nA = parseInt(a.name.replace(/.*\.z(\d+)$/, '$1'), 10)
+        const nB = parseInt(b.name.replace(/.*\.z(\d+)$/, '$1'), 10)
+        return nA - nB
+      })
+      const assets = singleZip ? [...sorted, singleZip] : sorted
+      const totalSize = assets.reduce((sum: number, a: any) => sum + (a.size || 0), 0)
+      return { type: 'split', assets, totalSize }
+    }
+    if (singleZip) {
+      return { type: 'single', asset: singleZip, totalSize: singleZip.size || 0 }
+    }
+    return null
   }
 
   /**
-   * 检查是否有缓存的 zip 包
+   * 检查是否有缓存的 zip 包（单文件或分卷）
    */
-  private hasCachedZip(version: string, expectedSize: number): boolean {
-    const cachedPath = this.getCachedZipPath(version)
-    if (!fs.existsSync(cachedPath)) {
-      return false
+  private hasCachedZip(info: ResourceAssetsInfo): boolean {
+    if (info.type === 'single') {
+      const p = path.join(this.tempDir, info.asset.name)
+      return fs.existsSync(p) && fs.statSync(p).size === info.totalSize
     }
-    // 验证文件大小
-    const stats = fs.statSync(cachedPath)
-    return stats.size === expectedSize
+    for (const a of info.assets) {
+      const p = path.join(this.tempDir, a.name)
+      if (!fs.existsSync(p) || fs.statSync(p).size !== (a.size || 0)) {
+        return false
+      }
+    }
+    return true
   }
 
   /**
@@ -765,25 +800,20 @@ export class ResourceUpdater {
     onProgress?: (progress: { total: number; downloaded: number; current: string }) => void
   ): Promise<void> {
     try {
-      // 查找资源包
-      const resourceAsset = release.assets.find(
-        (asset: any) => asset.name.startsWith('resources-') && asset.name.endsWith('.zip')
-      )
-
-      if (!resourceAsset) {
+      const version = release.tag_name.replace(/^v/, '')
+      const info = this.getResourceAssets(release, version)
+      if (!info) {
         throw new Error('Resource package not found in release')
       }
 
-      const version = release.tag_name.replace(/^v/, '')
-      const zipPath = this.getCachedZipPath(version)
-      const totalSize = resourceAsset.size || 0
+      const totalSize = info.totalSize
       const updateSize = filesToUpdate.reduce((sum, file) => sum + file.size, 0)
+      const packageLabel = info.type === 'split' ? `${info.assets.length} parts` : info.type === 'single' ? info.asset.name : ''
 
-      console.log(`[ResourceUpdater] Resource package: ${resourceAsset.name} (${this.formatBytes(totalSize)})`)
+      console.log(`[ResourceUpdater] Resource package: ${packageLabel} (${this.formatBytes(totalSize)})`)
       console.log(`[ResourceUpdater] Files to update: ${filesToUpdate.length} (${this.formatBytes(updateSize)})`)
-      
-      // 检查是否有缓存的 zip 包
-      if (this.hasCachedZip(version, totalSize)) {
+
+      if (this.hasCachedZip(info)) {
         console.log(`[ResourceUpdater] Using cached zip package for version ${version}`)
         onProgress?.({
           total: 100,
@@ -791,189 +821,182 @@ export class ResourceUpdater {
           current: `使用缓存的资源包 v${version}`
         })
       } else {
-        // 清理旧版本的缓存
         this.cleanupOldCaches(version)
-        
-        console.log(`[ResourceUpdater] Downloading resource package: ${resourceAsset.name}`)
-        console.log(`[ResourceUpdater] Note: Downloading full package (${this.formatBytes(totalSize)}), will extract ${filesToUpdate.length} files (${this.formatBytes(updateSize)})`)
-        
-        let retries = 3
-        let downloaded = 0
-        
-        for (let attempt = 0; attempt < retries; attempt++) {
-          let timeoutId: NodeJS.Timeout | null = null
-          try {
-            const headers: Record<string, string> = {}
-            if (this.githubToken) {
-              headers['Authorization'] = `token ${this.githubToken}`
-            }
-            
-            // 创建超时控制器（大文件需要更长的超时时间：每 MB 10 秒，最少 60 秒，最多 30 分钟）
-            const timeoutMs = Math.min(Math.max(totalSize / 1024 / 1024 * 10000, 60000), 30 * 60 * 1000)
-            const abortController = new AbortController()
-            timeoutId = setTimeout(() => {
-              abortController.abort()
-            }, timeoutMs)
-            
-            console.log(`[ResourceUpdater] Download attempt ${attempt + 1}/${retries}, timeout: ${Math.round(timeoutMs / 1000)}s`)
-            
-            const response = await fetch(resourceAsset.browser_download_url, {
-              headers,
-              signal: abortController.signal
-            })
-            
-            if (timeoutId) {
-              clearTimeout(timeoutId)
-              timeoutId = null
-            }
-            
-            if (!response.ok) {
-              // 处理速率限制
-              if (response.status === 403) {
-                const errorText = await response.text()
-                if (errorText.includes('rate limit')) {
-                  const resetTime = response.headers.get('x-ratelimit-reset')
-                  const resetDate = resetTime ? new Date(parseInt(resetTime) * 1000) : null
-                  const waitMinutes = resetDate ? Math.ceil((resetDate.getTime() - Date.now()) / 60000) : 60
-                  
-                  console.warn(`[ResourceUpdater] Rate limit exceeded while downloading. Reset in ~${waitMinutes} minutes`)
-                  
-                  if (attempt < retries - 1) {
-                    const waitTime = Math.min(60000 * Math.pow(2, attempt), 300000)
-                    console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
-                    await new Promise(resolve => setTimeout(resolve, waitTime))
-                    continue
-                  }
-                }
-              }
-              
-              if (attempt === retries - 1) {
-                throw new Error(`Failed to download resource package: ${response.status}`)
-              }
-              
-              // 其他错误，等待后重试
-              const waitTime = 2000 * Math.pow(2, attempt)
-              await new Promise(resolve => setTimeout(resolve, waitTime))
-              continue
-            }
-
-            // 流式下载，显示进度
-            const contentLength = parseInt(response.headers.get('content-length') || '0', 10)
-            const reader = response.body?.getReader()
-            
-            if (!reader) {
-              throw new Error('Response body is not readable')
-            }
-
-            const chunks: Uint8Array[] = []
-            downloaded = 0
-
-            while (true) {
-              const { done, value } = await reader.read()
-              
-              if (done) {
-                break
-              }
-              
-              chunks.push(value)
-              downloaded += value.length
-              
-              // 更新下载进度
-              if (onProgress && contentLength > 0) {
-                const percentage = Math.round((downloaded / contentLength) * 100)
-                onProgress({
-                  total: contentLength,
-                  downloaded,
-                  current: `下载资源包中: ${this.formatBytes(downloaded)} / ${this.formatBytes(contentLength)} (${percentage}%)`
-                })
-              }
-            }
-
-            // 合并所有 chunks 并写入文件
-            const buffer = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)))
-            fs.writeFileSync(zipPath, buffer)
-            
-            console.log(`[ResourceUpdater] Download completed: ${this.formatBytes(downloaded)}`)
-            break // 下载成功，退出重试循环
-            
-          } catch (error: any) {
-            if (timeoutId) {
-              clearTimeout(timeoutId)
-              timeoutId = null
-            }
-            
-            // 检查是否是超时错误
-            if (error.name === 'AbortError' || error.code === 'UND_ERR_CONNECT_TIMEOUT') {
-              console.error(`[ResourceUpdater] Download timeout (attempt ${attempt + 1}/${retries})`)
-              if (attempt === retries - 1) {
-                throw new Error(`Download timeout after ${retries} attempts. File may be too large or network too slow.`)
-              }
-              // 等待后重试
-              const waitTime = 5000 * Math.pow(2, attempt)
-              console.log(`[ResourceUpdater] Waiting ${waitTime / 1000}s before retry...`)
-              await new Promise(resolve => setTimeout(resolve, waitTime))
-              continue
-            }
-            
-            if (attempt === retries - 1) {
-              throw error
-            }
-            
-            // 其他错误，等待后重试
-            const waitTime = 2000 * Math.pow(2, attempt)
-            await new Promise(resolve => setTimeout(resolve, waitTime))
-          }
+        if (info.type === 'single') {
+          await this.downloadSingleZip(info.asset, totalSize, onProgress)
+        } else {
+          await this.downloadSplitZip(info.assets, totalSize, onProgress)
         }
       }
+
+      const isSplit = info.type === 'split'
+      const zipPath = isSplit
+        ? path.join(this.tempDir, (info.assets as Array<{ name: string }>).find(a => a.name.endsWith('.zip'))!.name)
+        : path.join(this.tempDir, info.asset.name)
 
       console.log(`[ResourceUpdater] Extracting ${filesToUpdate.length} files (${this.formatBytes(updateSize)})...`)
 
-      // 解压指定文件
-      const zip = new AdmZip(zipPath)
-      let extracted = 0
-      let extractedSize = 0
-
-      for (const file of filesToUpdate) {
-        onProgress?.({
-          total: updateSize,
-          downloaded: extractedSize,
-          current: `解压文件: ${file.path}`
-        })
-
-        const zipEntry = zip.getEntry(file.path)
-        if (zipEntry) {
-          const targetPath = path.join(downloadDir, file.path)
-          const targetDir = path.dirname(targetPath)
-          
-          if (!fs.existsSync(targetDir)) {
-            fs.mkdirSync(targetDir, { recursive: true })
+      if (isSplit) {
+        this.extractSplitZip(zipPath, downloadDir, filesToUpdate, updateSize, onProgress)
+      } else {
+        const zip = new AdmZip(zipPath)
+        let extractedSize = 0
+        for (const file of filesToUpdate) {
+          onProgress?.({ total: updateSize, downloaded: extractedSize, current: `解压文件: ${file.path}` })
+          const zipEntry = zip.getEntry(file.path)
+          if (zipEntry) {
+            const targetPath = path.join(downloadDir, file.path)
+            fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+            const content = zip.readFile(zipEntry)
+            if (content) fs.writeFileSync(targetPath, content)
+          } else {
+            console.warn(`[ResourceUpdater] File not found in zip: ${file.path}`)
           }
-          
-          // 提取文件内容
-          const content = zip.readFile(zipEntry)
-          if (content) {
-            fs.writeFileSync(targetPath, content)
-          }
-        } else {
-          console.warn(`[ResourceUpdater] File not found in zip: ${file.path}`)
+          extractedSize += file.size
         }
-
-        extracted++
-        extractedSize += file.size
+        onProgress?.({ total: updateSize, downloaded: updateSize, current: `解压完成: ${filesToUpdate.length} 个文件` })
+        console.log(`[ResourceUpdater] Extraction completed: ${filesToUpdate.length} files (${this.formatBytes(extractedSize)})`)
       }
-
-      // 最后一次进度更新
-      onProgress?.({
-        total: updateSize,
-        downloaded: updateSize,
-        current: `解压完成: ${extracted} 个文件`
-      })
-
-      console.log(`[ResourceUpdater] Extraction completed: ${extracted} files (${this.formatBytes(extractedSize)})`)
     } catch (error) {
       console.error('[ResourceUpdater] Failed to download and extract resources:', error)
       throw error
     }
+  }
+
+  private async downloadSingleZip(
+    asset: { name: string; browser_download_url: string; size: number },
+    totalSize: number,
+    onProgress?: (progress: { total: number; downloaded: number; current: string }) => void
+  ): Promise<void> {
+    const zipPath = path.join(this.tempDir, asset.name)
+    console.log(`[ResourceUpdater] Downloading resource package: ${asset.name}`)
+    let lastError: Error | null = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let timeoutId: NodeJS.Timeout | null = null
+      try {
+        const headers: Record<string, string> = {}
+        if (this.githubToken) headers['Authorization'] = `token ${this.githubToken}`
+        const timeoutMs = Math.min(Math.max(totalSize / 1024 / 1024 * 10000, 60000), 30 * 60 * 1000)
+        const abort = new AbortController()
+        timeoutId = setTimeout(() => abort.abort(), timeoutMs)
+        const response = await fetch(asset.browser_download_url, { headers, signal: abort.signal })
+        clearTimeout(timeoutId!)
+        if (!response.ok) {
+          if (response.status === 403 && (await response.text()).includes('rate limit') && attempt < 2) {
+            await new Promise(r => setTimeout(r, 60000 * Math.pow(2, attempt)))
+            continue
+          }
+          throw new Error(`Download failed: ${response.status}`)
+        }
+        const reader = response.body?.getReader()
+        if (!reader) throw new Error('Response body is not readable')
+        const contentLength = parseInt(response.headers.get('content-length') || '0', 10)
+        const chunks: Uint8Array[] = []
+        let downloaded = 0
+        for (;;) {
+          const { done: readDone, value } = await reader.read()
+          if (readDone) break
+          chunks.push(value)
+          downloaded += value.length
+          if (onProgress && contentLength > 0) {
+            onProgress({
+              total: contentLength,
+              downloaded,
+              current: `下载资源包: ${this.formatBytes(downloaded)} / ${this.formatBytes(contentLength)} (${Math.round((downloaded / contentLength) * 100)}%)`
+            })
+          }
+        }
+        fs.writeFileSync(zipPath, Buffer.concat(chunks.map(c => Buffer.from(c))))
+        console.log(`[ResourceUpdater] Download completed: ${this.formatBytes(downloaded)}`)
+        return
+      } catch (e: any) {
+        if (timeoutId) clearTimeout(timeoutId)
+        lastError = e
+        if (e?.name === 'AbortError' && attempt < 2) {
+          await new Promise(r => setTimeout(r, 5000 * Math.pow(2, attempt)))
+          continue
+        }
+        if (attempt === 2) throw lastError
+        await new Promise(r => setTimeout(r, 2000 * Math.pow(2, attempt)))
+      }
+    }
+    throw lastError || new Error('Download failed')
+  }
+
+  private async downloadSplitZip(
+    assets: Array<{ name: string; browser_download_url: string; size: number }>,
+    totalSize: number,
+    onProgress?: (progress: { total: number; downloaded: number; current: string }) => void
+  ): Promise<void> {
+    console.log(`[ResourceUpdater] Downloading split resource package: ${assets.length} parts`)
+    let downloadedTotal = 0
+    for (let i = 0; i < assets.length; i++) {
+      const a = assets[i]
+      const destPath = path.join(this.tempDir, a.name)
+      if (fs.existsSync(destPath) && fs.statSync(destPath).size === (a.size || 0)) {
+        downloadedTotal += a.size || 0
+        onProgress?.({ total: totalSize, downloaded: downloadedTotal, current: `已缓存: ${a.name}` })
+        continue
+      }
+      const headers: Record<string, string> = {}
+      if (this.githubToken) headers['Authorization'] = `token ${this.githubToken}`
+      const response = await fetch(a.browser_download_url, { headers })
+      if (!response.ok) throw new Error(`Failed to download ${a.name}: ${response.status}`)
+      const buf = Buffer.from(await response.arrayBuffer())
+      fs.writeFileSync(destPath, buf)
+      downloadedTotal += buf.length
+      onProgress?.({
+        total: totalSize,
+        downloaded: downloadedTotal,
+        current: `下载分卷 ${i + 1}/${assets.length}: ${a.name}`
+      })
+    }
+    console.log(`[ResourceUpdater] Split download completed: ${this.formatBytes(downloadedTotal)}`)
+  }
+
+  private extractSplitZip(
+    zipPath: string,
+    downloadDir: string,
+    filesToUpdate: FileInfo[],
+    updateSize: number,
+    onProgress?: (progress: { total: number; downloaded: number; current: string }) => void
+  ): void {
+    if (!fs.existsSync(zipPath)) {
+      throw new Error(`Split zip not found: ${zipPath}. Ensure all .z01, .z02, ... parts are present.`)
+    }
+    const extractDir = path.join(this.tempDir, 'extract-' + path.basename(zipPath, '.zip'))
+    fs.mkdirSync(extractDir, { recursive: true })
+    const zipName = path.basename(zipPath)
+    try {
+      if (process.platform === 'win32') {
+        try {
+          execSync(`7z x -o"${extractDir.replace(/"/g, '""')}" "${zipPath}"`, { stdio: 'pipe', maxBuffer: 50 * 1024 * 1024 })
+        } catch {
+          execSync(`unzip -o "${zipName}" -d "${extractDir}"`, { stdio: 'pipe', cwd: this.tempDir, maxBuffer: 50 * 1024 * 1024 })
+        }
+      } else {
+        execSync(`unzip -o "${zipName}" -d "${extractDir}"`, { stdio: 'pipe', cwd: this.tempDir, maxBuffer: 50 * 1024 * 1024 })
+      }
+    } catch (e) {
+      console.error('[ResourceUpdater] Split unzip failed. On Windows, 7-Zip may be required for split archives.', e)
+      throw e
+    }
+    let extractedSize = 0
+    for (const file of filesToUpdate) {
+      onProgress?.({ total: updateSize, downloaded: extractedSize, current: `解压: ${file.path}` })
+      const src = path.join(extractDir, file.path)
+      const dest = path.join(downloadDir, file.path)
+      if (fs.existsSync(src)) {
+        fs.mkdirSync(path.dirname(dest), { recursive: true })
+        fs.copyFileSync(src, dest)
+      } else {
+        console.warn(`[ResourceUpdater] File not found in extracted archive: ${file.path}`)
+      }
+      extractedSize += file.size
+    }
+    fs.rmSync(extractDir, { recursive: true, force: true })
+    onProgress?.({ total: updateSize, downloaded: updateSize, current: `解压完成: ${filesToUpdate.length} 个文件` })
+    console.log(`[ResourceUpdater] Extraction completed: ${filesToUpdate.length} files (${this.formatBytes(extractedSize)})`)
   }
 
   /**
@@ -1042,20 +1065,21 @@ export class ResourceUpdater {
   }
 
   /**
-   * 清理旧版本的缓存 zip 包
+   * 清理旧版本的缓存 zip 包（含分卷 .z01, .z02 等）
    */
   private cleanupOldCaches(currentVersion: string) {
     try {
-      if (!fs.existsSync(this.tempDir)) {
-        return
-      }
-      
+      if (!fs.existsSync(this.tempDir)) return
       const files = fs.readdirSync(this.tempDir)
-      const currentZipName = `resources-${currentVersion}.zip`
-      
+      const keepPrefix = (n: string) =>
+        n === `resources-${currentVersion}.zip` ||
+        n === `resources-v${currentVersion}.zip` ||
+        n.startsWith(`resources-${currentVersion}.z`) ||
+        n.startsWith(`resources-v${currentVersion}.z`)
       for (const file of files) {
-        // 只清理 resources-*.zip 文件，保留当前版本
-        if (file.startsWith('resources-') && file.endsWith('.zip') && file !== currentZipName) {
+        if (!file.startsWith('resources-')) continue
+        if (file.endsWith('.zip') || /\.z\d+$/.test(file)) {
+          if (keepPrefix(file)) continue
           const filePath = path.join(this.tempDir, file)
           try {
             fs.unlinkSync(filePath)
