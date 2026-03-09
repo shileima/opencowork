@@ -176,31 +176,31 @@ jobs:
           # 创建 resources 目录
           mkdir -p temp-resources/resources
           
-          # 只打包可热更新的轻量资源（不含 node/playwright 二进制，避免超过 GitHub 2GB 限制）
+          # 只打包可热更新的轻量资源（不含 node/playwright）；templates 打包但 zip 排除 node_modules
           if [ -d "resources/skills" ]; then
             echo "Copying resources/skills/"
             cp -r resources/skills temp-resources/resources/
           fi
-          
           if [ -d "resources/mcp" ]; then
             echo "Copying resources/mcp/"
             cp -r resources/mcp temp-resources/resources/
           fi
-          
           if [ -d "resources/templates" ]; then
-            echo "Copying resources/templates/"
+            echo "Copying resources/templates/ (node_modules excluded in zip)"
             cp -r resources/templates temp-resources/resources/
           fi
           
-          # 诊断：打包前各目录大小（便于排查为何超过 2GB）
+          # 诊断：打包前各目录大小
           echo "=== Package size breakdown (before zip) ==="
           du -sh temp-resources temp-resources/dist temp-resources/resources 2>/dev/null || true
           du -sh temp-resources/resources/skills temp-resources/resources/mcp temp-resources/resources/templates 2>/dev/null || true
           echo "=== End breakdown ==="
           
-          # 打包为 zip
+          # 打包为 zip（排除 node_modules、.map，templates 仅含源码与配置）
           cd temp-resources
-          zip -r ../resources-v${VERSION}.zip . -x "*.DS_Store" -x "__MACOSX/*"
+          zip -r ../resources-v${VERSION}.zip . \
+            -x "*.DS_Store" -x "__MACOSX/*" \
+            -x "*node_modules*" -x "*.map"
           cd ..
           
           # 验证 zip 文件
@@ -214,7 +214,8 @@ jobs:
             echo "Zip size >= 2GB limit (${ZIP_SIZE} bytes), creating split archive (1.5GB per part)..."
             rm -f "resources-v${VERSION}.zip"
             cd temp-resources
-            zip -s 1500m -r ../resources-v${VERSION}.zip . -x "*.DS_Store" -x "__MACOSX/*"
+            zip -s 1500m -r ../resources-v${VERSION}.zip . \
+              -x "*.DS_Store" -x "__MACOSX/*" -x "*node_modules*" -x "*.map"
             cd ..
             ls -lh resources-v${VERSION}.z* resources-v${VERSION}.zip 2>/dev/null || true
             echo "Split archive created."

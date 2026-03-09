@@ -2104,10 +2104,17 @@ ipcMain.handle('project:create-new', async (event, name: string) => {
   if (!name || typeof name !== 'string') return { success: false, error: 'Invalid project name' };
   const sanitized = name.trim().replace(/[/\\:*?"<>|]/g, '-').replace(/-+/g, '-') || 'project';
 
-  // 模板路径：开发用 app 目录，生产用 extraResources
-  const templateDir = app.isPackaged
-    ? path.join(process.resourcesPath, 'templates', 'react-vite')
-    : path.join(app.getAppPath(), 'resources', 'templates', 'react-vite');
+  // 模板路径：优先热更新目录，再回退到内置（与 skills/dist 一致）
+  const hotUpdateTemplatesDir = directoryManager.getHotUpdateTemplatesDir();
+  const hotUpdateReactVite = path.join(hotUpdateTemplatesDir, 'react-vite');
+  let templateDir: string;
+  if (fs.existsSync(hotUpdateReactVite)) {
+    templateDir = hotUpdateReactVite;
+  } else if (app.isPackaged) {
+    templateDir = path.join(process.resourcesPath, 'templates', 'react-vite');
+  } else {
+    templateDir = path.join(app.getAppPath(), 'resources', 'templates', 'react-vite');
+  }
 
   if (!fs.existsSync(templateDir)) {
     console.error(`[Project] Template not found: ${templateDir}`);

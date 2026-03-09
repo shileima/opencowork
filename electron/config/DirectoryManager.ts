@@ -201,6 +201,14 @@ export class DirectoryManager {
     }
 
     /**
+     * 获取热更新模板目录 (~/.qa-cowork/hot-update/resources/templates/)
+     * 热更新包中 templates 不含 node_modules，新建项目后用户需在项目内执行 pnpm install
+     */
+    public getHotUpdateTemplatesDir(): string {
+        return path.join(this.getHotUpdateDir(), 'resources', 'templates');
+    }
+
+    /**
      * 获取热更新版本清单文件路径
      */
     public getHotUpdateManifestPath(): string {

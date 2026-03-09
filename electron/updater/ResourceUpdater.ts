@@ -533,6 +533,24 @@ export class ResourceUpdater {
   }
 
   /**
+   * 按 tag 拉取单个 release（用于 Invalid LOC 时获取最新 assets，如分卷 .z01）
+   */
+  private async fetchReleaseByTag(tagName: string): Promise<any | null> {
+    try {
+      const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' }
+      if (this.githubToken) headers['Authorization'] = `token ${this.githubToken}`
+      const res = await fetch(
+        `https://api.github.com/repos/${this.githubRepo}/releases/tags/${encodeURIComponent(tagName)}`,
+        { headers }
+      )
+      if (!res.ok) return null
+      return await res.json()
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * 获取远程资源清单
    * 支持重试机制和超时控制
    */
@@ -839,28 +857,58 @@ export class ResourceUpdater {
       if (isSplit) {
         this.extractSplitZip(zipPath, downloadDir, filesToUpdate, updateSize, onProgress)
       } else {
-        const zip = new AdmZip(zipPath)
-        let extractedSize = 0
-        for (const file of filesToUpdate) {
-          onProgress?.({ total: updateSize, downloaded: extractedSize, current: `解压文件: ${file.path}` })
-          const zipEntry = zip.getEntry(file.path)
-          if (zipEntry) {
-            const targetPath = path.join(downloadDir, file.path)
-            fs.mkdirSync(path.dirname(targetPath), { recursive: true })
-            const content = zip.readFile(zipEntry)
-            if (content) fs.writeFileSync(targetPath, content)
-          } else {
-            console.warn(`[ResourceUpdater] File not found in zip: ${file.path}`)
+        try {
+          this.extractSingleZipWithAdm(zipPath, downloadDir, filesToUpdate, updateSize, onProgress)
+        } catch (admError: unknown) {
+          const msg = admError instanceof Error ? admError.message : String(admError)
+          const isInvalidLoc = /Invalid LOC|bad signature|invalid.*header/i.test(msg)
+          if (isInvalidLoc) {
+            let splitInfo = this.getResourceAssets(release, version)
+            if (splitInfo?.type !== 'split') {
+              const freshRelease = await this.fetchReleaseByTag(release.tag_name)
+              if (freshRelease) splitInfo = this.getResourceAssets(freshRelease, version)
+            }
+            if (splitInfo?.type === 'split') {
+              console.warn('[ResourceUpdater] Single zip invalid (likely split segment), retrying as split...')
+              await this.downloadSplitZip(splitInfo.assets, splitInfo.totalSize, onProgress)
+              const splitZipPath = path.join(this.tempDir, splitInfo.assets.find(a => a.name.endsWith('.zip'))!.name)
+              this.extractSplitZip(splitZipPath, downloadDir, filesToUpdate, updateSize, onProgress)
+              return
+            }
           }
-          extractedSize += file.size
+          throw admError
         }
-        onProgress?.({ total: updateSize, downloaded: updateSize, current: `解压完成: ${filesToUpdate.length} 个文件` })
-        console.log(`[ResourceUpdater] Extraction completed: ${filesToUpdate.length} files (${this.formatBytes(extractedSize)})`)
       }
     } catch (error) {
       console.error('[ResourceUpdater] Failed to download and extract resources:', error)
       throw error
     }
+  }
+
+  private extractSingleZipWithAdm(
+    zipPath: string,
+    downloadDir: string,
+    filesToUpdate: FileInfo[],
+    updateSize: number,
+    onProgress?: (progress: { total: number; downloaded: number; current: string }) => void
+  ): void {
+    const zip = new AdmZip(zipPath)
+    let extractedSize = 0
+    for (const file of filesToUpdate) {
+      onProgress?.({ total: updateSize, downloaded: extractedSize, current: `解压文件: ${file.path}` })
+      const zipEntry = zip.getEntry(file.path)
+      if (zipEntry) {
+        const targetPath = path.join(downloadDir, file.path)
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+        const content = zip.readFile(zipEntry)
+        if (content) fs.writeFileSync(targetPath, content)
+      } else {
+        console.warn(`[ResourceUpdater] File not found in zip: ${file.path}`)
+      }
+      extractedSize += file.size
+    }
+    onProgress?.({ total: updateSize, downloaded: updateSize, current: `解压完成: ${filesToUpdate.length} 个文件` })
+    console.log(`[ResourceUpdater] Extraction completed: ${filesToUpdate.length} files (${this.formatBytes(extractedSize)})`)
   }
 
   private async downloadSingleZip(

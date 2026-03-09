@@ -15,14 +15,15 @@ const rootDir = path.join(__dirname, '..')
 
 /**
  * 需要监控更新的目录
+ * - dist / skills / mcp: 前端、技能、MCP
+ * - resources/templates: 项目模板（清单与 zip 均排除 node_modules，仅下发源码与配置）
  */
 const WATCH_DIRS = [
-  'dist',                  // 前端构建产物
-  'resources/skills',      // 技能
-  'resources/mcp',         // MCP 配置
-  'resources/templates'    // 项目模板
-  // 注意：resources/node 和 resources/playwright 是大体积二进制文件，
-  // 不通过热更新分发（超过 GitHub Release 2GB 限制），随安装包一起打包。
+  'dist',
+  'resources/skills',
+  'resources/mcp',
+  'resources/templates'   // 不含 node_modules（EXCLUDE_PATTERNS 已排除）
+  // resources/node、resources/playwright 随安装包打包，不通过热更新
 ]
 
 /**
