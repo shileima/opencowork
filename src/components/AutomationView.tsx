@@ -6,6 +6,7 @@ import { MonacoEditor } from './project/MonacoEditor';
 import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import { useI18n } from '../i18n/I18nContext';
+import type { TranslationKey } from '../i18n/translations';
 import { useToast } from './Toast';
 import type { RPAProject, RPATask } from '../../electron/config/RPAProjectStore';
 
@@ -86,13 +87,12 @@ function parseScreenshotPathsFromStdout(stdout: string, projectPath?: string): s
 /** 单次执行的任务卡片：步骤输出、进度、截图 */
 function ExecutionRunCard({
     run,
-    projectPath,
     t,
     isPanelExpanded
 }: {
     run: RPAExecutionRun;
     projectPath?: string;
-    t: (key: string) => string;
+    t: (key: TranslationKey) => string;
     /** 执行输出面板是否铺满展开，用于放宽步骤输出区域高度以展示更多 */
     isPanelExpanded?: boolean;
 }) {
@@ -103,7 +103,8 @@ function ExecutionRunCard({
         if (run.screenshotPaths.length === 0) return;
         run.screenshotPaths.forEach((p) => {
             if (screenshotDataUrls[p]) return;
-            window.ipcRenderer.invoke('fs:read-image-data-url', p).then((res: { success: boolean; dataUrl?: string }) => {
+            window.ipcRenderer.invoke('fs:read-image-data-url', p).then((result: unknown) => {
+                const res = result as { success: boolean; dataUrl?: string };
                 if (res.success && res.dataUrl) {
                     setScreenshotDataUrls(prev => ({ ...prev, [p]: res.dataUrl! }));
                 }
@@ -357,6 +358,17 @@ export function AutomationView({
         return () => remove();
     }, []);
 
+    // 上下文切换（400 错误自动重试）：显示提示，任务已通过 rpa:task:created 自动切换
+    useEffect(() => {
+        const remove = window.ipcRenderer.on('agent:context-switched', (_: unknown, ...args: unknown[]) => {
+            const payload = args[0] as { newTaskId?: string; projectId?: string } | undefined;
+            if (payload?.newTaskId) {
+                showToast('遇到错误，已新建任务自动重试...');
+            }
+        });
+        return () => remove();
+    }, [showToast]);
+
     useEffect(() => {
         window.ipcRenderer.invoke('config:get-all').then((cfg: any) => {
             setConfig(cfg);
@@ -367,7 +379,8 @@ export function AutomationView({
     }, []);
 
     useEffect(() => {
-        const remove = window.ipcRenderer.on('agent:stream-token', (_: unknown, token: string) => {
+        const remove = window.ipcRenderer.on('agent:stream-token', (_: unknown, ...args: unknown[]) => {
+            const token = args[0] as string;
             setStreamingText(prev => prev + token);
         });
         return () => remove();
@@ -402,7 +415,8 @@ export function AutomationView({
 
     /** 监听执行流式输出，更新对应任务卡片 */
     useEffect(() => {
-        const removeStart = window.ipcRenderer.on('rpa:run:start', (_: unknown, payload: { runId: string; scriptPath: string }) => {
+        const removeStart = window.ipcRenderer.on('rpa:run:start', (_: unknown, ...args: unknown[]) => {
+            const payload = args[0] as { runId: string; scriptPath: string };
             const scriptName = payload.scriptPath.replace(/^.*[/\\]/, '');
             setExecutionRuns(prev => [{
                 runId: payload.runId,
@@ -415,7 +429,8 @@ export function AutomationView({
                 startTime: Date.now()
             }, ...prev]);
         });
-        const removeOutput = window.ipcRenderer.on('rpa:run:output', (_: unknown, payload: { runId: string; data: string; stream: 'stdout' | 'stderr' }) => {
+        const removeOutput = window.ipcRenderer.on('rpa:run:output', (_: unknown, ...args: unknown[]) => {
+            const payload = args[0] as { runId: string; data: string; stream: 'stdout' | 'stderr' };
             const { runId, data, stream } = payload;
             if (lastExecutionRunIdForChatRef.current === runId) {
                 window.ipcRenderer.invoke('agent:append-to-last-assistant', data).catch(() => {});
@@ -433,7 +448,8 @@ export function AutomationView({
                 };
             }));
         });
-        const removeEnd = window.ipcRenderer.on('rpa:run:end', (_: unknown, payload: { runId: string; success: boolean; error?: string; stdout?: string; stderr?: string }) => {
+        const removeEnd = window.ipcRenderer.on('rpa:run:end', (_: unknown, ...args: unknown[]) => {
+            const payload = args[0] as { runId: string; success: boolean; error?: string; stdout?: string; stderr?: string };
             const { runId, success, error } = payload;
             if (currentExecutionRunIdRef.current === runId) {
                 currentExecutionRunIdRef.current = null;

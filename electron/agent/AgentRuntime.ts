@@ -13,7 +13,7 @@ import { projectStore } from '../config/ProjectStore';
 import { rpaProjectStore } from '../config/RPAProjectStore';
 import { sessionStore } from '../config/SessionStore';
 import { ssoStore } from '../config/SsoStore';
-import { setCurrentTaskIdForContextSwitch } from '../contextSwitchCoordinator';
+import { setCurrentTaskIdForContextSwitch, setCurrentRpaTaskIdForContextSwitch } from '../contextSwitchCoordinator';
 import { setMaxListeners } from 'node:events';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -294,7 +294,7 @@ export class AgentRuntime {
     }> = new Map();
 
     constructor(apiKey: string, window: BrowserWindow, model: string = 'claude-3-5-sonnet-20241022', apiUrl: string = 'https://api.anthropic.com', maxTokens: number = 131072) {
-        this.anthropic = new Anthropic({ apiKey, baseURL: apiUrl });
+        this.anthropic = new Anthropic({ apiKey, baseURL: apiUrl, timeout: 5 * 60 * 1000 });
         this.model = model;
         this.maxTokens = maxTokens;
         this.windows = [window];
@@ -341,7 +341,8 @@ export class AgentRuntime {
         if (apiUrl || apiKey) {
             this.anthropic = new Anthropic({
                 apiKey: apiKey || this.anthropic.apiKey,
-                baseURL: apiUrl || this.anthropic.baseURL
+                baseURL: apiUrl || this.anthropic.baseURL,
+                timeout: 5 * 60 * 1000
             });
         }
         console.log(`[Agent] Hot-Swap: Model updated to ${model}, maxTokens: ${this.maxTokens}`);
@@ -589,42 +590,62 @@ export class AgentRuntime {
                 return;
             }
 
-            // 上下文超限/可重试错误：自动创建新任务（新会话）并继续执行（最多重试 1 次，防止 400 死循环）
+            // 上下文超限/代理/上游 400 等可重试错误：自动新建任务（新会话），从头重新执行原始请求（最多重试 1 次）
             if (this.isRetryableContextError(err, error) && this.contextSwitchRetryCount < 1) {
                 this.contextSwitchRetryCount++;
                 try {
-                    const lastUserMsg = this.history.length > 0 ? this.history[this.history.length - 1] : null;
-                    const lastUserInput = lastUserMsg && lastUserMsg.role === 'user'
-                        ? this.extractTextFromMessage(lastUserMsg)
-                        : typeof input === 'string' ? input : (input?.content ?? '');
-                    const condensed = this.buildCondensedContext(this.history, lastUserInput);
+                    // 提取原始用户意图（第一条 user 消息，或当前 input），从头重新执行，不携带工具调用历史
+                    const originalUserInput = (() => {
+                        const firstUserMsg = this.history.find(m => m.role === 'user');
+                        if (firstUserMsg) return this.extractTextFromMessage(firstUserMsg);
+                        return typeof input === 'string' ? input : (input?.content ?? '');
+                    })();
 
-                    const newSession = sessionStore.createSession('上下文切换继续');
+                    // 新会话只包含原始请求，清空所有工具调用历史
+                    const freshHistory: Anthropic.MessageParam[] = [
+                        { role: 'user', content: originalUserInput }
+                    ];
+
+                    const newSession = sessionStore.createSession('自动重试');
                     sessionStore.setSessionId(newSession.id, isFloatingBall ?? false);
 
                     let effectiveTaskId = taskId;
                     if (taskId && projectId) {
-                        // 将旧任务标记为 failed（400 错误），后续不再展示
-                        projectStore.updateTask(projectId, taskId, { status: 'failed' });
-                        // Project 模式：新建任务（如点击 + 新任务），关联新 session
-                        const newTask = projectStore.createTask(projectId, '上下文切换继续', newSession.id);
-                        if (newTask) {
-                            effectiveTaskId = newTask.id;
-                            setCurrentTaskIdForContextSwitch(newTask.id);
-                            this.broadcast('project:task:updated', { projectId, taskId, updates: { status: 'failed' } });
-                            this.broadcast('project:task:created', newTask);
-                            this.broadcast('project:task:updated', { projectId, taskId: newTask.id, updates: { sessionId: newSession.id } });
+                        // 将旧任务标记为 failed
+                        const isAutomation = this.currentViewContext === 'automation';
+                        if (isAutomation) {
+                            rpaProjectStore.updateTask(projectId, taskId, { status: 'failed' });
+                            const newTask = rpaProjectStore.createTask(projectId, '自动重试', newSession.id);
+                            if (newTask) {
+                                effectiveTaskId = newTask.id;
+                                setCurrentRpaTaskIdForContextSwitch(newTask.id);
+                                this.broadcast('rpa:task:updated', { projectId, taskId, updates: { status: 'failed' } });
+                                this.broadcast('rpa:task:created', newTask);
+                                this.broadcast('rpa:task:updated', { projectId, taskId: newTask.id, updates: { sessionId: newSession.id } });
+                            }
                         } else {
-                            projectStore.updateTask(projectId, taskId, { sessionId: newSession.id });
-                            this.broadcast('project:task:updated', { projectId, taskId, updates: { sessionId: newSession.id } });
+                            projectStore.updateTask(projectId, taskId, { status: 'failed' });
+                            const newTask = projectStore.createTask(projectId, '自动重试', newSession.id);
+                            if (newTask) {
+                                effectiveTaskId = newTask.id;
+                                setCurrentTaskIdForContextSwitch(newTask.id);
+                                this.broadcast('project:task:updated', { projectId, taskId, updates: { status: 'failed' } });
+                                this.broadcast('project:task:created', newTask);
+                                this.broadcast('project:task:updated', { projectId, taskId: newTask.id, updates: { sessionId: newSession.id } });
+                            } else {
+                                projectStore.updateTask(projectId, taskId, { sessionId: newSession.id });
+                                this.broadcast('project:task:updated', { projectId, taskId, updates: { sessionId: newSession.id } });
+                            }
                         }
                     }
 
-                    this.history = condensed;
+                    console.log(`[AgentRuntime] Context switch: new session ${newSession.id}, original input: "${originalUserInput.slice(0, 80)}..."`);
+
+                    this.history = freshHistory;
                     if (restoreRef) {
-                        restoreRef.originalHistory = condensed;
+                        restoreRef.originalHistory = freshHistory;
                     }
-                    sessionStore.updateSession(newSession.id, condensed);
+                    sessionStore.updateSession(newSession.id, freshHistory);
                     this.notifyUpdate();
                     this.broadcast('agent:context-switched', { newSessionId: newSession.id, newTaskId: effectiveTaskId, taskId: effectiveTaskId, projectId });
 
@@ -632,14 +653,14 @@ export class AgentRuntime {
                     return { effectiveTaskId };
                 } catch (retryError) {
                     console.error('[AgentRuntime] Context switch retry failed:', retryError);
-                    // 重试仍失败时也要向界面发送友好错误，否则用户只会看到控制台堆栈
+                    // 重试仍失败时向界面发送友好错误
                     const errorTaskId = taskId || undefined;
                     const errorPayload = (msg: string) => ({ message: msg, taskId: errorTaskId, projectId });
                     const detail = err.error?.message || err.message || '';
                     const isUpstream = /provider_response_error|upstream_error|bad response status code/i.test(detail);
                     const friendly400 = isUpstream
-                        ? '代理或上游服务返回 400。请检查：\n- OneAPI/代理配置与模型名称（如 aws.claude-sonnet-4.5）\n- 上游服务是否正常、请求格式是否被支持'
-                        : `请求错误 (400): ${detail.slice(0, 200)}${detail.length > 200 ? '…' : ''}\n\n请检查：\n- API Key 是否正确\n- API 地址是否有效\n- 模型名称是否正确`;
+                        ? '代理或上游服务返回 400，自动重试也失败了。\n\n请检查：\n- OneAPI/代理配置与模型名称\n- 上游服务是否正常、请求格式是否被支持'
+                        : `请求错误 (400)，自动重试失败：${detail.slice(0, 200)}${detail.length > 200 ? '…' : ''}\n\n请检查 API Key、API 地址与模型名称是否正确。`;
                     this.broadcast('agent:error', errorPayload(friendly400));
                     throw error;
                 }
@@ -670,11 +691,17 @@ export class AgentRuntime {
             } else {
                 const baseMsg = err.message || err.error?.message || 'An unknown error occurred';
                 const statusInfo = err.status ? `[${err.status}] ` : '';
-                const causeDetail = this.extractNetworkErrorCause(error);
-                const errorMsg = causeDetail
-                    ? `${statusInfo}${baseMsg}\n\n${causeDetail}`
-                    : `${statusInfo}${baseMsg}`;
-                this.broadcast('agent:error', errorPayload(errorMsg));
+                // 判断是否为超时错误
+                const isTimeout = /timeout/i.test(baseMsg) || (error as any)?.name === 'APITimeoutError' || (error as any)?.constructor?.name === 'APITimeoutError';
+                if (isTimeout) {
+                    this.broadcast('agent:error', errorPayload(`请求超时：AI 接口在 5 分钟内未响应。\n\n可能原因：\n- 网络连接不稳定或中断\n- API 服务器响应缓慢\n- 代理/中转服务出现问题\n\n请检查网络后重试。`));
+                } else {
+                    const causeDetail = this.extractNetworkErrorCause(error);
+                    const errorMsg = causeDetail
+                        ? `${statusInfo}${baseMsg}\n\n${causeDetail}`
+                        : `${statusInfo}${baseMsg}`;
+                    this.broadcast('agent:error', errorPayload(errorMsg));
+                }
             }
         }
     }
@@ -700,19 +727,10 @@ export class AgentRuntime {
         return null;
     }
 
-    private isRetryableContextError(err: { status?: number; statusCode?: number; message?: string; error?: { message?: string } }, rawError?: unknown): boolean {
+    private isRetryableContextError(err: { status?: number; statusCode?: number; message?: string; error?: { message?: string } }, _rawError?: unknown): boolean {
         const status = err.status ?? err.statusCode;
-        // 400: 上下文超限或上游/代理返回的 bad response，均可尝试切换新会话重试
-        if (status === 400) {
-            const msg = (err.message || err.error?.message || '').toLowerCase();
-            const rawStr = rawError ? JSON.stringify(rawError).toLowerCase() : '';
-            return (
-                /context|exceed|input length|token/.test(msg) ||
-                /context|exceed|input length|token/.test(rawStr) ||
-                /bad response status code|provider_response_error|upstream_error/.test(msg) ||
-                /bad response status code|provider_response_error|upstream_error/.test(rawStr)
-            );
-        }
+        // 所有 400 均视为可重试（上下文超限、代理/上游返回 400 等均通过新建任务从头重试）
+        if (status === 400) return true;
         return status === 429 || status === 500 || status === 503;
     }
 
@@ -856,11 +874,6 @@ export class AgentRuntime {
         }
 
         return [contextSummaryMsg, ...trimmedRecent];
-    }
-
-    /** 兼容旧调用，内部转发到 smartCompressHistory */
-    private buildCondensedContext(history: Anthropic.MessageParam[], lastUserInput: string): Anthropic.MessageParam[] {
-        return this.smartCompressHistory(history, lastUserInput);
     }
 
     private async runLoop(_taskId?: string) {
@@ -1579,6 +1592,19 @@ ${skillInfo.instructions}
                 // Check for abort-related errors (different SDK versions may throw different errors)
                 if (loopErr.name === 'AbortError' || loopErr.message?.includes('abort')) {
                     console.log('[AgentRuntime] Caught abort error');
+                    return;
+                }
+
+                // 超时错误：直接显示在聊天区，不再抛出（避免卡死）
+                const isLoopTimeout = /timeout/i.test(loopErr.message || '') || (loopError as any)?.name === 'APITimeoutError' || (loopError as any)?.constructor?.name === 'APITimeoutError';
+                if (isLoopTimeout) {
+                    const timeoutMsg: Anthropic.MessageParam = {
+                        role: 'assistant',
+                        content: `⚠️ **请求超时**\n\nAI 接口在 5 分钟内未响应，任务已中止。\n\n可能原因：\n- 网络连接不稳定或中断\n- API 服务器响应缓慢\n- 代理/中转服务出现问题\n\n请检查网络后重试。`
+                    };
+                    this.history.push(timeoutMsg);
+                    this.notifyUpdate();
+                    keepGoing = false;
                     return;
                 }
 
