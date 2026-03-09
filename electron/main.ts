@@ -1,4 +1,5 @@
 import { app, BrowserWindow, shell, ipcMain, screen, dialog, globalShortcut, Tray, Menu, nativeImage } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -1235,37 +1236,81 @@ ipcMain.handle('sso:logout', () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
+// App Auto-Updater (electron-updater)
+// ──────────────────────────────────────────────────────────────────────────────
+
+autoUpdater.autoDownload = false
+autoUpdater.autoInstallOnAppQuit = false
+
+autoUpdater.on('update-available', (info) => {
+  const win = mainWin || floatingBallWin
+  win?.webContents.send('app:update-available', {
+    version: info.version,
+    releaseNotes: info.releaseNotes,
+    releaseDate: info.releaseDate,
+  })
+})
+
+autoUpdater.on('update-not-available', () => {
+  const win = mainWin || floatingBallWin
+  win?.webContents.send('app:update-not-available', { version: app.getVersion() })
+})
+
+autoUpdater.on('download-progress', (progress) => {
+  const win = mainWin || floatingBallWin
+  win?.webContents.send('app:update-download-progress', {
+    percent: Math.round(progress.percent),
+    transferred: progress.transferred,
+    total: progress.total,
+    bytesPerSecond: progress.bytesPerSecond,
+  })
+})
+
+autoUpdater.on('update-downloaded', (info) => {
+  const win = mainWin || floatingBallWin
+  win?.webContents.send('app:update-downloaded', { version: info.version })
+})
+
+autoUpdater.on('error', (err) => {
+  console.error('[autoUpdater] Error:', err)
+  const win = mainWin || floatingBallWin
+  win?.webContents.send('app:update-error', { message: err.message })
+})
 
 ipcMain.handle('app:check-update', async () => {
   try {
-    const currentVersion = app.getVersion();
-    // Use user agent to comply with GitHub API reqs
-    const response = await fetch('https://api.github.com/repos/shileima/opencowork/releases/latest', {
-      headers: { 'User-Agent': 'OpenCowork-App' }
-    });
-
-    if (!response.ok) throw new Error('Failed to fetch release info');
-
-    const data = await response.json();
-    const latestTag = data.tag_name || ''; // e.g. "v1.0.4"
-    const latestVersion = latestTag.replace(/^v/, '');
-
-    // Simple semver compare (assuming strict X.Y.Z)
-    // Returns true if latest > current
-    const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
-
+    const result = await autoUpdater.checkForUpdates()
+    const currentVersion = app.getVersion()
+    if (!result) {
+      return { success: true, hasUpdate: false, currentVersion }
+    }
+    const latestVersion = result.updateInfo.version
+    const hasUpdate = compareVersions(latestVersion, currentVersion) > 0
     return {
       success: true,
       hasUpdate,
       currentVersion,
       latestVersion,
-      latestTag,
-      releaseUrl: data.html_url
-    };
+      releaseUrl: `https://github.com/shileima/opencowork/releases/tag/v${latestVersion}`,
+    }
   } catch (error: any) {
-    console.error('Update check failed:', error);
-    return { success: false, error: error.message };
+    console.error('[autoUpdater] Check update failed:', error)
+    return { success: false, error: error.message }
   }
+})
+
+ipcMain.handle('app:download-update', async () => {
+  try {
+    await autoUpdater.downloadUpdate()
+    return { success: true }
+  } catch (error: any) {
+    console.error('[autoUpdater] Download update failed:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('app:install-update', () => {
+  autoUpdater.quitAndInstall(false, true)
 })
 
 // 检查资源更新

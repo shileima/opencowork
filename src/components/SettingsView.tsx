@@ -186,6 +186,9 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         homepage: string 
     } | null>(null);
     const [checkingUpdate, setCheckingUpdate] = useState(false);
+    const [downloadingUpdate, setDownloadingUpdate] = useState(false);
+    const [downloadProgress, setDownloadProgress] = useState<{ percent: number; bytesPerSecond: number; transferred: number; total: number } | null>(null);
+    const [updateDownloaded, setUpdateDownloaded] = useState(false);
 
     const [updateInfo, setUpdateInfo] = useState<{ hasUpdate: boolean, latestVersion: string, releaseUrl: string } | null>(null);
     
@@ -244,9 +247,42 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         };
     }, []);
 
+    // 监听 electron-updater 事件
+    useEffect(() => {
+        const removeAvailable = window.ipcRenderer?.on('app:update-available', (_e: any, info: any) => {
+            setUpdateInfo({ hasUpdate: true, latestVersion: info.version, releaseUrl: `https://github.com/shileima/opencowork/releases/tag/v${info.version}` });
+            setActiveTab('about');
+        });
+        const removeNotAvailable = window.ipcRenderer?.on('app:update-not-available', () => {
+            setUpdateInfo(prev => prev ? prev : { hasUpdate: false, latestVersion: '', releaseUrl: '' });
+        });
+        const removeProgress = window.ipcRenderer?.on('app:update-download-progress', (_e: any, progress: any) => {
+            setDownloadProgress(progress);
+        });
+        const removeDownloaded = window.ipcRenderer?.on('app:update-downloaded', () => {
+            setDownloadingUpdate(false);
+            setDownloadProgress(null);
+            setUpdateDownloaded(true);
+        });
+        const removeError = window.ipcRenderer?.on('app:update-error', (_e: any, err: any) => {
+            console.error('[SettingsView] App update error:', err);
+            setDownloadingUpdate(false);
+            setDownloadProgress(null);
+        });
+        return () => {
+            removeAvailable?.();
+            removeNotAvailable?.();
+            removeProgress?.();
+            removeDownloaded?.();
+            removeError?.();
+        };
+    }, []);
+
     const handleCheckUpdate = async () => {
         setCheckingUpdate(true);
         setUpdateInfo(null);
+        setUpdateDownloaded(false);
+        setDownloadProgress(null);
         try {
             const result = await window.ipcRenderer?.invoke('app:check-update') as any;
             if (result && result.success) {
@@ -261,6 +297,21 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         } finally {
             setCheckingUpdate(false);
         }
+    };
+
+    const handleDownloadUpdate = async () => {
+        setDownloadingUpdate(true);
+        setDownloadProgress(null);
+        try {
+            await window.ipcRenderer?.invoke('app:download-update');
+        } catch (error) {
+            console.error('Download update failed', error);
+            setDownloadingUpdate(false);
+        }
+    };
+
+    const handleInstallUpdate = () => {
+        window.ipcRenderer?.invoke('app:install-update');
     };
 
     // 检查资源更新
@@ -1755,15 +1806,33 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                             {updateInfo.hasUpdate ? (
                                                 <div className="flex flex-col items-center gap-2">
                                                     <p>{t('newVersion')} v{updateInfo.latestVersion}</p>
-                                                    <p className="text-xs text-stone-500 dark:text-zinc-400">需重新下载安装包以更新主程序</p>
-                                                    <a
-                                                        href={updateInfo.releaseUrl}
-                                                        target="_blank"
-                                                        rel="noreferrer"
-                                                        className="text-orange-500 hover:underline font-medium flex items-center gap-1"
-                                                    >
-                                                        {t('download')} <ExternalLink size={12} />
-                                                    </a>
+                                                    {updateDownloaded ? (
+                                                        <button
+                                                            onClick={handleInstallUpdate}
+                                                            className="px-4 py-2 text-sm font-medium rounded-lg bg-green-500 hover:bg-green-600 text-white transition-colors"
+                                                        >
+                                                            立即重启安装
+                                                        </button>
+                                                    ) : downloadingUpdate ? (
+                                                        <div className="flex flex-col items-center gap-1 w-full">
+                                                            <div className="w-full bg-stone-200 dark:bg-zinc-700 rounded-full h-1.5">
+                                                                <div
+                                                                    className="bg-orange-500 h-1.5 rounded-full transition-all"
+                                                                    style={{ width: `${downloadProgress?.percent ?? 0}%` }}
+                                                                />
+                                                            </div>
+                                                            <p className="text-xs text-stone-500 dark:text-zinc-400">
+                                                                下载中 {downloadProgress?.percent ?? 0}%
+                                                            </p>
+                                                        </div>
+                                                    ) : (
+                                                        <button
+                                                            onClick={handleDownloadUpdate}
+                                                            className="px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 hover:bg-orange-600 text-white transition-colors flex items-center gap-1"
+                                                        >
+                                                            一键下载并更新
+                                                        </button>
+                                                    )}
                                                 </div>
                                             ) : (
                                                 <p>{t('upToDate')}</p>

@@ -145,7 +145,7 @@ jobs:
           pnpm exec tsc
           pnpm exec vite build
           node scripts/copy-playwright-wrapper.mjs
-          pnpm exec electron-builder --${{ matrix.platform }} --publish never
+          pnpm exec electron-builder --${{ matrix.platform }} --publish always
 
       -
         name: Generate Resource Manifest
