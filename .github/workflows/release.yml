@@ -145,7 +145,7 @@ jobs:
           pnpm exec tsc
           pnpm exec vite build
           node scripts/copy-playwright-wrapper.mjs
-          pnpm exec electron-builder --${{ matrix.platform }} --publish always
+          pnpm exec electron-builder --${{ matrix.platform }} --publish never
 
       -
         name: Generate Resource Manifest
@@ -223,6 +223,7 @@ jobs:
             release/*/*.exe
             release/*/*.AppImage
             release/*/*.deb
+            release/**/latest*.yml
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
