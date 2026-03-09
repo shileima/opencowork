@@ -108,8 +108,8 @@ jobs:
       -
         name: Prepare Playwright package
         run: |
-          mkdir -p resources/playwright/package
-          cp -r node_modules/playwright resources/playwright/package/
+          node -e "require('fs').mkdirSync('resources/playwright/package', { recursive: true })"
+          node -e "const {cpSync}=require('fs'); cpSync('node_modules/playwright','resources/playwright/package/playwright',{recursive:true})"
 
       -
         name: Download Chromium and pack as tar.gz
@@ -117,7 +117,7 @@ jobs:
           # 直接安装到项目目录，省去 cp 步骤，避免符号链接问题
           PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/resources/playwright/browsers
         run: |
-          mkdir -p resources/playwright/browsers
+          node -e "require('fs').mkdirSync('resources/playwright/browsers', { recursive: true })"
           npx playwright install chromium
           node scripts/pack-chromium.mjs
 
