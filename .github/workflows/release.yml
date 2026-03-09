@@ -247,10 +247,11 @@ jobs:
         if: success() && matrix.platform == 'linux'
         with:
           tag_name: ${{ needs.create-release.outputs.tag_name }}
+          # 分卷用 .z[0-9]* 避免匹配到 .zip（否则 .z* 会重复匹配 zip 导致 overwrite 报 Not Found）
           files: |
             resource-manifest.json
             resources-*.zip
-            resources-*.z*
+            resources-*.z[0-9]*
           fail_on_unmatched_files: false
           overwrite_files: true
         env:
