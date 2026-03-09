@@ -20,9 +20,9 @@ const WATCH_DIRS = [
   'dist',                  // 前端构建产物
   'resources/skills',      // 技能
   'resources/mcp',         // MCP 配置
-  'resources/node',        // 内置 Node.js
-  'resources/playwright',  // Playwright 浏览器
   'resources/templates'    // 项目模板
+  // 注意：resources/node 和 resources/playwright 是大体积二进制文件，
+  // 不通过热更新分发（超过 GitHub Release 2GB 限制），随安装包一起打包。
 ]
 
 /**

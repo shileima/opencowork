@@ -176,7 +176,7 @@ jobs:
           # 创建 resources 目录
           mkdir -p temp-resources/resources
           
-          # 复制各个资源子目录(使用 || true 避免目录不存在时失败)
+          # 只打包可热更新的轻量资源（不含 node/playwright 二进制，避免超过 GitHub 2GB 限制）
           if [ -d "resources/skills" ]; then
             echo "Copying resources/skills/"
             cp -r resources/skills temp-resources/resources/
@@ -185,16 +185,6 @@ jobs:
           if [ -d "resources/mcp" ]; then
             echo "Copying resources/mcp/"
             cp -r resources/mcp temp-resources/resources/
-          fi
-          
-          if [ -d "resources/node" ]; then
-            echo "Copying resources/node/"
-            cp -r resources/node temp-resources/resources/
-          fi
-          
-          if [ -d "resources/playwright" ]; then
-            echo "Copying resources/playwright/"
-            cp -r resources/playwright temp-resources/resources/
           fi
           
           if [ -d "resources/templates" ]; then
