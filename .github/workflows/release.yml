@@ -113,23 +113,12 @@ jobs:
 
       -
         name: Download Chromium and pack as tar.gz
+        env:
+          # 直接安装到项目目录，省去 cp 步骤，避免符号链接问题
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/resources/playwright/browsers
         run: |
           mkdir -p resources/playwright/browsers
-          npx playwright install chromium --with-deps || true
-          # 复制系统缓存的 chromium 到项目 browsers 目录
-          if [ -d "$HOME/.cache/ms-playwright" ]; then
-            CHROMIUM_DIR=$(ls "$HOME/.cache/ms-playwright" | grep "^chromium-" | sort -V | tail -1)
-            if [ -n "$CHROMIUM_DIR" ]; then
-              cp -r "$HOME/.cache/ms-playwright/$CHROMIUM_DIR" resources/playwright/browsers/
-            fi
-          fi
-          # macOS
-          if [ -d "$HOME/Library/Caches/ms-playwright" ]; then
-            CHROMIUM_DIR=$(ls "$HOME/Library/Caches/ms-playwright" | grep "^chromium-" | sort -V | tail -1)
-            if [ -n "$CHROMIUM_DIR" ]; then
-              cp -r "$HOME/Library/Caches/ms-playwright/$CHROMIUM_DIR" resources/playwright/browsers/
-            fi
-          fi
+          npx playwright install chromium
           node scripts/pack-chromium.mjs
 
       -
