@@ -31,9 +31,11 @@ build
 .qa-cowork
 .opencowork
 
-# playwright：只忽略构建产物，package.json 需提交供 CI 安装
+# playwright：构建产物不纳入版本控制，由 CI 或本地构建脚本生成
+# chromium.tar.gz 超过 GitHub 100MB 限制，在构建时通过 pack:chromium 脚本生成
 resources/playwright/node_modules
 resources/playwright/browsers
+resources/playwright/chromium.tar.gz
 
 # Node.js runtimes (downloaded during build)
 resources/node/*/node

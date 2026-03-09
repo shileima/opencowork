@@ -1,2 +1,0 @@
-resources/playwright/*.tar.gz filter=lfs diff=lfs merge=lfs -text
-resources/playwright/*.tar.gz !text !filter !merge !diff
