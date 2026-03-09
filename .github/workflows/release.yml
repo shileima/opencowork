@@ -112,6 +112,27 @@ jobs:
           cp -r node_modules/playwright resources/playwright/package/
 
       -
+        name: Download Chromium and pack as tar.gz
+        run: |
+          mkdir -p resources/playwright/browsers
+          npx playwright install chromium --with-deps || true
+          # 复制系统缓存的 chromium 到项目 browsers 目录
+          if [ -d "$HOME/.cache/ms-playwright" ]; then
+            CHROMIUM_DIR=$(ls "$HOME/.cache/ms-playwright" | grep "^chromium-" | sort -V | tail -1)
+            if [ -n "$CHROMIUM_DIR" ]; then
+              cp -r "$HOME/.cache/ms-playwright/$CHROMIUM_DIR" resources/playwright/browsers/
+            fi
+          fi
+          # macOS
+          if [ -d "$HOME/Library/Caches/ms-playwright" ]; then
+            CHROMIUM_DIR=$(ls "$HOME/Library/Caches/ms-playwright" | grep "^chromium-" | sort -V | tail -1)
+            if [ -n "$CHROMIUM_DIR" ]; then
+              cp -r "$HOME/Library/Caches/ms-playwright/$CHROMIUM_DIR" resources/playwright/browsers/
+            fi
+          fi
+          node scripts/pack-chromium.mjs
+
+      -
         name: Install Linux dependencies (electron-builder)
         if: matrix.platform == 'linux'
         run: |

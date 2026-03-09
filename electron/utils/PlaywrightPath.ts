@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { execSync } from 'child_process';
 import { app } from 'electron';
 
 /**
@@ -39,20 +40,62 @@ export function getBuiltinPlaywrightPath(): string | null {
 
 /**
  * 获取 Playwright 浏览器路径
- * 优先应用内置 resources/playwright/browsers，否则 ~/.qa-cowork/skills/agent-browser/browsers/
+ *
+ * 优先级：
+ *  1. 应用内置 resources/playwright/browsers（dev 模式直接使用）
+ *  2. userData playwright/browsers（打包后解压目标目录）
+ *  3. ~/.qa-cowork/skills/agent-browser/browsers（用户手动安装）
+ *
+ * 打包模式下，内置的是 chromium.tar.gz 而非展开的目录。
+ * 首次调用时会自动将 tar.gz 解压到 userData playwright/browsers/，后续直接复用。
  */
 export function getBuiltinPlaywrightBrowsersPath(): string | null {
+  // 1. dev 模式：resources/playwright/browsers 直接存在
   const appBrowsers = path.join(getAppPlaywrightDir(), 'browsers');
   if (fs.existsSync(appBrowsers)) {
     const hasChromium = fs.readdirSync(appBrowsers).some((f) => f.startsWith('chromium-'));
     if (hasChromium) return appBrowsers;
   }
+
+  // 2. 打包模式：检查 userData 下已解压的目录，或触发首次解压
+  if (app.isPackaged) {
+    const userDataBrowsers = path.join(app.getPath('userData'), 'playwright', 'browsers');
+    if (fs.existsSync(userDataBrowsers)) {
+      const hasChromium = fs.readdirSync(userDataBrowsers).some((f) => f.startsWith('chromium-'));
+      if (hasChromium) return userDataBrowsers;
+    }
+    // 尝试从内置 tar.gz 解压
+    const tarGz = path.join(process.resourcesPath, 'playwright', 'chromium.tar.gz');
+    if (fs.existsSync(tarGz)) {
+      const extracted = extractChromiumTarGz(tarGz, userDataBrowsers);
+      if (extracted) return userDataBrowsers;
+    }
+  }
+
+  // 3. 用户手动安装目录
   const userBrowsers = path.join(AGENT_BROWSER_SKILL_DIR, 'browsers');
   if (fs.existsSync(userBrowsers)) {
     const hasChromium = fs.readdirSync(userBrowsers).some((f) => f.startsWith('chromium-'));
     if (hasChromium) return userBrowsers;
   }
   return null;
+}
+
+/**
+ * 将 chromium.tar.gz 解压到指定目录，返回是否成功。
+ * 使用系统 tar 命令，避免引入额外依赖。
+ */
+function extractChromiumTarGz(tarGzPath: string, destDir: string): boolean {
+  try {
+    console.log(`[PlaywrightPath] 首次启动，解压内置 Chromium: ${tarGzPath} → ${destDir}`);
+    fs.mkdirSync(destDir, { recursive: true });
+    execSync(`tar -xzf "${tarGzPath}" -C "${destDir}"`, { stdio: 'pipe', timeout: 120_000 });
+    console.log('[PlaywrightPath] Chromium 解压完成 ✓');
+    return true;
+  } catch (err) {
+    console.error('[PlaywrightPath] Chromium 解压失败:', err instanceof Error ? err.message : err);
+    return false;
+  }
 }
 
 /**

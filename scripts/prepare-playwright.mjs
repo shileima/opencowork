@@ -60,6 +60,7 @@ if (fs.existsSync(browsersPath)) {
   if (existing.length > 0) {
     console.log(`✅ 浏览器已存在 (${existing[0]})，跳过安装`);
     ensureSkillSymlink(browsersPath);
+    packChromium();
     process.exit(0);
   }
 }
@@ -144,6 +145,7 @@ if (!hasCache) {
 }
 
 ensureSkillSymlink(browsersPath);
+packChromium();
 
 console.log(`浏览器位置: ${browsersPath}`);
 // 显示下载的文件大小
@@ -164,6 +166,17 @@ if (fs.existsSync(browsersPath)) {
 } else {
   console.error('❌ 浏览器目录不存在');
   process.exit(1);
+}
+
+function packChromium() {
+  try {
+    execSync(`node "${path.join(projectRoot, 'scripts', 'pack-chromium.mjs')}"`, {
+      stdio: 'inherit',
+      cwd: projectRoot,
+    });
+  } catch (err) {
+    console.warn('⚠️  打包 Chromium 为 tar.gz 失败（不影响开发调试）:', err.message);
+  }
 }
 
 function ensureSkillSymlink(targetBrowsersPath) {

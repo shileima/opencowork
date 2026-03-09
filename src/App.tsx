@@ -366,6 +366,11 @@ function App() {
       }
     } catch (error) {
       console.error('Failed to create RPA project:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('No handler registered')) {
+        window.alert('当前应用版本不支持此功能，请重新下载安装最新版本');
+        return;
+      }
       if (retryCount > 0) {
         await new Promise(res => setTimeout(res, 400));
         return handleCreateNewRpaProject(retryCount - 1);

@@ -202,6 +202,7 @@ export function AutomationView({
     const [showCreateDialog, setShowCreateDialog] = useState(false);
     const [newProjectName, setNewProjectName] = useState('');
     const [isCreatingProject, setIsCreatingProject] = useState(false);
+    const [needsAppUpdate, setNeedsAppUpdate] = useState(false);
     const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
     const [streamingText, setStreamingText] = useState('');
     const [config, setConfig] = useState<any>(null);
@@ -594,6 +595,12 @@ export function AutomationView({
                 setShowCreateDialog(true);
             }
         } catch (err) {
+            const msg = (err as Error).message || '';
+            if (msg.includes('No handler registered')) {
+                setIsProjectLoaded(true);
+                setNeedsAppUpdate(true);
+                return;
+            }
             if (retry > 0) {
                 await new Promise(res => setTimeout(res, 300));
                 return loadCurrentProject(retry - 1);
@@ -617,7 +624,12 @@ export function AutomationView({
                 showToast(result.error || '创建失败');
             }
         } catch (err) {
-            showToast((err as Error).message || '创建失败');
+            const msg = (err as Error).message || '';
+            if (msg.includes('No handler registered')) {
+                showToast('当前应用版本不支持此功能，请重新下载安装最新版本');
+            } else {
+                showToast(msg || '创建失败');
+            }
         } finally {
             setIsCreatingProject(false);
         }
@@ -777,7 +789,16 @@ export function AutomationView({
         return (
             <div className="flex-1 flex items-center justify-center text-stone-500 dark:text-zinc-400">
                 {!isProjectLoaded && <Loader2 size={20} className="animate-spin" />}
-                {isProjectLoaded && showCreateDialog && (
+                {isProjectLoaded && needsAppUpdate && (
+                    <div className="flex flex-col items-center gap-3 p-6 text-center max-w-sm">
+                        <div className="text-amber-500 text-4xl">⚠️</div>
+                        <p className="text-sm font-medium text-stone-700 dark:text-zinc-200">应用版本过旧</p>
+                        <p className="text-xs text-stone-500 dark:text-zinc-400">
+                            自动化项目功能需要更新应用主程序，请重新下载安装最新版本后使用。
+                        </p>
+                    </div>
+                )}
+                {isProjectLoaded && !needsAppUpdate && showCreateDialog && (
                     <div
                         className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
                         role="dialog"

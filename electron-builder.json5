@@ -65,11 +65,12 @@
       "to": "playwright/package",
       "filter": ["**/*"]
     },
-    // Chromium 浏览器内置（构建前需执行 pnpm run prepare:playwright；macOS 若遇签名问题会回退到 userData 安装）
+    // Chromium 压缩包（由 scripts/pack-chromium.mjs 生成）
+    // 避免将数百个 Chromium 小文件交给 codesign 逐一签名（会导致构建失败）
+    // 应用首次启动时自动解压到 userData playwright/browsers/
     {
-      "from": "resources/playwright/browsers",
-      "to": "playwright/browsers",
-      "filter": ["**/*"]
+      "from": "resources/playwright/chromium.tar.gz",
+      "to": "playwright/chromium.tar.gz"
     }
   ],
   "mac": {
