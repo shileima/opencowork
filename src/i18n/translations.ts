@@ -212,6 +212,7 @@ export const translations = {
         continueConversationPlaceholder: 'Continue conversation... (Enter to send, Shift+Enter for new line)',
         noHistory: 'No history',
         untitledSession: 'Untitled Session',
+        untitled: 'Untitled',
         startChatHint: 'Start a new conversation',
 
         // Confirm Dialog
@@ -638,6 +639,7 @@ export const translations = {
         continueConversationPlaceholder: '继续对话... (Enter 发送, Shift+Enter 换行)',
         noHistory: '暂无历史',
         untitledSession: '未命名会话',
+        untitled: '未命名',
         startChatHint: '开始一个新的对话',
 
         // Confirm Dialog

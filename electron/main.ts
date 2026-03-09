@@ -24,7 +24,7 @@ import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { setPlaywrightManager } from './utils/PlaywrightEnsure'
 import { ensureAgentBrowserCanFindChromium } from './utils/PlaywrightPath'
-import { registerContextSwitchHandler } from './contextSwitchCoordinator'
+import { registerContextSwitchHandler, registerRpaContextSwitchHandler } from './contextSwitchCoordinator'
 import Anthropic from '@anthropic-ai/sdk'
 
 // Extend App type to include isQuitting property
@@ -671,10 +671,10 @@ ipcMain.handle('agent:append-to-last-assistant', (event, text: string) => {
         const blocks = msg.content.slice()
         const lastText = blocks.findIndex((b: { type?: string }) => b.type === 'text')
         if (lastText !== -1) {
-          const block = blocks[lastText] as { type: 'text'; text: string }
-          blocks[lastText] = { type: 'text', text: block.text + text }
+          const block = blocks[lastText] as Anthropic.TextBlock
+          blocks[lastText] = { ...block, text: block.text + text }
         } else {
-          blocks.push({ type: 'text', text })
+          blocks.push({ type: 'text', text, citations: [] } as Anthropic.TextBlock)
         }
         updated[i] = { role: 'assistant', content: blocks }
       } else {
@@ -2266,6 +2266,10 @@ let currentActiveView: 'cowork' | 'project' | 'automation' = 'cowork';
 
 registerContextSwitchHandler((taskId) => {
     currentTaskIdForSession = taskId;
+});
+
+registerRpaContextSwitchHandler((taskId) => {
+    currentRpaTaskIdForSession = taskId;
 });
 
 /** 在项目无任务时清空聊天区域 */
