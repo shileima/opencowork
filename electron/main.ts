@@ -74,6 +74,10 @@ function compareVersionsForDist(a: string, b: string): number {
  * 获取前端资源目录路径
  * 生产环境下：若热更新目录存在且版本不低于应用版本则用热更新，否则用内置资源。
  * 这样在「整包更新」（如 GitHub Actions 安装新版本）后，会使用新内置前端，避免被旧热更新目录覆盖。
+ *
+ * 兼容性保护：若热更新版本的主版本号（major）或次版本号（minor）超过了主程序版本，
+ * 说明前端包含了主进程尚未支持的 IPC handler（如 rpa:project:create 等），
+ * 此时应拒绝加载热更新，回退到内置前端，避免"当前应用版本不支持此功能"的错误。
  */
 function getRendererDistPath(): string {
   if (VITE_DEV_SERVER_URL) {
@@ -92,6 +96,15 @@ function getRendererDistPath(): string {
   // 热更新无清单或版本落后于应用版本（例如用户刚做了整包更新）→ 用内置，避免旧热更新覆盖新前端
   if (!hotUpdateVersion || compareVersionsForDist(hotUpdateVersion, appVersion) < 0) {
     console.log(`[Main] Using built-in dist directory (app=${appVersion}, hot-update=${hotUpdateVersion ?? 'none'}, prefer built-in after full app update)`)
+    return RENDERER_DIST
+  }
+
+  // 兼容性保护：热更新版本的 major.minor 超过主程序版本 → 前端功能超出主进程能力，回退内置
+  // 例如：主程序 1.0.26，热更新 1.1.x → 1.1.x 包含主程序未支持的 IPC handler
+  const [hotMajor, hotMinor] = hotUpdateVersion.split('.').map(Number)
+  const [appMajor, appMinor] = appVersion.split('.').map(Number)
+  if (hotMajor > appMajor || (hotMajor === appMajor && hotMinor > appMinor)) {
+    console.warn(`[Main] Hot-update version (${hotUpdateVersion}) has higher minor/major than app (${appVersion}), falling back to built-in dist to avoid IPC incompatibility`)
     return RENDERER_DIST
   }
 

@@ -28,7 +28,7 @@ function App() {
   const [history, setHistory] = useState<Anthropic.MessageParam[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [activeView, setActiveView] = useState<ViewType>('automation');
+  const [activeView, setActiveView] = useState<ViewType>('project');
   const [isTaskPanelHidden, setIsTaskPanelHidden] = useState(false);
   const [isExplorerPanelHidden, setIsExplorerPanelHidden] = useState(false);
   const [projects, setProjects] = useState<any[]>([]);
@@ -368,7 +368,10 @@ function App() {
       console.error('Failed to create RPA project:', error);
       const msg = error instanceof Error ? error.message : String(error);
       if (msg.includes('No handler registered')) {
-        window.alert('当前应用版本不支持此功能，请重新下载安装最新版本');
+        const confirmed = window.confirm('当前应用版本不支持此功能，需要重新下载安装最新版本。\n\n点击「确定」前往下载页面，点击「取消」稍后手动更新。');
+        if (confirmed) {
+          window.ipcRenderer.invoke('app:open-external-url', 'https://github.com/shileima/opencowork/releases/latest').catch(() => {});
+        }
         return;
       }
       if (retryCount > 0) {

@@ -626,7 +626,8 @@ export function AutomationView({
         } catch (err) {
             const msg = (err as Error).message || '';
             if (msg.includes('No handler registered')) {
-                showToast('当前应用版本不支持此功能，请重新下载安装最新版本');
+                setNeedsAppUpdate(true);
+                setShowCreateDialog(false);
             } else {
                 showToast(msg || '创建失败');
             }
@@ -791,11 +792,38 @@ export function AutomationView({
                 {!isProjectLoaded && <Loader2 size={20} className="animate-spin" />}
                 {isProjectLoaded && needsAppUpdate && (
                     <div className="flex flex-col items-center gap-3 p-6 text-center max-w-sm">
-                        <div className="text-amber-500 text-4xl">⚠️</div>
+                        <div className="text-amber-500 text-3xl">⚠️</div>
                         <p className="text-sm font-medium text-stone-700 dark:text-zinc-200">应用版本过旧</p>
                         <p className="text-xs text-stone-500 dark:text-zinc-400">
                             自动化项目功能需要更新应用主程序，请重新下载安装最新版本后使用。
                         </p>
+                        <div className="flex gap-2 mt-1">
+                            <button
+                                className="px-4 py-2 text-xs font-medium rounded-lg bg-amber-500 hover:bg-amber-600 text-white transition-colors"
+                                onClick={() => {
+                                    window.ipcRenderer.invoke('app:open-external-url', 'https://github.com/shileima/opencowork/releases/latest').catch(() => {});
+                                }}
+                            >
+                                前往下载最新版本
+                            </button>
+                            <button
+                                className="px-4 py-2 text-xs font-medium rounded-lg border border-stone-200 dark:border-zinc-600 text-stone-600 dark:text-zinc-400 hover:bg-stone-100 dark:hover:bg-zinc-700 transition-colors"
+                                onClick={() => setNeedsAppUpdate(false)}
+                            >
+                                稍后更新
+                            </button>
+                        </div>
+                    </div>
+                )}
+                {isProjectLoaded && !needsAppUpdate && !showCreateDialog && (
+                    <div className="flex flex-col items-center gap-3 text-center">
+                        <p className="text-sm text-stone-500 dark:text-zinc-400">暂无自动化项目</p>
+                        <button
+                            className="px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 hover:bg-orange-600 text-white transition-colors"
+                            onClick={() => setShowCreateDialog(true)}
+                        >
+                            新建项目
+                        </button>
                     </div>
                 )}
                 {isProjectLoaded && !needsAppUpdate && showCreateDialog && (
@@ -803,17 +831,31 @@ export function AutomationView({
                         className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
                         role="dialog"
                         aria-modal="true"
+                        onClick={() => setShowCreateDialog(false)}
                     >
                         <div
                             className="bg-white dark:bg-zinc-800 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-700 p-5 w-[420px] max-w-[90vw]"
                             onClick={e => e.stopPropagation()}
                             onKeyDown={e => {
                                 if (e.key === 'Enter') handleCreateProject();
+                                if (e.key === 'Escape') setShowCreateDialog(false);
                             }}
                         >
-                            <h2 className="text-base font-semibold text-stone-800 dark:text-zinc-100 mb-3">
-                                新建自动化项目
-                            </h2>
+                            <div className="flex items-center justify-between mb-3">
+                                <h2 className="text-base font-semibold text-stone-800 dark:text-zinc-100">
+                                    新建自动化项目
+                                </h2>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCreateDialog(false)}
+                                    className="text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
+                                    aria-label="关闭"
+                                >
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                        <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                                    </svg>
+                                </button>
+                            </div>
                             <div className="space-y-4">
                                 <div>
                                     <label className="block text-sm font-medium text-stone-700 dark:text-zinc-300 mb-1">
@@ -829,6 +871,13 @@ export function AutomationView({
                                     />
                                 </div>
                                 <div className="flex justify-end gap-2 pt-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowCreateDialog(false)}
+                                        className="px-3 py-1.5 text-sm font-medium text-stone-600 dark:text-zinc-400 hover:bg-stone-100 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                                    >
+                                        {t('cancel')}
+                                    </button>
                                     <button
                                         type="button"
                                         onClick={handleCreateProject}
