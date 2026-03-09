@@ -447,8 +447,10 @@ export class ResourceUpdater {
           headers['Authorization'] = `token ${this.githubToken}`
         }
 
+        // 取最近 10 个 release，找第一个有 resource-manifest.json 的
+        // 避免最新 release 是 CI 还在构建中的空 release 导致 manifest 不存在
         const response = await fetch(
-          `https://api.github.com/repos/${this.githubRepo}/releases/latest`,
+          `https://api.github.com/repos/${this.githubRepo}/releases?per_page=10`,
           { headers }
         )
 
@@ -496,7 +498,17 @@ export class ResourceUpdater {
           continue
         }
 
-        return await response.json()
+        const releases = await response.json()
+        // 找第一个包含 resource-manifest.json 的 release（跳过 CI 还未完成的空 release）
+        const validRelease = releases.find((r: any) =>
+          r.assets?.some((a: any) => a.name === 'resource-manifest.json')
+        )
+        if (!validRelease) {
+          console.warn('[ResourceUpdater] No release with resource-manifest.json found in recent releases')
+          return null
+        }
+        console.log(`[ResourceUpdater] Found valid release: ${validRelease.tag_name} (skipped ${releases.indexOf(validRelease)} newer incomplete releases)`)
+        return validRelease
       } catch (error: any) {
         console.error(`[ResourceUpdater] Failed to fetch latest release (attempt ${attempt + 1}/${retries}):`, error.message)
         
