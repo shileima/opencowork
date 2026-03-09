@@ -112,6 +112,15 @@ jobs:
           cp -r node_modules/playwright resources/playwright/package/
 
       -
+        name: Install Linux dependencies (electron-builder)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 \
+            xdg-utils libatspi2.0-0 libuuid1 libappindicator3-1 libsecret-1-0
+
+      -
         name: Run TypeScript compiler check
         run: pnpm run lint || true
 
@@ -125,6 +134,7 @@ jobs:
           node scripts/verify-builtin-resources.cjs
           pnpm exec tsc
           pnpm exec vite build
+          node scripts/copy-playwright-wrapper.mjs
           pnpm exec electron-builder --${{ matrix.platform }} --publish never
 
       -
