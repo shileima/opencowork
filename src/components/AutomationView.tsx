@@ -198,6 +198,10 @@ export function AutomationView({
     const { t } = useI18n();
     const { showToast } = useToast();
     const [currentProject, setCurrentProject] = useState<RPAProject | null>(null);
+    const [isProjectLoaded, setIsProjectLoaded] = useState(false);
+    const [showCreateDialog, setShowCreateDialog] = useState(false);
+    const [newProjectName, setNewProjectName] = useState('');
+    const [isCreatingProject, setIsCreatingProject] = useState(false);
     const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
     const [streamingText, setStreamingText] = useState('');
     const [config, setConfig] = useState<any>(null);
@@ -581,9 +585,42 @@ export function AutomationView({
         return () => removeDone();
     }, [currentProject, openScriptInEditor, isRpaScript]);
 
-    const loadCurrentProject = async () => {
-        const project = await window.ipcRenderer.invoke('rpa:get-current-project') as RPAProject | null;
-        setCurrentProject(project);
+    const loadCurrentProject = async (retry = 3): Promise<void> => {
+        try {
+            const project = await window.ipcRenderer.invoke('rpa:get-current-project') as RPAProject | null;
+            setCurrentProject(project);
+            setIsProjectLoaded(true);
+            if (!project) {
+                setShowCreateDialog(true);
+            }
+        } catch (err) {
+            if (retry > 0) {
+                await new Promise(res => setTimeout(res, 300));
+                return loadCurrentProject(retry - 1);
+            }
+            setIsProjectLoaded(true);
+            setShowCreateDialog(true);
+        }
+    };
+
+    const handleCreateProject = async () => {
+        const name = newProjectName.trim();
+        if (!name) return;
+        setIsCreatingProject(true);
+        try {
+            const result = await window.ipcRenderer.invoke('rpa:project:create', name) as { success: boolean; error?: string; project?: RPAProject };
+            if (result.success) {
+                setNewProjectName('');
+                setShowCreateDialog(false);
+                await loadCurrentProject(3);
+            } else {
+                showToast(result.error || '创建失败');
+            }
+        } catch (err) {
+            showToast((err as Error).message || '创建失败');
+        } finally {
+            setIsCreatingProject(false);
+        }
     };
 
     const handleCreateTask = async () => {
@@ -739,7 +776,52 @@ export function AutomationView({
     if (!currentProject) {
         return (
             <div className="flex-1 flex items-center justify-center text-stone-500 dark:text-zinc-400">
-                {t('loading')}
+                {!isProjectLoaded && <Loader2 size={20} className="animate-spin" />}
+                {isProjectLoaded && showCreateDialog && (
+                    <div
+                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40"
+                        role="dialog"
+                        aria-modal="true"
+                    >
+                        <div
+                            className="bg-white dark:bg-zinc-800 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-700 p-5 w-[420px] max-w-[90vw]"
+                            onClick={e => e.stopPropagation()}
+                            onKeyDown={e => {
+                                if (e.key === 'Enter') handleCreateProject();
+                            }}
+                        >
+                            <h2 className="text-base font-semibold text-stone-800 dark:text-zinc-100 mb-3">
+                                新建自动化项目
+                            </h2>
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-stone-700 dark:text-zinc-300 mb-1">
+                                        {t('projectName')}
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={newProjectName}
+                                        onChange={e => setNewProjectName(e.target.value)}
+                                        placeholder={t('newProjectNamePlaceholder')}
+                                        className="w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-stone-900 dark:text-zinc-100 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-400"
+                                        autoFocus
+                                    />
+                                </div>
+                                <div className="flex justify-end gap-2 pt-1">
+                                    <button
+                                        type="button"
+                                        onClick={handleCreateProject}
+                                        disabled={!newProjectName.trim() || isCreatingProject}
+                                        className="px-3 py-1.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-1.5"
+                                    >
+                                        {isCreatingProject && <Loader2 size={14} className="animate-spin" />}
+                                        {t('createProject')}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         );
     }

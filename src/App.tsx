@@ -349,7 +349,7 @@ function App() {
     }
   };
 
-  const handleCreateNewRpaProject = async () => {
+  const handleCreateNewRpaProject = async (retryCount = 2) => {
     const name = newRpaProjectName.trim();
     if (!name) return;
     try {
@@ -366,6 +366,10 @@ function App() {
       }
     } catch (error) {
       console.error('Failed to create RPA project:', error);
+      if (retryCount > 0) {
+        await new Promise(res => setTimeout(res, 400));
+        return handleCreateNewRpaProject(retryCount - 1);
+      }
     }
   };
 
@@ -1146,7 +1150,7 @@ ${err}
               </button>
               <button
                 type="button"
-                onClick={handleCreateNewRpaProject}
+                onClick={() => handleCreateNewRpaProject()}
                 disabled={!newRpaProjectName.trim()}
                 className="px-3 py-1.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
               >
