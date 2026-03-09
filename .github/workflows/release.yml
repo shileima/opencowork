@@ -131,6 +131,10 @@ jobs:
             xdg-utils libatspi2.0-0 libuuid1 libappindicator3-1 libsecret-1-0
 
       -
+        name: Rebuild native modules for Electron
+        run: npx @electron/rebuild -f -w node-pty || true
+
+      -
         name: Run TypeScript compiler check
         run: pnpm run lint || true
 
