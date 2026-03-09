@@ -1755,6 +1755,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                             {updateInfo.hasUpdate ? (
                                                 <div className="flex flex-col items-center gap-2">
                                                     <p>{t('newVersion')} v{updateInfo.latestVersion}</p>
+                                                    <p className="text-xs text-stone-500 dark:text-zinc-400">需重新下载安装包以更新主程序</p>
                                                     <a
                                                         href={updateInfo.releaseUrl}
                                                         target="_blank"

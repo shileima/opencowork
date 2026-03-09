@@ -1240,7 +1240,7 @@ ipcMain.handle('app:check-update', async () => {
   try {
     const currentVersion = app.getVersion();
     // Use user agent to comply with GitHub API reqs
-    const response = await fetch('https://api.github.com/repos/Safphere/opencowork/releases/latest', {
+    const response = await fetch('https://api.github.com/repos/shileima/opencowork/releases/latest', {
       headers: { 'User-Agent': 'OpenCowork-App' }
     });
 

@@ -797,6 +797,9 @@ export function AutomationView({
                         <p className="text-xs text-stone-500 dark:text-zinc-400">
                             自动化项目功能需要更新应用主程序，请重新下载安装最新版本后使用。
                         </p>
+                        <p className="text-xs text-amber-600 dark:text-amber-400">
+                            ⚠️ 资源热更新无法解决此问题，必须重新安装应用。
+                        </p>
                         <div className="flex gap-2 mt-1">
                             <button
                                 className="px-4 py-2 text-xs font-medium rounded-lg bg-amber-500 hover:bg-amber-600 text-white transition-colors"
