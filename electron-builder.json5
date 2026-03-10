@@ -8,7 +8,11 @@
   "directories": {
     "output": "release/${version}"
   },
-  "publish": null,
+  "publish": {
+    "provider": "github",
+    "owner": "shileima",
+    "repo": "opencowork"
+  },
   "npmRebuild": false,
   "buildDependenciesFromSource": false,
   "files": [

@@ -862,6 +862,7 @@ export class ResourceUpdater {
         } catch (admError: unknown) {
           const msg = admError instanceof Error ? admError.message : String(admError)
           const isInvalidLoc = /Invalid LOC|bad signature|invalid.*header/i.test(msg)
+          const isBufferBounds = /buffer bounds|outside buffer|out of bounds/i.test(msg)
           if (isInvalidLoc) {
             let splitInfo = this.getResourceAssets(release, version)
             if (splitInfo?.type !== 'split') {
@@ -875,6 +876,11 @@ export class ResourceUpdater {
               this.extractSplitZip(splitZipPath, downloadDir, filesToUpdate, updateSize, onProgress)
               return
             }
+          }
+          if (isBufferBounds || isInvalidLoc) {
+            console.warn('[ResourceUpdater] AdmZip failed, falling back to system unzip:', msg)
+            this.extractSingleZipWithUnzip(zipPath, downloadDir, filesToUpdate, updateSize, onProgress)
+            return
           }
           throw admError
         }
@@ -911,13 +917,58 @@ export class ResourceUpdater {
     console.log(`[ResourceUpdater] Extraction completed: ${filesToUpdate.length} files (${this.formatBytes(extractedSize)})`)
   }
 
+  /** 使用系统 unzip 解压单文件 zip（AdmZip 报 buffer bounds 等时的回退） */
+  private extractSingleZipWithUnzip(
+    zipPath: string,
+    downloadDir: string,
+    filesToUpdate: FileInfo[],
+    updateSize: number,
+    onProgress?: (progress: { total: number; downloaded: number; current: string }) => void
+  ): void {
+    const extractDir = path.join(this.tempDir, 'extract-single-' + path.basename(zipPath, '.zip'))
+    fs.mkdirSync(extractDir, { recursive: true })
+    const zipDir = path.dirname(zipPath)
+    const zipName = path.basename(zipPath)
+    try {
+      if (process.platform === 'win32') {
+        try {
+          execSync(`7z x -o"${extractDir.replace(/"/g, '""')}" "${zipPath}"`, { stdio: 'pipe', maxBuffer: 100 * 1024 * 1024 })
+        } catch {
+          execSync(`unzip -o "${zipName}" -d "${extractDir}"`, { stdio: 'pipe', cwd: zipDir, maxBuffer: 100 * 1024 * 1024 })
+        }
+      } else {
+        execSync(`unzip -o "${zipName}" -d "${extractDir}"`, { stdio: 'pipe', cwd: zipDir, maxBuffer: 100 * 1024 * 1024 })
+      }
+    } catch (e) {
+      fs.rmSync(extractDir, { recursive: true, force: true })
+      console.error('[ResourceUpdater] System unzip failed:', e)
+      throw e
+    }
+    let extractedSize = 0
+    for (const file of filesToUpdate) {
+      onProgress?.({ total: updateSize, downloaded: extractedSize, current: `解压: ${file.path}` })
+      const src = path.join(extractDir, file.path)
+      const dest = path.join(downloadDir, file.path)
+      if (fs.existsSync(src)) {
+        fs.mkdirSync(path.dirname(dest), { recursive: true })
+        fs.copyFileSync(src, dest)
+      } else {
+        console.warn(`[ResourceUpdater] File not found in extracted archive: ${file.path}`)
+      }
+      extractedSize += file.size
+    }
+    fs.rmSync(extractDir, { recursive: true, force: true })
+    onProgress?.({ total: updateSize, downloaded: updateSize, current: `解压完成: ${filesToUpdate.length} 个文件` })
+    console.log(`[ResourceUpdater] Extraction completed (unzip): ${filesToUpdate.length} files (${this.formatBytes(extractedSize)})`)
+  }
+
   private async downloadSingleZip(
     asset: { name: string; browser_download_url: string; size: number },
     totalSize: number,
     onProgress?: (progress: { total: number; downloaded: number; current: string }) => void
   ): Promise<void> {
     const zipPath = path.join(this.tempDir, asset.name)
-    console.log(`[ResourceUpdater] Downloading resource package: ${asset.name}`)
+    console.log(`[ResourceUpdater] Downloading resource package: ${asset.name} (stream to file)`)
     let lastError: Error | null = null
     for (let attempt = 0; attempt < 3; attempt++) {
       let timeoutId: NodeJS.Timeout | null = null
@@ -939,28 +990,36 @@ export class ResourceUpdater {
         const reader = response.body?.getReader()
         if (!reader) throw new Error('Response body is not readable')
         const contentLength = parseInt(response.headers.get('content-length') || '0', 10)
-        const chunks: Uint8Array[] = []
+        const writeStream = fs.createWriteStream(zipPath)
         let downloaded = 0
-        for (;;) {
-          const { done: readDone, value } = await reader.read()
-          if (readDone) break
-          chunks.push(value)
-          downloaded += value.length
-          if (onProgress && contentLength > 0) {
-            onProgress({
-              total: contentLength,
-              downloaded,
-              current: `下载资源包: ${this.formatBytes(downloaded)} / ${this.formatBytes(contentLength)} (${Math.round((downloaded / contentLength) * 100)}%)`
-            })
+        try {
+          for (;;) {
+            const { done: readDone, value } = await reader.read()
+            if (readDone) break
+            writeStream.write(Buffer.from(value))
+            downloaded += value.length
+            if (onProgress && contentLength > 0) {
+              onProgress({
+                total: contentLength,
+                downloaded,
+                current: `下载资源包: ${this.formatBytes(downloaded)} / ${this.formatBytes(contentLength)} (${Math.round((downloaded / contentLength) * 100)}%)`
+              })
+            }
           }
+        } finally {
+          writeStream.end()
+          await new Promise<void>((resolve, reject) => writeStream.close(err => (err ? reject(err) : resolve())))
         }
-        fs.writeFileSync(zipPath, Buffer.concat(chunks.map(c => Buffer.from(c))))
+        const writtenSize = fs.statSync(zipPath).size
+        if (contentLength > 0 && writtenSize !== contentLength) {
+          throw new Error(`Download incomplete: ${writtenSize} !== ${contentLength}`)
+        }
         console.log(`[ResourceUpdater] Download completed: ${this.formatBytes(downloaded)}`)
         return
-      } catch (e: any) {
-        if (timeoutId) clearTimeout(timeoutId)
-        lastError = e
-        if (e?.name === 'AbortError' && attempt < 2) {
+      } catch (e: unknown) {
+        if (timeoutId) clearTimeout(timeoutId as NodeJS.Timeout)
+        lastError = e instanceof Error ? e : new Error(String(e))
+        if ((e as Error)?.name === 'AbortError' && attempt < 2) {
           await new Promise(r => setTimeout(r, 5000 * Math.pow(2, attempt)))
           continue
         }

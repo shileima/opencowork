@@ -122,8 +122,12 @@ function getIconPath(): string {
     // In production, icon is in extraResources
     const pngPath = path.join(process.resourcesPath, pngName)
     if (fs.existsSync(pngPath)) return pngPath
-    // Fallback to app directory
-    return path.join(process.resourcesPath, 'app.asar.unpacked', pngName)
+    // Fallback to app.asar.unpacked
+    const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', pngName)
+    if (fs.existsSync(unpackedPath)) return unpackedPath
+    // Last resort: return the expected primary path so the error message is clear
+    console.error(`[Main] icon.png not found at ${pngPath} or ${unpackedPath}`)
+    return pngPath
   } else {
     // In development, use public folder
     return path.join(process.env.APP_ROOT!, 'public', 'icon.png')

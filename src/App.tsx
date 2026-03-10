@@ -737,13 +737,13 @@ ${err}
                           <button
                             type="button"
                             onClick={() => handleSelectRpaProject(project.id)}
-                            className={`flex-1 w-full text-left px-4 py-2 text-sm transition-colors flex items-center gap-2 ${
+                            className={`flex-1 w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center gap-1.5 ${
                               currentRpaProject?.id === project.id
                                 ? 'text-orange-600 dark:text-orange-400 font-medium'
                                 : 'text-stone-700 dark:text-zinc-300'
                             }`}
                           >
-                            <Bot size={14} />
+                            <Bot size={12} />
                             <span className="flex-1 truncate" title={project.path}>{project.name}</span>
                           </button>
                           <button
@@ -752,23 +752,23 @@ ${err}
                               e.stopPropagation();
                               window.ipcRenderer.invoke('directory:open-path', project.path);
                             }}
-                            className="p-1.5 text-stone-400 hover:text-amber-500 dark:hover:text-amber-400 rounded transition-colors opacity-0 group-hover:opacity-100"
+                            className="p-1 text-stone-400 hover:text-amber-500 dark:hover:text-amber-400 rounded transition-colors opacity-0 group-hover:opacity-100"
                             title={t('openFolder')}
                             aria-label={t('openFolder')}
                           >
-                            <FolderOpen size={14} />
+                            <FolderOpen size={12} />
                           </button>
                           <button
                             type="button"
                             onClick={(e) => handleDeleteRpaProject(e, project)}
-                            className="p-1.5 text-stone-400 hover:text-red-500 dark:hover:text-red-400 rounded transition-colors opacity-0 group-hover:opacity-100"
+                            className="p-1 text-stone-400 hover:text-red-500 dark:hover:text-red-400 rounded transition-colors opacity-0 group-hover:opacity-100"
                             title={t('delete')}
                             aria-label={t('delete')}
                           >
-                            <Trash2 size={14} />
+                            <Trash2 size={12} />
                           </button>
                           {currentRpaProject?.id === project.id && (
-                            <span className="text-orange-500 dark:text-orange-400 shrink-0 mr-2" aria-hidden>✓</span>
+                            <span className="text-orange-500 dark:text-orange-400 shrink-0 mr-1.5 text-xs" aria-hidden>✓</span>
                           )}
                         </div>
                       ))
@@ -849,26 +849,26 @@ ${err}
                             <button
                               type="button"
                               onClick={() => handleSelectProject(project.id)}
-                              className={`flex-1 w-full text-left px-4 py-2 text-sm transition-colors flex items-center gap-2 ${
+                              className={`flex-1 w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center gap-1.5 ${
                                 currentProject?.id === project.id
                                   ? 'text-orange-600 dark:text-orange-400 font-medium'
                                   : 'text-stone-700 dark:text-zinc-300'
                               }`}
                             >
-                              <FolderOpen size={14} />
+                              <FolderOpen size={12} />
                               <span className="flex-1 truncate" title={project.path}>{project.name}</span>
                             </button>
                             <button
                               type="button"
                               onClick={(e) => handleDeleteProject(e, project)}
-                              className="p-1.5 text-stone-400 hover:text-red-500 dark:hover:text-red-400 rounded transition-colors opacity-0 group-hover:opacity-100"
+                              className="p-1 text-stone-400 hover:text-red-500 dark:hover:text-red-400 rounded transition-colors opacity-0 group-hover:opacity-100"
                               title={t('delete')}
                               aria-label={t('delete')}
                             >
-                              <Trash2 size={14} />
+                              <Trash2 size={12} />
                             </button>
                             {currentProject?.id === project.id && (
-                              <span className="text-orange-500 dark:text-orange-400 shrink-0 mr-2" aria-hidden>✓</span>
+                              <span className="text-orange-500 dark:text-orange-400 shrink-0 mr-1.5 text-xs" aria-hidden>✓</span>
                             )}
                           </div>
                         ))}
