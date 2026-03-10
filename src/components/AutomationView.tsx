@@ -3,7 +3,7 @@ import { RPATaskListPanel } from './project/RPATaskListPanel';
 import { ChatPanel } from './project/ChatPanel';
 import { ResizableSplitPane } from './project/ResizableSplitPane';
 import { MonacoEditor } from './project/MonacoEditor';
-import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon } from 'lucide-react';
+import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, X } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import { useI18n } from '../i18n/I18nContext';
 import type { TranslationKey } from '../i18n/translations';
@@ -48,6 +48,14 @@ const deriveTaskTitleFromMessage = (text: string, maxLen = 28): string => {
     const first = s.split(/[。！？\n]/)[0]?.trim() || s;
     return first.slice(0, maxLen).trim() || s.slice(0, maxLen).trim();
 };
+
+/** 自动化脚本编辑器单个 Tab */
+interface AutomationScriptTab {
+    id: string;
+    filePath: string;
+    content: string;
+    isModified: boolean;
+}
 
 /** 将字节数格式化为可读大小，如 12k、1.5k、500 B */
 function formatScriptSize(bytes: number): string {
@@ -207,8 +215,9 @@ export function AutomationView({
     const [streamingText, setStreamingText] = useState('');
     const [config, setConfig] = useState<any>(null);
     const [splitRatio, setSplitRatio] = useState(50);
-    const [scriptContent, setScriptContent] = useState('');
-    const [scriptFilePath, setScriptFilePath] = useState<string | null>(null);
+    /** 右侧编辑器多 tab；默认只展示最新一个自动化脚本（xxx_vN.js），切换项目后自动打开该脚本 */
+    const [scriptTabs, setScriptTabs] = useState<AutomationScriptTab[]>([]);
+    const [activeScriptTabId, setActiveScriptTabId] = useState<string | null>(null);
     const [isExecuting, setIsExecuting] = useState(false);
     const [isLoadingHistory, setIsLoadingHistory] = useState(false);
     /** 执行任务卡片列表：每次点击执行新增一条，展示步骤输出与进度 */
@@ -230,6 +239,46 @@ export function AutomationView({
     currentTaskIdRef.current = currentTaskId;
     historyRef.current = history;
     currentProjectIdRef.current = currentProject?.id ?? null;
+
+    const activeScriptTab = activeScriptTabId ? scriptTabs.find(t => t.id === activeScriptTabId) : null;
+    const scriptContent = activeScriptTab?.content ?? '';
+    const scriptFilePath = activeScriptTab?.filePath ?? null;
+
+    /** 只保留一个 tab（用于切换项目/任务时默认只展示最新脚本） */
+    const setSingleScriptTab = useCallback((filePath: string | null, content: string) => {
+        if (!filePath) {
+            setScriptTabs([]);
+            setActiveScriptTabId(null);
+            return;
+        }
+        const tab: AutomationScriptTab = {
+            id: `script-${Date.now()}`,
+            filePath,
+            content,
+            isModified: false
+        };
+        setScriptTabs([tab]);
+        setActiveScriptTabId(tab.id);
+    }, []);
+
+    /** 打开或切换到脚本 tab；若已存在同路径 tab 则切换并可选更新内容 */
+    const openEditorTab = useCallback((filePath: string, content: string) => {
+        setScriptTabs(prev => {
+            const existing = prev.find(t => t.filePath === filePath);
+            if (existing) {
+                setActiveScriptTabId(existing.id);
+                return prev.map(t => t.id === existing.id ? { ...t, content, isModified: false } : t);
+            }
+            const newTab: AutomationScriptTab = {
+                id: `script-${Date.now()}`,
+                filePath,
+                content,
+                isModified: false
+            };
+            setActiveScriptTabId(newTab.id);
+            return [...prev, newTab];
+        });
+    }, []);
 
     useEffect(() => {
         loadCurrentProject();
@@ -280,8 +329,7 @@ export function AutomationView({
                     const createResult = await window.ipcRenderer.invoke('rpa:task:create', projectIdForThisRun, t('newTask')) as { success: boolean; task?: RPATask };
                     if (!cancelled && createResult.success && createResult.task) {
                         setCurrentTaskId(createResult.task.id);
-                        setScriptContent('');
-                        setScriptFilePath(null);
+                        setSingleScriptTab(null, '');
                     }
                     setIsLoadingHistory(false);
                     return;
@@ -315,22 +363,15 @@ export function AutomationView({
                     if (scriptToLoad) {
                         try {
                             const read = await window.ipcRenderer.invoke('fs:read-file', scriptToLoad) as { success: boolean; content?: string };
-                            if (!cancelled && read.success && read.content != null) {
-                                setScriptContent(read.content);
-                                setScriptFilePath(scriptToLoad);
-                            } else if (!cancelled) {
-                                setScriptContent('');
-                                setScriptFilePath(scriptToLoad);
+                            if (!cancelled) {
+                                const content = read.success && read.content != null ? read.content : '';
+                                setSingleScriptTab(scriptToLoad, content);
                             }
                         } catch {
-                            if (!cancelled) {
-                                setScriptContent('');
-                                setScriptFilePath(null);
-                            }
+                            if (!cancelled) setSingleScriptTab(null, '');
                         }
                     } else if (!cancelled) {
-                        setScriptContent('');
-                        setScriptFilePath(null);
+                        setSingleScriptTab(null, '');
                     }
                 }
             } catch (e) {
@@ -343,7 +384,7 @@ export function AutomationView({
         return () => {
             cancelled = true;
         };
-    }, [currentProject?.id]);
+    }, [currentProject?.id, setSingleScriptTab]);
 
     // 新建项目后主进程会自动创建并下发 rpa:task:created，此处选中该任务并立即更新当前项目（避免 loadCurrentProject 异步未完成时任务列表仍显示旧项目）
     useEffect(() => {
@@ -357,11 +398,10 @@ export function AutomationView({
             if (!tasks.some(t => t.id === task.id)) return;
             setCurrentProject(project);
             setCurrentTaskId(task.id);
-            setScriptContent('');
-            setScriptFilePath(null);
+            setSingleScriptTab(null, '');
         });
         return () => remove();
-    }, []);
+    }, [setSingleScriptTab]);
 
     // 上下文切换（400 错误自动重试）：显示提示，任务已通过 rpa:task:created 自动切换
     useEffect(() => {
@@ -495,15 +535,13 @@ export function AutomationView({
         };
     }, [currentProject?.path]);
 
-    /** 当 AI 生成脚本并保存到 rpaProjects 时，加载并展示到右侧编辑器 */
+    /** 当 AI 生成脚本并保存到 rpaProjects 时，加载并展示到右侧编辑器（打开新 tab 或切换到已有） */
     const openScriptInEditor = useCallback(async (filePath: string) => {
         const ext = filePath.split('.').pop()?.toLowerCase();
         if (ext !== 'js' && ext !== 'py') return;
         const result = await window.ipcRenderer.invoke('fs:read-file', filePath) as { success: boolean; content?: string };
         if (result.success && result.content != null) {
-            setScriptContent(result.content);
-            setScriptFilePath(filePath);
-            // 若当前有任务，更新任务的 scriptFileName 以便执行时使用正确路径
+            openEditorTab(filePath, result.content);
             if (currentProject && currentTaskIdRef.current) {
                 const fileName = filePath.split(/[/\\]/).pop() || '';
                 if (fileName) {
@@ -511,7 +549,7 @@ export function AutomationView({
                 }
             }
         }
-    }, [currentProject]);
+    }, [currentProject, openEditorTab]);
 
     /** 判断路径是否为当前 RPA 项目下的脚本（支持项目子目录及 rpaProjects 根目录） */
     const isRpaScript = useCallback((p: string) => {
@@ -642,8 +680,7 @@ export function AutomationView({
         const result = await window.ipcRenderer.invoke('rpa:task:create', currentProject.id, title) as { success: boolean; task?: RPATask };
         if (result.success && result.task) {
             setCurrentTaskId(result.task.id);
-            setScriptContent('');
-            setScriptFilePath(null);
+            setSingleScriptTab(null, '');
         }
     };
 
@@ -676,20 +713,13 @@ export function AutomationView({
             const fullPath = `${currentProject.path}/${task.scriptFileName}`;
             try {
                 const result = await window.ipcRenderer.invoke('fs:read-file', fullPath) as { success: boolean; content?: string };
-                if (result.success && result.content != null) {
-                    setScriptContent(result.content);
-                    setScriptFilePath(fullPath);
-                } else {
-                    setScriptContent('');
-                    setScriptFilePath(fullPath);
-                }
+                const content = result.success && result.content != null ? result.content : '';
+                setSingleScriptTab(fullPath, content);
             } catch {
-                setScriptContent('');
-                setScriptFilePath(null);
+                setSingleScriptTab(null, '');
             }
         } else {
-            setScriptContent('');
-            setScriptFilePath(null);
+            setSingleScriptTab(null, '');
         }
     };
 
@@ -705,18 +735,19 @@ export function AutomationView({
     }, [currentProject, onSendMessage]);
 
     const handleScriptChange = (content: string) => {
-        setScriptContent(content);
+        if (!activeScriptTabId) return;
+        setScriptTabs(prev => prev.map(t => t.id === activeScriptTabId ? { ...t, content, isModified: true } : t));
     };
 
     const handleScriptSave = useCallback(async (content: string) => {
-        if (!currentProject || !currentTaskId) return;
-        const ext = scriptFilePath?.endsWith('.py') ? 'py' : 'js';
-        const fileName = scriptFilePath ? scriptFilePath.split(/[/\\]/).pop()! : `script_${currentTaskId}.${ext}`;
-        const fullPath = scriptFilePath || `${currentProject.path}/${fileName}`;
+        if (!currentProject || !currentTaskId || !activeScriptTabId) return;
+        const tab = scriptTabs.find(t => t.id === activeScriptTabId);
+        const fullPath = tab?.filePath || `${currentProject.path}/script_${currentTaskId}.js`;
+        const fileName = fullPath.split(/[/\\]/).pop()!;
         try {
             const wr = await window.ipcRenderer.invoke('fs:write-file', fullPath, content) as { success: boolean; error?: string };
             if (wr.success) {
-                setScriptFilePath(fullPath);
+                setScriptTabs(prev => prev.map(t => t.id === activeScriptTabId ? { ...t, content, isModified: false } : t));
                 await window.ipcRenderer.invoke('rpa:task:update', currentProject.id, currentTaskId, { scriptFileName: fileName });
                 showToast(t('saved') || '已保存');
             } else {
@@ -725,7 +756,23 @@ export function AutomationView({
         } catch (e) {
             showToast((e as Error).message || '保存失败');
         }
-    }, [currentProject, currentTaskId, scriptFilePath, t, showToast]);
+    }, [currentProject, currentTaskId, activeScriptTabId, scriptTabs, t, showToast]);
+
+    const closeScriptTab = useCallback((tabId: string) => {
+        setScriptTabs(prev => {
+            const next = prev.filter(t => t.id !== tabId);
+            if (next.length === 0) {
+                setActiveScriptTabId(null);
+                return [];
+            }
+            if (activeScriptTabId === tabId) {
+                const idx = prev.findIndex(t => t.id === tabId);
+                const newActive = idx > 0 ? prev[idx - 1].id : next[0].id;
+                setActiveScriptTabId(newActive);
+            }
+            return next;
+        });
+    }, [activeScriptTabId]);
 
     const handleExecute = async () => {
         if (!currentProject) return;
@@ -963,14 +1010,15 @@ export function AutomationView({
                                 <div className="h-10 shrink-0 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center justify-between px-3">
                                     <span className="text-xs text-stone-500 dark:text-zinc-400 flex items-center gap-2 min-w-0">
                                         <span className="shrink-0">{t('automationScripts')} - Playwright (.js / .py)</span>
-                                        {(scriptFilePath || scriptContent) && (
+                                        {activeScriptTab && (
                                             <>
                                                 <span className="text-stone-400 dark:text-zinc-500">·</span>
-                                                <span className="truncate" title={scriptFilePath ? (scriptFilePath.split(/[/\\]/).pop() ?? undefined) : undefined}>
-                                                    {scriptFilePath ? scriptFilePath.split(/[/\\]/).pop() : t('untitled') || '未命名'}
+                                                <span className="truncate" title={activeScriptTab.filePath.split(/[/\\]/).pop() ?? undefined}>
+                                                    {activeScriptTab.filePath.split(/[/\\]/).pop()}
+                                                    {activeScriptTab.isModified && <span className="text-amber-500 ml-0.5">*</span>}
                                                 </span>
                                                 <span className="shrink-0 text-stone-400 dark:text-zinc-500">
-                                                    {formatScriptSize(new Blob([scriptContent]).size)}
+                                                    {formatScriptSize(new Blob([activeScriptTab.content]).size)}
                                                 </span>
                                             </>
                                         )}
@@ -993,14 +1041,50 @@ export function AutomationView({
                                         {t('execute')}
                                     </button>
                                 </div>
+                                {scriptTabs.length > 0 && (
+                                    <div className="shrink-0 flex items-end gap-0.5 px-2 pt-1 pb-0 border-b border-stone-700 bg-[#252526] overflow-x-auto">
+                                        {scriptTabs.map((tab) => (
+                                            <div
+                                                key={tab.id}
+                                                className={`flex items-center gap-1 px-2 py-1.5 rounded-t text-xs cursor-pointer border border-b-0 min-w-0 max-w-[160px] ${
+                                                    tab.id === activeScriptTabId
+                                                        ? 'bg-[#1e1e1e] text-stone-200 border-stone-600 border-b-transparent -mb-px'
+                                                        : 'bg-stone-800/80 text-stone-400 border-transparent hover:bg-stone-700/80'
+                                                }`}
+                                                onClick={() => setActiveScriptTabId(tab.id)}
+                                                title={tab.filePath}
+                                            >
+                                                <span className="truncate">{tab.filePath.split(/[/\\]/).pop()}</span>
+                                                {tab.isModified && <span className="text-amber-500 shrink-0">*</span>}
+                                                <button
+                                                    type="button"
+                                                    className="shrink-0 p-0.5 rounded hover:bg-stone-600 text-stone-400 hover:text-stone-200"
+                                                    onClick={(e) => { e.stopPropagation(); closeScriptTab(tab.id); }}
+                                                    title={t('close') || '关闭'}
+                                                >
+                                                    <X size={12} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                                 <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                                     <div className={executionRuns.length > 0 && executionPanelExpanded ? 'shrink-0 h-[200px] min-h-[160px] overflow-hidden' : 'flex-1 min-h-0'}>
-                                        <MonacoEditor
-                                            filePath={scriptFilePath}
-                                            content={scriptContent}
-                                            onChange={handleScriptChange}
-                                            onSave={handleScriptSave}
-                                        />
+                                        {activeScriptTab ? (
+                                            <MonacoEditor
+                                                key={activeScriptTab.id}
+                                                filePath={activeScriptTab.filePath}
+                                                content={activeScriptTab.content}
+                                                onChange={handleScriptChange}
+                                                onSave={handleScriptSave}
+                                            />
+                                        ) : (
+                                            <div className="h-full flex items-center justify-center text-stone-400 dark:text-zinc-500 text-sm">
+                                                {t('noTabsOpen') || '没有打开的标签页'}
+                                                <br />
+                                                <span className="text-xs mt-1">{t('openFileHint') || '切换项目后将自动打开最新脚本 (xxx_vN.js)'}</span>
+                                            </div>
+                                        )}
                                     </div>
                                     {executionRuns.length > 0 && (
                                         <div className={`border-t border-stone-700 bg-[#252526] flex flex-col min-h-0 ${executionPanelExpanded ? 'flex-1 min-h-0' : 'shrink-0 max-h-[280px]'}`}>

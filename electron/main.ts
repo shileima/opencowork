@@ -2458,51 +2458,65 @@ ipcMain.handle('rpa:get-current-project', () => {
   return rpaProjectStore.getCurrentProject();
 });
 
-/** 查找 RPA 项目目录下最近修改的 .js/.py 脚本（用于 agent:done 后兜底加载） */
+/** 匹配自动化脚本命名：xxx_v${number}.js 或 .py，并解析出版本号 */
+const RPA_VERSIONED_SCRIPT_RE = /^(.+)_v(\d+)\.(js|py)$/i;
+function getVersionFromScriptPath(filePath: string): number | null {
+  const name = path.basename(filePath);
+  const m = name.match(RPA_VERSIONED_SCRIPT_RE);
+  return m ? parseInt(m[2], 10) : null;
+}
+
+/** 查找 RPA 项目目录下最近修改的 xxx_vN.js/.py 脚本（用于 agent:done 后兜底加载；仅返回符合命名规范的脚本） */
 ipcMain.handle('rpa:find-recent-scripts', async (_, projectPath: string, withinMinutes = 10) => {
   try {
     const dir = path.resolve(projectPath);
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
     const cutoff = Date.now() - withinMinutes * 60 * 1000;
-    const files: { path: string; mtime: number }[] = [];
+    const files: { path: string; version: number; mtime: number }[] = [];
     const walk = (d: string) => {
       const entries = fs.readdirSync(d, { withFileTypes: true });
       for (const e of entries) {
         const full = path.join(d, e.name);
         if (e.isDirectory()) walk(full);
-        else if (/\.(js|py)$/i.test(e.name)) {
-          const stat = fs.statSync(full);
-          if (stat.mtimeMs >= cutoff) files.push({ path: full, mtime: stat.mtimeMs });
+        else {
+          const version = getVersionFromScriptPath(full);
+          if (version != null) {
+            const stat = fs.statSync(full);
+            if (stat.mtimeMs >= cutoff) files.push({ path: full, version, mtime: stat.mtimeMs });
+          }
         }
       }
     };
     walk(dir);
-    return files.sort((a, b) => b.mtime - a.mtime).map(f => f.path);
+    return files.sort((a, b) => b.version - a.version || b.mtime - a.mtime).map(f => f.path);
   } catch {
     return [];
   }
 });
 
-/** 返回项目目录下修改时间最近的一个 .js/.py 脚本路径（切换项目时默认加载） */
+/** 返回项目目录下「最新」的自动化脚本路径：仅考虑 xxx_v${number}.js/.py 格式，按版本号取最大（最新生成的） */
 ipcMain.handle('rpa:get-latest-script-in-project', async (_, projectPath: string): Promise<{ path: string } | null> => {
   try {
     const dir = path.resolve(projectPath);
     if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return null;
-    const files: { path: string; mtime: number }[] = [];
+    const files: { path: string; version: number; mtime: number }[] = [];
     const walk = (d: string) => {
       const entries = fs.readdirSync(d, { withFileTypes: true });
       for (const e of entries) {
         const full = path.join(d, e.name);
         if (e.isDirectory()) walk(full);
-        else if (/\.(js|py)$/i.test(e.name)) {
-          const stat = fs.statSync(full);
-          files.push({ path: full, mtime: stat.mtimeMs });
+        else {
+          const version = getVersionFromScriptPath(full);
+          if (version != null) {
+            const stat = fs.statSync(full);
+            files.push({ path: full, version, mtime: stat.mtimeMs });
+          }
         }
       }
     };
     walk(dir);
     if (files.length === 0) return null;
-    const sorted = files.sort((a, b) => b.mtime - a.mtime);
+    const sorted = files.sort((a, b) => b.version - a.version || b.mtime - a.mtime);
     return { path: sorted[0].path };
   } catch {
     return null;

@@ -768,7 +768,7 @@ ${err}
                             <Trash2 size={12} />
                           </button>
                           {currentRpaProject?.id === project.id && (
-                            <span className="text-orange-500 dark:text-orange-400 shrink-0 mr-1.5 text-xs" aria-hidden>✓</span>
+                            <span className="text-orange-500 dark:text-orange-400 shrink-0 mr-1.5 ml-1 text-xs" aria-hidden>✓</span>
                           )}
                         </div>
                       ))
@@ -868,7 +868,7 @@ ${err}
                               <Trash2 size={12} />
                             </button>
                             {currentProject?.id === project.id && (
-                              <span className="text-orange-500 dark:text-orange-400 shrink-0 mr-1.5 text-xs" aria-hidden>✓</span>
+                              <span className="text-orange-500 dark:text-orange-400 shrink-0 mr-1.5 ml-1 text-xs" aria-hidden>✓</span>
                             )}
                           </div>
                         ))}
@@ -1108,7 +1108,7 @@ ${err}
           }}
         >
           <div
-            className="bg-white dark:bg-zinc-800 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-700 p-5 w-[420px] max-w-[90vw]"
+            className="bg-white dark:bg-zinc-800 rounded-xl shadow-xl border border-stone-200 dark:border-zinc-700 p-5 w-[460px] max-w-[95vw]"
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
@@ -1140,7 +1140,7 @@ ${err}
                 <label className="block text-sm font-medium text-stone-700 dark:text-zinc-300 mb-2">
                   创建位置
                 </label>
-                <div className="px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-stone-50 dark:bg-zinc-900/50 text-stone-600 dark:text-zinc-400 text-sm">
+                <div className="px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-stone-50 dark:bg-zinc-900/50 text-stone-600 dark:text-zinc-400 text-sm whitespace-nowrap overflow-x-auto min-w-0">
                   ~/Library/Application Support/qacowork/rpaProjects
                 </div>
               </div>
