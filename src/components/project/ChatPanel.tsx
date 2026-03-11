@@ -109,7 +109,7 @@ export function ChatPanel({
                                                                 title={t('edit')}
                                                                 aria-label={t('edit')}
                                                             >
-                                                                <Pencil size={14} />
+                                                                <Pencil size={16} />
                                                             </button>
                                                         </div>
                                                     )}

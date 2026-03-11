@@ -31,6 +31,9 @@ build
 .qa-cowork
 .opencowork
 
+# 工作区临时目录（AI 探针脚本、截图等），勿提交
+tmp/
+
 # playwright：构建产物不纳入版本控制，由 CI 或本地构建脚本生成
 # chromium.tar.gz 超过 GitHub 100MB 限制，在构建时通过 pack:chromium 脚本生成
 resources/playwright/node_modules

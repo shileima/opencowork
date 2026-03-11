@@ -900,6 +900,17 @@ export class AgentRuntime {
 
             // Build working directory context (Project/Automation 模式下 Primary = 当前已选项目路径)
             const authorizedFolders = permissionManager.getAuthorizedFolders();
+            // 在主工作区下确保 tmp 目录存在，供临时文件（如 probe 脚本、截图）使用，避免写入 /tmp 触发授权弹窗
+            let workspaceTmpDir: string | null = null;
+            if (authorizedFolders.length > 0) {
+                workspaceTmpDir = path.join(authorizedFolders[0], 'tmp');
+                try {
+                    fs.mkdirSync(workspaceTmpDir, { recursive: true });
+                } catch (e) {
+                    console.warn('[AgentRuntime] Failed to ensure workspace tmp dir:', workspaceTmpDir, e);
+                    workspaceTmpDir = null;
+                }
+            }
             const isAutomation = this.currentViewContext === 'automation';
             const currentProject = this.currentViewContext === 'cowork' ? null
                 : isAutomation ? rpaProjectStore.getCurrentProject()
@@ -907,8 +918,11 @@ export class AgentRuntime {
             const projectContext = currentProject 
                 ? `\n\nCURRENT PROJECT:\n- Project Name: "${currentProject.name}"\n- Project Path: ${currentProject.path}\n\n⚠️ CRITICAL: You are working INSIDE an existing project. When the user asks to create code, a website, or an application, you MUST create files directly in the current project directory (${currentProject.path}), NOT create a new project directory. Only create a NEW project if the user explicitly asks to "create a new project" or "新建项目".`
                 : '';
+            const tmpDirHint = workspaceTmpDir
+                ? `\n- Temporary files (probe scripts, screenshots, pw-task.js, etc.): use \`${workspaceTmpDir}\` — do NOT use \`/tmp\` (it is outside the authorized workspace and will trigger a permission dialog).`
+                : '';
             const workingDirContext = authorizedFolders.length > 0
-                ? `${projectContext}\n\nWORKING DIRECTORY:\n- Primary (current selected project): ${authorizedFolders[0]}\n- All authorized: ${authorizedFolders.join(', ')}\n\nYou MUST primarily work within the Primary directory. When user does NOT specify a project (e.g. start/stop service), use ONLY the Primary. Always use absolute paths.`
+                ? `${projectContext}\n\nWORKING DIRECTORY:\n- Primary (current selected project): ${authorizedFolders[0]}\n- All authorized: ${authorizedFolders.join(', ')}${tmpDirHint}\n\nYou MUST primarily work within the Primary directory. When user does NOT specify a project (e.g. start/stop service), use ONLY the Primary. Always use absolute paths.`
                 : '\n\nNote: No working directory has been selected yet. Ask the user to select a folder first.';
 
             // Read workspace context files for conversation continuity
@@ -953,7 +967,7 @@ You are OpenCowork, an advanced AI desktop assistant designed for efficient task
 
 ### File Management
 - **Primary Workspace**: User-authorized directories (your main deliverable location)
-- **Temporary Workspace**: System temp directories for intermediate processing
+- **Temporary files**: When a working directory is selected, use the \`tmp\` folder inside it (e.g. \`<Primary>/tmp\`) for probe scripts, screenshots, and other temporary files. Do NOT use \`/tmp\` — it is outside the authorized workspace and will trigger a permission dialog every time.
 - **Security**: Never access files outside authorized directories without explicit permission
 - **Cowork Mode Output Directory**: When in Cowork mode (not Project mode), all generated non-code files (Excel, PDF, images, CSV, JSON data files, etc.) MUST be saved to \`${coworkOutputDir}\` directory. This ensures generated files are easy to find and organized. Use this as the default output path for all file generation tasks unless the user explicitly specifies a different location.
 
@@ -1406,14 +1420,14 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                             const workingDir = args.cwd || defaultCwd;
                                             await this.autoFixErrors(workingDir, previewUrl, 5);
                                         }
-                                        // 打开本地应用命令（macOS: open -a / open /path; Windows: start /B）时，缩小主窗口至右下角
-                                        if (this.onShrinkWindow && this.isOpenLocalAppCommand(commandToRun)) {
+                                        // 只要会打开浏览器或本地应用，就缩小主窗口至右下角（会话执行、脚本执行均适用）
+                                        const scriptCwd = args.cwd || defaultCwd;
+                                        if (this.onShrinkWindow && this.shouldShrinkWindowForCommand(commandToRun, scriptCwd)) {
                                             this.onShrinkWindow();
                                         }
-                                        // agent-browser --headed 时缩小/最大化（仅非美团内网；美团内网已改用默认浏览器）
-                                        if (meituanUrl == null && this.isAgentBrowserHeadedCommand(commandToRun)) {
-                                            if (this.onShrinkWindow) this.onShrinkWindow();
-                                            if (this.onMaximizeBrowserWindow) this.onMaximizeBrowserWindow();
+                                        // agent-browser --headed 时再最大化浏览器窗口（仅非美团内网）
+                                        if (meituanUrl == null && this.isAgentBrowserHeadedCommand(commandToRun) && this.onMaximizeBrowserWindow) {
+                                            this.onMaximizeBrowserWindow();
                                         }
                                         // 仅对非美团内网的 agent-browser open 注入 SSO（美团内网已用默认浏览器，不经过 agent-browser）
                                         if (meituanUrl == null && this.isAgentBrowserOpenCommand(commandToRun)) {
@@ -1436,6 +1450,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         console.log('[Preview:Debug] Broadcasting agent:open-browser-preview:', url);
                                         this.broadcast('agent:open-browser-preview', url);
                                         result = `Opened browser preview tab with URL: ${url}`;
+                                        if (this.onShrinkWindow) this.onShrinkWindow();
                                     }
                                 } else if (toolUse.name === 'validate_page') {
                                     const args = toolUse.input as { url: string; timeout?: number };
@@ -1684,6 +1699,68 @@ ${skillInfo.instructions}
         // Windows: start 命令启动应用或文件
         if (/^start\s+/i.test(cmd) && !/^start\s+http/i.test(cmd)) return true;
         return false;
+    }
+
+    /**
+     * 检测命令是否为用系统默认浏览器打开 URL（open https://... 或 start http...）
+     */
+    private isOpenBrowserUrlCommand(command: string): boolean {
+        const cmd = command.trim();
+        // macOS: open <url>
+        if (/^open\s+https?:\/\//i.test(cmd)) return true;
+        // Windows: start <url>
+        if (/^start\s+https?:\/\//i.test(cmd)) return true;
+        // Linux: xdg-open <url>
+        if (/^xdg-open\s+https?:\/\//i.test(cmd)) return true;
+        return false;
+    }
+
+    /**
+     * 从 run_command 中解析出要执行的 .js 脚本绝对路径（支持 cd DIR && node SCRIPT.js）
+     */
+    private resolveScriptPathFromCommand(command: string, cwd: string): string | null {
+        const cmd = command.trim();
+        const cdMatch = cmd.match(/cd\s+(["']?)([^\s'"]+)\1\s+&&\s+/i);
+        const nodeMatch = cmd.match(/node\s+["']?([^"'\s]+\.js)["']?/i);
+        if (!nodeMatch) return null;
+        const scriptName = nodeMatch[1];
+        let scriptDir: string;
+        if (cdMatch) {
+            let dir = cdMatch[2].trim();
+            if (dir.startsWith('~')) {
+                dir = path.join(os.homedir(), dir.slice(1));
+            }
+            scriptDir = path.isAbsolute(dir) ? path.normalize(dir) : path.resolve(cwd, dir);
+        } else {
+            scriptDir = cwd;
+        }
+        const scriptPath = path.resolve(scriptDir, scriptName);
+        return fs.existsSync(scriptPath) ? scriptPath : null;
+    }
+
+    /**
+     * 检测命令是否为执行含 headless: false 的 Playwright 脚本（node xxx.js）
+     * 若脚本文件存在且包含 headless: false，则认为会打开有头浏览器
+     */
+    private isPlaywrightHeadedScript(command: string, cwd: string): boolean {
+        const scriptPath = this.resolveScriptPathFromCommand(command, cwd);
+        if (!scriptPath) return false;
+        try {
+            const content = fs.readFileSync(scriptPath, 'utf-8');
+            return /headless\s*:\s*false/.test(content);
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * 判断执行该命令是否会打开浏览器或本地应用，若是则应缩小主窗口至右下角
+     */
+    private shouldShrinkWindowForCommand(command: string, cwd: string): boolean {
+        return this.isOpenLocalAppCommand(command)
+            || this.isOpenBrowserUrlCommand(command)
+            || this.isPlaywrightHeadedScript(command, cwd)
+            || this.isAgentBrowserHeadedCommand(command);
     }
 
     /**

@@ -34,9 +34,9 @@ export function CopyButton({ content, size = 'md', showLabel = false }: CopyButt
     };
 
     const iconSize = {
-        sm: 14,
-        md: 14,
-        lg: 16
+        sm: 16,
+        md: 16,
+        lg: 18
     };
 
     return (

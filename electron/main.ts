@@ -826,10 +826,11 @@ ipcMain.handle('session:save-current', (event) => {
       if (currentProject && taskIdForSession) {
         const tasks = isAutomation ? rpaProjectStore.getTasks(currentProject.id) : projectStore.getTasks(currentProject.id)
         const task = tasks.find((t: { id: string; sessionId?: string }) => t.id === taskIdForSession)
-        if (task && (!task.sessionId || task.sessionId === '')) {
+        // 自动化模式：始终把当前任务关联到刚保存的 session，保证执行输出等聊天历史切换任务卡片后仍可加载
+        if (task) {
           if (isAutomation) {
             rpaProjectStore.updateTask(currentProject.id, taskIdForSession, { sessionId })
-          } else {
+          } else if (!task.sessionId || task.sessionId === '') {
             projectStore.updateTask(currentProject.id, taskIdForSession, { sessionId })
           }
         }
@@ -2759,6 +2760,17 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
     if (!scriptPath || !fs.existsSync(scriptPath)) {
       return { success: false, error: 'Script file not found' };
     }
+
+    // 只要会打开浏览器或本地应用就缩小到右下角：有头 Playwright（headless:false 或 .launch 且未显式 headless:true）
+    try {
+      const scriptContent = fs.readFileSync(scriptPath, 'utf-8');
+      const hasHeadedBrowser = /headless\s*:\s*false/.test(scriptContent) ||
+        (/\bchromium\.launch\(|playwright.*\.launch\s*\(/.test(scriptContent) && !/headless\s*:\s*true/.test(scriptContent));
+      if (hasHeadedBrowser) {
+        shrinkMainWindowToBottomRight();
+      }
+    } catch { /* ignore read error */ }
+
     sendRunOutput(sender, runId, 'rpa:run:start', { runId, scriptPath });
 
     const ext = path.extname(scriptPath).toLowerCase();
@@ -4516,7 +4528,7 @@ function createMainWindow() {
   mainWin = new BrowserWindow({
     width: DEFAULT_WINDOW_WIDTH,
     height: DEFAULT_WINDOW_HEIGHT,
-    minWidth: 430,
+    minWidth: 450,
     minHeight: 600,
     icon: iconImage || iconPath,
     frame: false, // Custom frame for consistent look

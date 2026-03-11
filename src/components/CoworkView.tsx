@@ -1160,7 +1160,7 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
                                     tabIndex={0}
                                     className="p-1 rounded-md text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 transition-colors"
                                 >
-                                    <Copy size={12} />
+                                    <Copy size={14} />
                                 </button>
                                 <button
                                     type="button"
@@ -1170,7 +1170,7 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
                                     tabIndex={0}
                                     className="p-1 rounded-md text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 transition-colors"
                                 >
-                                    <RotateCcw size={12} />
+                                    <RotateCcw size={14} />
                                 </button>
                             </div>
                         )}

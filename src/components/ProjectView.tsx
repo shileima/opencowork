@@ -81,6 +81,7 @@ export function ProjectView({
     const { showToast } = useToast();
     const [currentProject, setCurrentProject] = useState<Project | null>(null);
     const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+    const [processingTaskId, setProcessingTaskId] = useState<string | null>(null);
     const [showCreateDialog, setShowCreateDialog] = useState(false);
     const [streamingText, setStreamingText] = useState('');
     const [config, setConfig] = useState<any>(null);
@@ -296,6 +297,7 @@ export function ProjectView({
         // 监听对话完成：Project 模式下自动打开内置浏览器并刷新；新任务根据首条用户消息重命名
         const removeAgentDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
             const payload = args[0] as { taskId?: string; skipBrowserRefresh?: boolean } | undefined;
+            setProcessingTaskId(null);
             if (payload?.taskId && pendingTaskRename && pendingTaskRename.taskId === payload.taskId) {
                 const messages = historyRef.current || [];
                 const firstUser = messages.find((m) => m.role === 'user');
@@ -321,6 +323,14 @@ export function ProjectView({
             }
         });
 
+        // 监听中止和错误事件，清除正在处理的任务 ID
+        const removeAbortListener = window.ipcRenderer.on('agent:aborted', () => {
+            setProcessingTaskId(null);
+        });
+        const removeErrorListener = window.ipcRenderer.on('agent:error', () => {
+            setProcessingTaskId(null);
+        });
+
         // 加载当前项目（延迟执行，确保组件已挂载）
         setTimeout(() => {
             loadCurrentProject();
@@ -337,6 +347,8 @@ export function ProjectView({
             removeBrowserPreviewListener();
             removeAgentDoneListener();
             removeUpdateListener();
+            removeAbortListener();
+            removeErrorListener();
         };
     }, [showToast, t]);
 
@@ -486,6 +498,7 @@ export function ProjectView({
         if (!result.success || !result.task) return;
 
         setCurrentTaskId(result.task.id);
+        setProcessingTaskId(result.task.id);
         setStreamingText('');
         pendingTaskRename = {
             taskId: result.task.id,
@@ -543,6 +556,7 @@ export function ProjectView({
         }
 
         setCurrentTaskId(result.task.id);
+        setProcessingTaskId(result.task.id);
         setStreamingText('');
         setIsLoadingHistory(false);
 
@@ -616,6 +630,9 @@ export function ProjectView({
     const handleSendMessageWithRename = useCallback((message: string | { content: string, images: string[] }) => {
         if (currentProject && currentTaskId && history.length === 0 && (!pendingTaskRename || pendingTaskRename.taskId !== currentTaskId)) {
             pendingTaskRename = { taskId: currentTaskId, projectId: currentProject.id };
+        }
+        if (currentTaskId) {
+            setProcessingTaskId(currentTaskId);
         }
         onSendMessage(message);
     }, [onSendMessage, currentProject, currentTaskId, history.length]);
@@ -732,8 +749,8 @@ export function ProjectView({
             {currentProject && (
                 <div key={currentProject.id} className="contents">
                     <div className="flex-1 flex overflow-hidden relative">
-                        {/* 左侧悬停检测区域（仅在侧栏收起时显示） */}
-                        {isTaskPanelHidden && (
+                        {/* 左侧悬停检测区域（仅在侧栏收起且非窄窗口时显示） */}
+                        {isTaskPanelHidden && !isNarrowWindow && (
                             <div
                                 className="absolute left-0 top-0 bottom-0 w-2 z-50 cursor-pointer"
                                 onMouseEnter={handleLeftEdgeMouseEnter}
@@ -751,6 +768,7 @@ export function ProjectView({
                                 currentTaskId={currentTaskId}
                                 isProcessing={isProcessing}
                                 isDeploying={isDeploying}
+                                processingTaskId={processingTaskId}
                                 onSelectTask={handleSelectTask}
                                 onCreateTask={handleCreateTask}
                             />
@@ -766,7 +784,7 @@ export function ProjectView({
                                             streamingText={streamingText}
                                             onSendMessage={handleSendMessageWithRename}
                                             onAbort={onAbort}
-                                            isProcessing={isProcessing}
+                                            isProcessing={isProcessing && (processingTaskId == null || processingTaskId === currentTaskId)}
                                             workingDir={currentProject.path}
                                             config={config}
                                             setConfig={setConfig}
@@ -787,7 +805,7 @@ export function ProjectView({
                                                     streamingText={streamingText}
                                                     onSendMessage={handleSendMessageWithRename}
                                                     onAbort={onAbort}
-                                                    isProcessing={isProcessing}
+                                                    isProcessing={isProcessing && (processingTaskId == null || processingTaskId === currentTaskId)}
                                                     workingDir={currentProject.path}
                                                     config={config}
                                                     setConfig={setConfig}

@@ -11,6 +11,7 @@ interface TaskListPanelProps {
     currentTaskId: string | null;
     isProcessing: boolean;
     isDeploying?: boolean;
+    processingTaskId?: string | null;
     onSelectTask: (taskId: string) => void;
     onCreateTask: () => void;
 }
@@ -22,6 +23,7 @@ export function TaskListPanel({
     currentTaskId,
     isProcessing,
     isDeploying = false,
+    processingTaskId,
     onSelectTask,
     onCreateTask
 }: TaskListPanelProps) {
@@ -231,7 +233,7 @@ export function TaskListPanel({
                                             <CircleCheckBig size={18} className="text-green-500 dark:text-green-400 shrink-0" aria-hidden />
                                         ) : task.status === 'failed' ? (
                                             <XCircle size={18} className="text-red-500 dark:text-red-400 shrink-0" aria-hidden />
-                                        ) : currentTaskId === task.id && isBusy ? (
+                                        ) : (processingTaskId != null ? processingTaskId === task.id : currentTaskId === task.id && isBusy) ? (
                                             <Loader2 size={18} className="text-amber-500 dark:text-amber-400 animate-spin shrink-0" aria-hidden />
                                         ) : (
                                             <Circle size={18} className="text-stone-300 dark:text-zinc-500 shrink-0" strokeWidth={2} aria-hidden />

@@ -236,9 +236,12 @@ export function AutomationView({
     const currentExecutionRunIdRef = useRef<string | null>(null);
     /** 本次“执行”对应的 (runId, projectId, taskId)，用于 rpa:run:end 时把该任务标记为 completed/failed */
     const lastExecutionTaskForRunRef = useRef<{ runId: string; projectId: string; taskId: string } | null>(null);
+    /** executionRuns 的 ref，用于在事件回调中访问最新状态 */
+    const executionRunsRef = useRef<RPAExecutionRun[]>([]);
     currentTaskIdRef.current = currentTaskId;
     historyRef.current = history;
     currentProjectIdRef.current = currentProject?.id ?? null;
+    executionRunsRef.current = executionRuns;
 
     const activeScriptTab = activeScriptTabId ? scriptTabs.find(t => t.id === activeScriptTabId) : null;
     const scriptContent = activeScriptTab?.content ?? '';
@@ -494,7 +497,7 @@ export function AutomationView({
             }));
         });
         const removeEnd = window.ipcRenderer.on('rpa:run:end', (_: unknown, ...args: unknown[]) => {
-            const payload = args[0] as { runId: string; success: boolean; error?: string; stdout?: string; stderr?: string };
+            const payload = args[0] as { runId: string; success: boolean; error?: string; stdout?: string; stderr?: string; scriptName?: string };
             const { runId, success, error } = payload;
             if (currentExecutionRunIdRef.current === runId) {
                 currentExecutionRunIdRef.current = null;
@@ -511,6 +514,24 @@ export function AutomationView({
                 window.ipcRenderer.invoke('agent:append-to-last-assistant', suffix).then(() => {
                     window.ipcRenderer.invoke('session:save-current').catch(() => {});
                 }).catch(() => {});
+            } else {
+                // AI 工具调用触发的执行：执行完成后把输出结果追加到聊天区
+                const runEntry = executionRunsRef.current.find(r => r.runId === runId);
+                const { stdout = '', stderr = '' } = payload;
+                const outputText = stdout || runEntry?.stdout || stderr || runEntry?.stderr || '';
+                if (outputText.trim()) {
+                    const name = runEntry?.scriptName || payload.scriptName || '脚本';
+                    const header = success
+                        ? `\n\n**执行输出** (${name}):\n\`\`\`\n${outputText.trimEnd()}\n\`\`\``
+                        : `\n\n**执行失败** (${name}):\n\`\`\`\n${outputText.trimEnd()}${error ? '\n' + error : ''}\n\`\`\``;
+                    window.ipcRenderer.invoke('agent:append-to-last-assistant', header).then(() => {
+                        window.ipcRenderer.invoke('session:save-current').catch(() => {});
+                    }).catch(() => {});
+                } else if (!success && error) {
+                    window.ipcRenderer.invoke('agent:append-to-last-assistant', `\n\n**执行失败**: ${error}`).then(() => {
+                        window.ipcRenderer.invoke('session:save-current').catch(() => {});
+                    }).catch(() => {});
+                }
             }
             const { stdout = '', stderr = '' } = payload;
             setExecutionRuns(prev => prev.map(run => {
@@ -689,6 +710,9 @@ export function AutomationView({
         // 与 Project 模式一致：先注册监听再切换，避免主进程下发的 agent:history-update 在 await 之前就发出导致漏接
         setIsLoadingHistory(true);
         setStreamingText(''); // 切换任务时清空流式文本，避免展示上一任务的残留
+        // 切换任务时清空执行输出面板，该任务的执行输出已保存在聊天历史中，切换回来时会通过 session 加载并显示在聊天区
+        setExecutionRuns([]);
+        setExecutionPanelExpanded(false);
         const fallbackTimer = setTimeout(() => setIsLoadingHistory(false), 400);
         const removeFallback = () => clearTimeout(fallbackTimer);
         const removeHistoryListener = window.ipcRenderer.on('agent:history-update', () => {
@@ -948,7 +972,7 @@ export function AutomationView({
 
     return (
         <div className="flex-1 min-h-0 flex overflow-hidden relative">
-            {isTaskPanelHidden && (
+            {isTaskPanelHidden && !isNarrowWindow && (
                 <div
                     className="absolute left-0 top-0 bottom-0 w-2 z-50 cursor-pointer"
                     onMouseEnter={() => setTimeout(onToggleTaskPanel, 1000)}
@@ -1009,10 +1033,11 @@ export function AutomationView({
                             <div className="flex flex-col h-full bg-[#1e1e1e]">
                                 <div className="h-10 shrink-0 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center justify-between px-3">
                                     <span className="text-xs text-stone-500 dark:text-zinc-400 flex items-center gap-2 min-w-0">
-                                        <span className="shrink-0">{t('automationScripts')} - Playwright (.js / .py)</span>
+                                        {!activeScriptTab && (
+                                            <span className="shrink-0">{t('automationScripts')} - Playwright (.js / .py)</span>
+                                        )}
                                         {activeScriptTab && (
                                             <>
-                                                <span className="text-stone-400 dark:text-zinc-500">·</span>
                                                 <span className="truncate" title={activeScriptTab.filePath.split(/[/\\]/).pop() ?? undefined}>
                                                     {activeScriptTab.filePath.split(/[/\\]/).pop()}
                                                     {activeScriptTab.isModified && <span className="text-amber-500 ml-0.5">*</span>}
