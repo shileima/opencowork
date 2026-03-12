@@ -52,6 +52,81 @@ agent-browser click @e2
 2. 若目录不存在，先创建目录：`mkdir -p ~/.qa-cowork/scripts/<chat-id>/`
 3. 告知用户脚本已保存的完整路径，方便下次直接运行
 
+## Error Recovery Protocol（错误自愈协议 — 绝不询问，直接探测修复）
+
+在脚本生成或执行过程中遇到任何错误时，**立即自动**执行 DOM 探测，了解页面真实结构，**不得询问用户**，直接自愈并继续。
+
+### 自动错误恢复步骤
+
+1. **选择器/元素找不到**（element not found、timeout、ref 失效）：
+   ```bash
+   agent-browser snapshot -i                        # 获取所有可交互元素及 ref
+   agent-browser snapshot -s "body" -d 4            # 若 snapshot 不足，加深 DOM 树
+   agent-browser eval "document.querySelectorAll('*[class],[id],[name]').length"
+   ```
+
+2. **导航/加载错误**：
+   ```bash
+   agent-browser get url                            # 确认当前 URL
+   agent-browser get title                          # 确认页面标题
+   agent-browser errors                             # 查看页面错误
+   agent-browser console                            # 查看控制台消息
+   agent-browser snapshot -i                        # 重新探测状态
+   ```
+
+3. **表单/输入错误**：
+   ```bash
+   agent-browser snapshot -s "form" -i              # 范围缩小到表单
+   agent-browser eval "JSON.stringify([...document.querySelectorAll('input,select,textarea,button')].map(e=>({tag:e.tagName,type:e.type,name:e.name,id:e.id,placeholder:e.placeholder})))"
+   ```
+
+4. **动态内容/SPA 错误**（React/Vue/Angular）：
+   ```bash
+   agent-browser wait --load networkidle            # 等待 JS 渲染完成
+   agent-browser wait 1500                          # 动画缓冲
+   agent-browser snapshot -i                        # 重新探测
+   agent-browser eval "document.readyState"         # 确认页面就绪状态
+   ```
+
+5. **iframe / Shadow DOM 错误**：
+   ```bash
+   agent-browser eval "document.querySelectorAll('iframe').length"
+   agent-browser frame "#iframe-selector"           # 切入 iframe
+   agent-browser snapshot -i                        # 在 iframe 内探测
+   agent-browser frame main                         # 返回主框架
+   ```
+
+6. **统计数据/数据提取返回 0 或空**：
+   ```bash
+   agent-browser eval "document.body.innerText.substring(0, 2000)"
+   agent-browser snapshot -s ".data-container, .table, [class*='stat'], [class*='count']"
+   agent-browser eval "JSON.stringify([...document.querySelectorAll('table')].map(t=>t.innerText.substring(0,500)))"
+   ```
+
+### 自愈脚本生成规则
+
+当某步骤失败时：
+1. **立即**执行 DOM 探测（不提示用户）
+2. **分析** snapshot 输出中的真实元素结构
+3. **更新**选择器/ref/策略，基于真实 DOM 数据
+4. **重试**失败步骤（使用修正后的方案）
+5. **记录**变更（如「selector 从 `.old-class` 更新为 `@e5`，基于 DOM 探测」）
+
+### DOM 探测速查表
+
+| 错误场景 | 命令 |
+|---------|------|
+| 元素找不到 | `agent-browser snapshot -i` |
+| 点击了错误元素 | `agent-browser snapshot -s "parent-selector" -i` |
+| 页面未加载 | `agent-browser wait --load networkidle && agent-browser snapshot -i` |
+| 数据显示 0/空 | `agent-browser eval "document.body.innerText.substring(0,3000)"` |
+| 动态内容缺失 | `agent-browser wait 2000 && agent-browser snapshot -i` |
+| 表单字段无法填写 | `agent-browser eval "JSON.stringify([...document.querySelectorAll('input')].map(e=>({id:e.id,name:e.name,type:e.type})))"` |
+| 按钮无法点击 | `agent-browser is visible @ref` + `agent-browser is enabled @ref` |
+| iframe 内容 | `agent-browser frame "iframe" && agent-browser snapshot -i` |
+
+---
+
 ## Browser close rule (important)
 
 To avoid losing freshly logged-in sessions (cookies / storage), **do not close the browser by default**.
@@ -705,6 +780,16 @@ async function step(page, desc, fn) {
 每步执行后用 Read 工具读取截图：`/tmp/pw-screenshots/01-*.png`
 
 若截图未达预期 → 重新运行 DOM 探测 → 修正选择器 → 重新执行。
+
+**Playwright 脚本错误自愈规则**：脚本执行报错时，**不询问用户**，直接在 DOM 探测脚本中加入更详细的选择器分析，重新探测页面结构后更新 `pw-task.js` 并重新执行。常见错误处理：
+
+| 错误类型 | 自愈方案 |
+|---------|---------|
+| `TimeoutError: waiting for selector` | 重新运行 `probe-dom.js` 获取真实选择器 |
+| `Element not found` | 在探测脚本中加 `page.waitForLoadState('networkidle')` 后再查 |
+| `strict mode violation` | 用更精确的选择器（加 `:nth-child`、`[data-testid]`） |
+| 数据为空/0 | 在探测脚本中加 `page.evaluate(() => document.body.innerText.substring(0,3000))` |
+| SPA 内容未渲染 | 在探测脚本中加 `page.waitForTimeout(2000)` 后再 evaluate |
 
 ### 常用等待
 
