@@ -33,17 +33,49 @@ const platforms = [
   { platform: 'linux', arch: 'x64', ext: 'tar.gz', distName: 'linux-x64' }
 ];
 
-async function downloadFile(url, dest) {
+async function safeRemove(target, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      if (!fs.existsSync(target)) return;
+      const stat = fs.statSync(target);
+      if (stat.isDirectory()) {
+        fs.rmSync(target, { recursive: true, force: true });
+      } else {
+        fs.unlinkSync(target);
+      }
+      return;
+    } catch (err) {
+      if (i < retries - 1 && (err.code === 'EPERM' || err.code === 'EBUSY')) {
+        await new Promise(r => setTimeout(r, (i + 1) * 1000));
+      }
+    }
+  }
+}
+
+function downloadFileOnce(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
-    https.get(url, (response) => {
+    let settled = false;
+
+    const cleanup = (err) => {
+      if (settled) return;
+      settled = true;
+      file.destroy();
+      fs.unlink(dest, () => {});
+      reject(err);
+    };
+
+    file.on('error', cleanup);
+
+    const req = https.get(url, (response) => {
       if (response.statusCode === 302 || response.statusCode === 301) {
-        // 处理重定向
-        return downloadFile(response.headers.location, dest).then(resolve).catch(reject);
+        file.destroy();
+        return downloadFileOnce(response.headers.location, dest).then(resolve).catch(reject);
       }
-      
+
       if (response.statusCode !== 200) {
-        reject(new Error(`Failed to download: ${response.statusCode}`));
+        cleanup(new Error(`Failed to download: ${response.statusCode}`));
+        response.resume();
         return;
       }
 
@@ -60,17 +92,41 @@ async function downloadFile(url, dest) {
         }
       });
 
+      response.on('error', cleanup);
+
       response.pipe(file);
       file.on('finish', () => {
-        file.close();
-        process.stdout.write('\r   下载完成!          \n');
-        resolve();
+        if (settled) return;
+        settled = true;
+        file.close(() => {
+          process.stdout.write('\r   下载完成!          \n');
+          resolve();
+        });
       });
-    }).on('error', (err) => {
-      fs.unlink(dest, () => {});
-      reject(err);
+    });
+
+    req.on('error', cleanup);
+    req.setTimeout(120_000, () => {
+      req.destroy(new Error('Download timed out after 120s'));
     });
   });
+}
+
+async function downloadFile(url, dest, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await downloadFileOnce(url, dest);
+      return;
+    } catch (err) {
+      if (attempt < retries) {
+        const delay = attempt * 5_000;
+        console.warn(`\n   ⚠️  下载失败 (第 ${attempt}/${retries} 次): ${err.message}，${delay / 1000}s 后重试...`);
+        await new Promise(r => setTimeout(r, delay));
+      } else {
+        throw err;
+      }
+    }
+  }
 }
 
 async function extractTarGz(tarPath, destDir) {
@@ -204,10 +260,7 @@ async function prepareNodeForPlatform(platform, arch, ext, distName) {
     console.error(`❌ ${platformKey} 准备失败:`, error.message);
     throw error;
   } finally {
-    // 清理临时文件
-    if (fs.existsSync(downloadPath)) {
-      fs.unlinkSync(downloadPath);
-    }
+    await safeRemove(downloadPath);
   }
 }
 
@@ -226,10 +279,7 @@ async function main() {
 
     console.log('\n✅ 所有平台的 Node.js 准备完成！');
   } finally {
-    // 清理临时目录
-    if (fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    await safeRemove(tempDir);
   }
 }
 
