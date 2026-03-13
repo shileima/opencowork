@@ -510,8 +510,26 @@ export function AutomationView({
             }
             if (lastExecutionRunIdForChatRef.current === runId) {
                 lastExecutionRunIdForChatRef.current = null;
+                const runEntry = executionRunsRef.current.find(r => r.runId === runId);
+                const fullStdout = payload.stdout || runEntry?.stdout || '';
+                const fullStderr = payload.stderr || runEntry?.stderr || '';
+                const fullOutput = fullStdout || fullStderr || '';
                 const suffix = success ? '\n\n执行完成。' : `\n\n执行失败: ${error || '未知错误'}`;
-                window.ipcRenderer.invoke('agent:append-to-last-assistant', suffix).then(() => {
+                window.ipcRenderer.invoke('agent:append-to-last-assistant', suffix).then(async (appendResult) => {
+                    const hist = await window.ipcRenderer.invoke('agent:get-history') as Anthropic.MessageParam[];
+                    const lastAssistant = hist?.filter(m => m.role === 'assistant').pop();
+                    const lastContent = typeof lastAssistant?.content === 'string'
+                        ? lastAssistant.content
+                        : Array.isArray(lastAssistant?.content)
+                            ? lastAssistant.content.filter((b: { type?: string }) => b.type === 'text').map((b: { text?: string }) => b.text || '').join('')
+                            : '';
+                    if (fullOutput.trim() && !lastContent.includes(fullOutput.trim().slice(0, 60))) {
+                        const name = runEntry?.scriptName || '脚本';
+                        const outputBlock = success
+                            ? `\n\n**执行输出** (${name}):\n\`\`\`\n${fullOutput.trimEnd()}\n\`\`\``
+                            : `\n\n**执行输出** (${name}):\n\`\`\`\n${fullOutput.trimEnd()}${error ? '\n' + error : ''}\n\`\`\``;
+                        await window.ipcRenderer.invoke('agent:append-to-last-assistant', outputBlock).catch(() => {});
+                    }
                     window.ipcRenderer.invoke('session:save-current').catch(() => {});
                 }).catch(() => {});
             } else {
@@ -837,7 +855,10 @@ export function AutomationView({
             await window.ipcRenderer.invoke('rpa:task:switch', currentProject.id, newTask.id);
             setCurrentTaskId(newTask.id);
             await window.ipcRenderer.invoke('rpa:task:update', currentProject.id, newTask.id, { scriptFileName: fileName });
-            await window.ipcRenderer.invoke('agent:inject-history', [{ role: 'assistant', content: `开始执行 ${scriptName}...\n\n` }]);
+            const injectResult = await window.ipcRenderer.invoke('agent:inject-history', [{ role: 'assistant', content: `开始执行 ${scriptName}...\n\n` }]) as { success: boolean };
+            if (!injectResult?.success) {
+                console.warn('[AutomationView] agent:inject-history failed, output may not stream to chat');
+            }
             lastExecutionRunIdForChatRef.current = runId;
             lastExecutionTaskForRunRef.current = { runId, projectId: currentProject.id, taskId: newTask.id };
 
