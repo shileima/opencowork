@@ -515,20 +515,24 @@ export function AutomationView({
                 const fullStderr = payload.stderr || runEntry?.stderr || '';
                 const fullOutput = fullStdout || fullStderr || '';
                 const suffix = success ? '\n\n执行完成。' : `\n\n执行失败: ${error || '未知错误'}`;
-                window.ipcRenderer.invoke('agent:append-to-last-assistant', suffix).then(async (appendResult) => {
-                    const hist = await window.ipcRenderer.invoke('agent:get-history') as Anthropic.MessageParam[];
-                    const lastAssistant = hist?.filter(m => m.role === 'assistant').pop();
-                    const lastContent = typeof lastAssistant?.content === 'string'
-                        ? lastAssistant.content
-                        : Array.isArray(lastAssistant?.content)
-                            ? lastAssistant.content.filter((b: { type?: string }) => b.type === 'text').map((b: { text?: string }) => b.text || '').join('')
-                            : '';
-                    if (fullOutput.trim() && !lastContent.includes(fullOutput.trim().slice(0, 60))) {
-                        const name = runEntry?.scriptName || '脚本';
-                        const outputBlock = success
-                            ? `\n\n**执行输出** (${name}):\n\`\`\`\n${fullOutput.trimEnd()}\n\`\`\``
-                            : `\n\n**执行输出** (${name}):\n\`\`\`\n${fullOutput.trimEnd()}${error ? '\n' + error : ''}\n\`\`\``;
-                        await window.ipcRenderer.invoke('agent:append-to-last-assistant', outputBlock).catch(() => {});
+                window.ipcRenderer.invoke('agent:append-to-last-assistant', suffix).then(async () => {
+                    const trimmedOutput = fullOutput.trim();
+                    if (trimmedOutput) {
+                        const hist = await window.ipcRenderer.invoke('agent:get-history') as Anthropic.MessageParam[];
+                        const lastAssistant = hist?.filter(m => m.role === 'assistant').pop();
+                        const lastContent = typeof lastAssistant?.content === 'string'
+                            ? lastAssistant.content
+                            : Array.isArray(lastAssistant?.content)
+                                ? lastAssistant.content.filter((b: { type?: string }) => b.type === 'text').map((b: unknown) => (b as { text?: string }).text || '').join('')
+                                : '';
+                        const outputTail = trimmedOutput.slice(-120);
+                        if (!lastContent.includes(outputTail)) {
+                            const name = runEntry?.scriptName || '脚本';
+                            const outputBlock = success
+                                ? `\n\n**执行输出** (${name}):\n\`\`\`\n${trimmedOutput}\n\`\`\``
+                                : `\n\n**执行输出** (${name}):\n\`\`\`\n${trimmedOutput}${error ? '\n' + error : ''}\n\`\`\``;
+                            await window.ipcRenderer.invoke('agent:append-to-last-assistant', outputBlock).catch(() => {});
+                        }
                     }
                     window.ipcRenderer.invoke('session:save-current').catch(() => {});
                 }).catch(() => {});

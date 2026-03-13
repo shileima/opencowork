@@ -629,11 +629,16 @@ ipcMain.handle('agent:new-session', (event) => {
   return { success: true, sessionId: null }
 })
 
-/** 部署专用：向 Agent history 注入初始消息（不触发 AI 处理） */
+/** 向 Agent history 注入初始消息（不触发 AI 处理），并通知前端更新聊天区 */
 ipcMain.handle('agent:inject-history', (event, messages: Anthropic.MessageParam[]) => {
   const targetAgent = event.sender === floatingBallWin?.webContents ? floatingBallAgent : mainAgent
+  const isFloatingBall = event.sender === floatingBallWin?.webContents
   if (!targetAgent || !Array.isArray(messages)) return { success: false }
   targetAgent.loadHistory(messages)
+  const targetWindow = isFloatingBall ? floatingBallWin : mainWin
+  if (targetWindow && !targetWindow.isDestroyed()) {
+    targetWindow.webContents.send('agent:history-update', messages)
+  }
   return { success: true }
 })
 
@@ -2817,11 +2822,13 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
       child.stdout?.on('data', (d) => {
         const s = d.toString();
         stdout += s;
+        const dataToShow = s.replace(/__RPA_SCRIPT_DONE__/g, '');
+        if (dataToShow.length > 0) {
+          sendRunOutput(sender, runId, 'rpa:run:output', { runId, data: dataToShow, stream: 'stdout' });
+        }
         if (s.includes('__RPA_SCRIPT_DONE__')) {
           sendRunEndIfNeeded(true);
         }
-        const dataToShow = s.replace(/__RPA_SCRIPT_DONE__/g, '');
-        sendRunOutput(sender, runId, 'rpa:run:output', { runId, data: dataToShow, stream: 'stdout' });
       });
       child.stderr?.on('data', (d) => {
         const s = d.toString();
