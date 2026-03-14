@@ -890,42 +890,45 @@ ${err}
           <div className="flex items-center gap-0.5 bg-stone-100 dark:bg-zinc-800 rounded-lg p-0.5">
             <button
               onClick={() => setActiveView('cowork')}
+              title={t('cowork')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'cowork'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
                 }`}
             >
               <Zap size={12} />
-              {t('cowork')}
+              <span className="max-[480px]:hidden">{t('cowork')}</span>
             </button>
             <button
               onClick={() => setActiveView('project')}
+              title={t('project')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'project'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
                 }`}
             >
               <FolderKanban size={12} />
-              {t('project')}
+              <span className="max-[480px]:hidden">{t('project')}</span>
             </button>
             <button
               onClick={() => setActiveView('automation')}
+              title={t('automation')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'automation'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
                 }`}
             >
               <Bot size={12} />
-              {t('automation')}
+              <span className="max-[480px]:hidden">{t('automation')}</span>
             </button>
           </div>
           {/* SSO 用户信息 */}
-          {ssoUser && (
-            <div className={`flex items-center rounded-lg bg-stone-100 dark:bg-zinc-800 cursor-default ${isNarrowWindow ? 'p-1' : 'gap-1.5 px-2 py-1'}`}>
+          {ssoUser && !isNarrowWindow && (
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-stone-100 dark:bg-zinc-800 cursor-default">
               <div className="w-5 h-5 rounded-full bg-orange-400 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
                 {ssoUser.name.charAt(0)}
               </div>
-              {!isNarrowWindow && <span className="text-xs text-stone-600 dark:text-zinc-300 max-w-[80px] truncate">{ssoUser.name}</span>}
+              <span className="text-xs text-stone-600 dark:text-zinc-300 max-w-[80px] truncate">{ssoUser.name}</span>
             </div>
           )}
 

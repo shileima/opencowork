@@ -1,201 +1,201 @@
 {
-  "version": "1.1.22",
-  "buildTime": 1773071802510,
+  "version": "1.1.29",
+  "buildTime": 1773499938799,
   "files": {
-    "dist/assets/_basePickBy-C6yjFCIJ.js": {
-      "hash": "79529c195cc7d1e68dbdcd2640cd1f7eb7376402e0fbf5e943fe42a8134e2280",
+    "dist/assets/_basePickBy-CE4P5WV3.js": {
+      "hash": "6329766c83914e8897beca235c5d6d848663d911cec5aa95194bfc3cc24b8416",
       "size": 2578,
-      "path": "dist/assets/_basePickBy-C6yjFCIJ.js"
+      "path": "dist/assets/_basePickBy-CE4P5WV3.js"
     },
-    "dist/assets/_baseUniq-DRn5u-lT.js": {
-      "hash": "265231b3d6decd6ae0407cd8ad2dac55d5595c59b1662e9c1f0045544162a361",
+    "dist/assets/_baseUniq-BAyQWZlH.js": {
+      "hash": "9ded59b35f062a43d8ef0a68d4df8c6da4923851656c41cbb8060f5dadbb5cb3",
       "size": 11897,
-      "path": "dist/assets/_baseUniq-DRn5u-lT.js"
+      "path": "dist/assets/_baseUniq-BAyQWZlH.js"
     },
-    "dist/assets/arc-DvqWour3.js": {
-      "hash": "0a7b65e16a01bb7c90dcf8d347552514f2b05825f27d3bfbd2f9f3cbbf72782a",
+    "dist/assets/arc-BHgYhKIO.js": {
+      "hash": "4359caf3f84220fa92434a57c9cd90ff359409b1b6a106e31df9071b220bb804",
       "size": 3434,
-      "path": "dist/assets/arc-DvqWour3.js"
+      "path": "dist/assets/arc-BHgYhKIO.js"
     },
-    "dist/assets/architectureDiagram-VXUJARFQ-igrNJFz-.js": {
-      "hash": "07e028a5b3e67247cb041404621e938eef75ddf2a3adf13a89095b78a457cc1d",
+    "dist/assets/architectureDiagram-VXUJARFQ-BH4GNzzl.js": {
+      "hash": "9903718083f50e454d3b97e7e162e02cf73a93b03788029a86978e843dde7f73",
       "size": 148715,
-      "path": "dist/assets/architectureDiagram-VXUJARFQ-igrNJFz-.js"
+      "path": "dist/assets/architectureDiagram-VXUJARFQ-BH4GNzzl.js"
     },
-    "dist/assets/blockDiagram-VD42YOAC-DE8SzJwF.js": {
-      "hash": "dfdf083d13fe38a159264bafd8fb0d88231d84985d63f1a486a803056308bd68",
+    "dist/assets/blockDiagram-VD42YOAC-V_e8z03w.js": {
+      "hash": "a5519c921deba1875b70b3a9ada135cdd5a43e6cc602cf8f0e9e6a6a8bb2df12",
       "size": 73117,
-      "path": "dist/assets/blockDiagram-VD42YOAC-DE8SzJwF.js"
+      "path": "dist/assets/blockDiagram-VD42YOAC-V_e8z03w.js"
     },
-    "dist/assets/c4Diagram-YG6GDRKO-C1E1E_Iy.js": {
-      "hash": "53ea9ff38178b4c55f53ff8077f3922c091cf56a2c875e6810de8a1fa25df3c5",
+    "dist/assets/c4Diagram-YG6GDRKO-B3kLoo-h.js": {
+      "hash": "528ee4da58258f6ec15f71cc849c93ad5869bd2bd23a0e434a5a14bbb2af3282",
       "size": 70109,
-      "path": "dist/assets/c4Diagram-YG6GDRKO-C1E1E_Iy.js"
+      "path": "dist/assets/c4Diagram-YG6GDRKO-B3kLoo-h.js"
     },
-    "dist/assets/channel-DVZ2ba7j.js": {
-      "hash": "236d043da1d1c43e87af76996db766b3417a3104f2e1417e1ee74b3df5bc7c7a",
+    "dist/assets/channel-Bu7snSpR.js": {
+      "hash": "c3d9722d7e41fdcdd0d66cbefb9325ba23e491f4988d63a1a8d96e1d9d66be56",
       "size": 108,
-      "path": "dist/assets/channel-DVZ2ba7j.js"
+      "path": "dist/assets/channel-Bu7snSpR.js"
     },
-    "dist/assets/chunk-4BX2VUAB-DyUtOzh4.js": {
-      "hash": "5e25d21697d73b06202fa29d4ab3ed2fdc95d2f8d8d26a33621f533d300d2cf3",
+    "dist/assets/chunk-4BX2VUAB-DcRt76F_.js": {
+      "hash": "b419b94e5c127088b8dfcc00d4d5e6e95b0dd0a458d1e5529d2d334139a4d29a",
       "size": 290,
-      "path": "dist/assets/chunk-4BX2VUAB-DyUtOzh4.js"
+      "path": "dist/assets/chunk-4BX2VUAB-DcRt76F_.js"
     },
-    "dist/assets/chunk-55IACEB6-WFLrO5Wu.js": {
-      "hash": "d06245f25c238139c603651dcf9f465598cd9e3ba03068247763fcec7e82bf1f",
+    "dist/assets/chunk-55IACEB6-Csfwh2Za.js": {
+      "hash": "a9f1a4ce6ab5eff61980bf9a4450e90add0b483c7847589e4bd7b062764235fa",
       "size": 228,
-      "path": "dist/assets/chunk-55IACEB6-WFLrO5Wu.js"
+      "path": "dist/assets/chunk-55IACEB6-Csfwh2Za.js"
     },
-    "dist/assets/chunk-B4BG7PRW-DYs9AILA.js": {
-      "hash": "bc7d3a83a5111b618b87935dfb95500d9bb5de3b60673d2f57b473b8c1861faf",
+    "dist/assets/chunk-B4BG7PRW-BPO7YtZ-.js": {
+      "hash": "977eff3b152d6f8f3c009ef9b295cef05175bd9fa9401c4fca6226df3082a489",
       "size": 45397,
-      "path": "dist/assets/chunk-B4BG7PRW-DYs9AILA.js"
+      "path": "dist/assets/chunk-B4BG7PRW-BPO7YtZ-.js"
     },
-    "dist/assets/chunk-DI55MBZ5-c3Vuh_mI.js": {
-      "hash": "169f7abc20e9de25ea2ad7056ee3b751125dc79e721ae3daca742eb0ab6de7c0",
+    "dist/assets/chunk-DI55MBZ5-C6SkVjSe.js": {
+      "hash": "a78fefffe80bdff09296c52d7930cadb9697f5ac91f3f53e2eaa26b1a1d6b890",
       "size": 36791,
-      "path": "dist/assets/chunk-DI55MBZ5-c3Vuh_mI.js"
+      "path": "dist/assets/chunk-DI55MBZ5-C6SkVjSe.js"
     },
-    "dist/assets/chunk-FMBD7UC4-GjyhLJfa.js": {
-      "hash": "986b208ab05805c66a15ec59d53540d28dbdb0dbcbc7ccfc93e14e530bb3e349",
+    "dist/assets/chunk-FMBD7UC4-8x1BylP7.js": {
+      "hash": "7c12cf0d6293d5e809a9b6d04efe31926c9f0426b410681b2c6e06fce5a66307",
       "size": 359,
-      "path": "dist/assets/chunk-FMBD7UC4-GjyhLJfa.js"
+      "path": "dist/assets/chunk-FMBD7UC4-8x1BylP7.js"
     },
-    "dist/assets/chunk-QN33PNHL-npTjcHwJ.js": {
-      "hash": "f0f2418a0003a2445e51d7a47c401def8ef5305aedc5dfb3dfeaf5e7d605e3fc",
+    "dist/assets/chunk-QN33PNHL-BvS_aR0q.js": {
+      "hash": "486171eb4211d21ece364e854788d9980b40f79445bb6c271b34a9ecbe20bc13",
       "size": 525,
-      "path": "dist/assets/chunk-QN33PNHL-npTjcHwJ.js"
+      "path": "dist/assets/chunk-QN33PNHL-BvS_aR0q.js"
     },
-    "dist/assets/chunk-QZHKN3VN-D6fBbTqD.js": {
-      "hash": "f3d13dbdb1288a6fe00406b8b46daaca398a3d41a86cf37b3a842dc6e135148d",
+    "dist/assets/chunk-QZHKN3VN-BUIkgB86.js": {
+      "hash": "88c8ae600ff1960a764ae2a56af871b775ddc13c2a79e637cba47354927fb486",
       "size": 186,
-      "path": "dist/assets/chunk-QZHKN3VN-D6fBbTqD.js"
+      "path": "dist/assets/chunk-QZHKN3VN-BUIkgB86.js"
     },
-    "dist/assets/chunk-TZMSLE5B-DWvszWW4.js": {
-      "hash": "0727599398191589f5331c94d630097b63c5551767f83f3eac95e9d42d5488cd",
+    "dist/assets/chunk-TZMSLE5B-B3e5MfUK.js": {
+      "hash": "88cdcb7a10755a56c985fc8a24f0fa2ebcd176beca793bd1cd87a81a87c368f6",
       "size": 1406,
-      "path": "dist/assets/chunk-TZMSLE5B-DWvszWW4.js"
+      "path": "dist/assets/chunk-TZMSLE5B-B3e5MfUK.js"
     },
-    "dist/assets/classDiagram-2ON5EDUG-DEo3AYSF.js": {
-      "hash": "8aebf74d6acb9c4e242dd1b9d2c0f55e5006808d55cb6c59b77a9939fa60f8d1",
+    "dist/assets/classDiagram-2ON5EDUG-Dqu3B0Vh.js": {
+      "hash": "13e6b29c18a2f38f3ab9e81553523505e72f919f72aa97498c1750c995c43e72",
       "size": 395,
-      "path": "dist/assets/classDiagram-2ON5EDUG-DEo3AYSF.js"
+      "path": "dist/assets/classDiagram-2ON5EDUG-Dqu3B0Vh.js"
     },
-    "dist/assets/classDiagram-v2-WZHVMYZB-DEo3AYSF.js": {
-      "hash": "8aebf74d6acb9c4e242dd1b9d2c0f55e5006808d55cb6c59b77a9939fa60f8d1",
+    "dist/assets/classDiagram-v2-WZHVMYZB-Dqu3B0Vh.js": {
+      "hash": "13e6b29c18a2f38f3ab9e81553523505e72f919f72aa97498c1750c995c43e72",
       "size": 395,
-      "path": "dist/assets/classDiagram-v2-WZHVMYZB-DEo3AYSF.js"
+      "path": "dist/assets/classDiagram-v2-WZHVMYZB-Dqu3B0Vh.js"
     },
-    "dist/assets/clone-BcELExz_.js": {
-      "hash": "b8423324e68f5159c5c9b48a7d4f444ca8ae6378e47c5db3adb022427c6c0a7d",
+    "dist/assets/clone-BciyIohd.js": {
+      "hash": "9457535200ae6f99bd3d0052bd9e737cc8abadfbf50ea61e91d1a28dcc8367b1",
       "size": 96,
-      "path": "dist/assets/clone-BcELExz_.js"
+      "path": "dist/assets/clone-BciyIohd.js"
     },
-    "dist/assets/cose-bilkent-S5V4N54A-BfhcwEsc.js": {
-      "hash": "324c87f24d52462397093bf290ba051c86a1ff560cb8d2a3de9c821cb1a3bddc",
+    "dist/assets/cose-bilkent-S5V4N54A-CxgrtvcN.js": {
+      "hash": "1b5e408fdfe54fd32bc7f114bec5db19eed33b41f7d0271048f3802b64ce257d",
       "size": 81508,
-      "path": "dist/assets/cose-bilkent-S5V4N54A-BfhcwEsc.js"
+      "path": "dist/assets/cose-bilkent-S5V4N54A-CxgrtvcN.js"
     },
     "dist/assets/cytoscape.esm-CyJtwmzi.js": {
       "hash": "70ef66263d0b6db4e3d05fe604b702b66155d8566ab6b2e1bda36e8cea6ad58c",
       "size": 442413,
       "path": "dist/assets/cytoscape.esm-CyJtwmzi.js"
     },
-    "dist/assets/dagre-6UL2VRFP-BLeI7hNk.js": {
-      "hash": "759321323af503d4c2375139d1f17e669b3c94650170aabc240d15926a7bf722",
+    "dist/assets/dagre-6UL2VRFP-BqshxqNN.js": {
+      "hash": "5049a3207c2eb98bd99bfc5d2afc6661fde1d47944db83def86c7cef55148d50",
       "size": 11234,
-      "path": "dist/assets/dagre-6UL2VRFP-BLeI7hNk.js"
+      "path": "dist/assets/dagre-6UL2VRFP-BqshxqNN.js"
     },
     "dist/assets/defaultLocale-DX6XiGOO.js": {
       "hash": "0cefbd76f932c4eea4758d28169802589b1ad15b46607253de4bd82328998ece",
       "size": 4688,
       "path": "dist/assets/defaultLocale-DX6XiGOO.js"
     },
-    "dist/assets/diagram-PSM6KHXK-DVH5vAQW.js": {
-      "hash": "32a4088231343a70833255909ebf28c6e8b3d6f259910d559a8ddcbd73bbd917",
+    "dist/assets/diagram-PSM6KHXK-hWzKxiGL.js": {
+      "hash": "b5c0ae4b7c16ac7b7d15bd289b8598f87e691964a8468052d0498711008f879c",
       "size": 15955,
-      "path": "dist/assets/diagram-PSM6KHXK-DVH5vAQW.js"
+      "path": "dist/assets/diagram-PSM6KHXK-hWzKxiGL.js"
     },
-    "dist/assets/diagram-QEK2KX5R-CbCY1HU0.js": {
-      "hash": "96e27df46b169dc07355711d1fd8c0dae3acf97772fee622629446b8027cd027",
+    "dist/assets/diagram-QEK2KX5R-BMBaRuh2.js": {
+      "hash": "591958f58a9e6fe36ae1d530939515d1e315f5a16daf9d73c814415caaefbaea",
       "size": 6023,
-      "path": "dist/assets/diagram-QEK2KX5R-CbCY1HU0.js"
+      "path": "dist/assets/diagram-QEK2KX5R-BMBaRuh2.js"
     },
-    "dist/assets/diagram-S2PKOQOG-om5Qmm3l.js": {
-      "hash": "c074f254fc405a77198dc62592878f8ec8b7eebb4f0e802b14cbe0da914c5b5a",
+    "dist/assets/diagram-S2PKOQOG-CG8NdnxF.js": {
+      "hash": "fd07c5d6c31b13a01d63587012e2460aecd5a3422c5ec98fc0d40d3b50beae2b",
       "size": 4303,
-      "path": "dist/assets/diagram-S2PKOQOG-om5Qmm3l.js"
+      "path": "dist/assets/diagram-S2PKOQOG-CG8NdnxF.js"
     },
-    "dist/assets/erDiagram-Q2GNP2WA-XsxdUJ3B.js": {
-      "hash": "c1ebb1c984edb406ed0088a1ca03fdc3b4a536a4688b1cca34365aa6bc9d8810",
+    "dist/assets/erDiagram-Q2GNP2WA-D7ivXpcq.js": {
+      "hash": "2ec675295749d31f0dfb89de83ad287bcf18c330f3e381dff83cc98781c1c535",
       "size": 25303,
-      "path": "dist/assets/erDiagram-Q2GNP2WA-XsxdUJ3B.js"
+      "path": "dist/assets/erDiagram-Q2GNP2WA-D7ivXpcq.js"
     },
-    "dist/assets/flowDiagram-NV44I4VS-Dn51uLum.js": {
-      "hash": "07b26c92fb0d95c9e66f95dd1dc6d727f7551348497349c1c47ee27816523a17",
+    "dist/assets/flowDiagram-NV44I4VS-C6uIOgi_.js": {
+      "hash": "ccb9a0948d3fc9b59108d43d7f72d67f0af0545765e8eaaa154846b3479d8518",
       "size": 61075,
-      "path": "dist/assets/flowDiagram-NV44I4VS-Dn51uLum.js"
+      "path": "dist/assets/flowDiagram-NV44I4VS-C6uIOgi_.js"
     },
-    "dist/assets/ganttDiagram-JELNMOA3-YDG5qXIX.js": {
-      "hash": "59e85d5974004acd6bb710f8a57b4cfeaa916204464f2427817f83f92ada4dc3",
+    "dist/assets/ganttDiagram-JELNMOA3-g3DkNxrs.js": {
+      "hash": "728aa03d1d7250d35b76ac6e5e5817c743d31da5ab8e62a9fa2f8063219abef9",
       "size": 68016,
-      "path": "dist/assets/ganttDiagram-JELNMOA3-YDG5qXIX.js"
+      "path": "dist/assets/ganttDiagram-JELNMOA3-g3DkNxrs.js"
     },
-    "dist/assets/gitGraphDiagram-V2S2FVAM-CN-X-sQf.js": {
-      "hash": "b7752378c9d33f059760bd8685661e4f6688b9725d079cc36ad912e262e839d8",
+    "dist/assets/gitGraphDiagram-V2S2FVAM-DG4Oapkj.js": {
+      "hash": "bf1a231b7118812bf7d103df9a79bc1911b8b94d3634bb2ee13885ad4cac4644",
       "size": 24694,
-      "path": "dist/assets/gitGraphDiagram-V2S2FVAM-CN-X-sQf.js"
+      "path": "dist/assets/gitGraphDiagram-V2S2FVAM-DG4Oapkj.js"
     },
-    "dist/assets/graph-C2u4y88k.js": {
-      "hash": "a93269edf3485f0f945449f1be4ff8b26c7fe103330152e8759eed2a4c4ae827",
+    "dist/assets/graph-DUDiknV8.js": {
+      "hash": "198cf5fc2f4c6da8402c7db9d7e42da4f6d407707e5d40e06b6bc7dbeda1a4a6",
       "size": 5913,
-      "path": "dist/assets/graph-C2u4y88k.js"
+      "path": "dist/assets/graph-DUDiknV8.js"
     },
-    "dist/assets/index-2M8Qvm9j.js": {
-      "hash": "d0481c66ca02ff9d0c8cbb466fe75ca265961eabf7869e229da97a7723fbf79c",
-      "size": 2099400,
-      "path": "dist/assets/index-2M8Qvm9j.js"
+    "dist/assets/index-CNvoGcj_.js": {
+      "hash": "40628bd016206dc63190ca5ba2534a6d5d50b7a5ef182043374fc329af4c76d7",
+      "size": 2106459,
+      "path": "dist/assets/index-CNvoGcj_.js"
     },
-    "dist/assets/index-C1vba4q7.css": {
-      "hash": "fe38f5c53353f2745e66f391f2e4fee2cfe5ca901668213fbd9ecc0bca08a165",
-      "size": 95121,
-      "path": "dist/assets/index-C1vba4q7.css"
+    "dist/assets/index-oJMcPeI7.css": {
+      "hash": "3d8d2fbae2f2d0df07979152172336d6c38c2de2b3ef9865156b043fbe496359",
+      "size": 95514,
+      "path": "dist/assets/index-oJMcPeI7.css"
     },
-    "dist/assets/infoDiagram-HS3SLOUP-Bi-eVphB.js": {
-      "hash": "2991d77f09c38443937552eff5c1a344150397e6c27af6e13435bd998dfa261b",
+    "dist/assets/infoDiagram-HS3SLOUP-DlpVLqYa.js": {
+      "hash": "b19d70d5384d9a1694a8f29a3b47141fe285ea85756f9d4ff161ce372895fae8",
       "size": 656,
-      "path": "dist/assets/infoDiagram-HS3SLOUP-Bi-eVphB.js"
+      "path": "dist/assets/infoDiagram-HS3SLOUP-DlpVLqYa.js"
     },
     "dist/assets/init-Gi6I4Gst.js": {
       "hash": "379fa880c14ad48f43b0c23ff56b30b2b808e8460fd9f9cad8bf7cb278c5b814",
       "size": 147,
       "path": "dist/assets/init-Gi6I4Gst.js"
     },
-    "dist/assets/journeyDiagram-XKPGCS4Q-nEvUfN_i.js": {
-      "hash": "9c376d125836d4629597c482b1e1ba638fe2a69d2052924f65f4999e4a162e7e",
+    "dist/assets/journeyDiagram-XKPGCS4Q-E0jnKykc.js": {
+      "hash": "86e7e918cf481c294a62c2518cf0763a61b5ceec4817ba0ef6aba29d9bd8152d",
       "size": 23520,
-      "path": "dist/assets/journeyDiagram-XKPGCS4Q-nEvUfN_i.js"
+      "path": "dist/assets/journeyDiagram-XKPGCS4Q-E0jnKykc.js"
     },
-    "dist/assets/kanban-definition-3W4ZIXB7-CO4T6nCw.js": {
-      "hash": "34edf02540e3e2eae672ce5b99b660b14106ae83f615491b7ead1e9ec85f8ed4",
+    "dist/assets/kanban-definition-3W4ZIXB7-D19iT9Vr.js": {
+      "hash": "00a5339899793370b81efb5885718ca9a1bca314b0b08e1ab3ecb48fc083749f",
       "size": 20564,
-      "path": "dist/assets/kanban-definition-3W4ZIXB7-CO4T6nCw.js"
+      "path": "dist/assets/kanban-definition-3W4ZIXB7-D19iT9Vr.js"
     },
     "dist/assets/katex-BlHpptmG.js": {
       "hash": "65d18cdb3989de711ee8c8b53d8c4f1780be50d9c0169a7d8e01d3b3d605d285",
       "size": 261241,
       "path": "dist/assets/katex-BlHpptmG.js"
     },
-    "dist/assets/layout-BmZC1_2p.js": {
-      "hash": "cf9485919c4e1b6383258eef102730f28151ffef56004151a57390705bac0ace",
+    "dist/assets/layout-D7egZuk5.js": {
+      "hash": "504eecc8e7a1cc7b74d1108d67124dc1c3ede7c11e1f9f963b9c8e034b6d8432",
       "size": 27379,
-      "path": "dist/assets/layout-BmZC1_2p.js"
+      "path": "dist/assets/layout-D7egZuk5.js"
     },
-    "dist/assets/linear-DZIOhFcb.js": {
-      "hash": "726f15baf0cac53fe37c19041557765929a0ddf9bd02c53f4bceac8524ee793c",
+    "dist/assets/linear-C-bj4Sl1.js": {
+      "hash": "0e28fc3e0587ebf4bf9ad10d4bcbebc01f97926ca135d302526da40d9a0cf822",
       "size": 5654,
-      "path": "dist/assets/linear-DZIOhFcb.js"
+      "path": "dist/assets/linear-C-bj4Sl1.js"
     },
     "dist/assets/logo-BMUVAfnD.png": {
       "hash": "e5a82c578896db36df74e240237fc2c7e8f12a995825f2159175a8c8f5dc5752",
@@ -217,65 +217,65 @@
       "size": 11037,
       "path": "dist/assets/logo-zai-BYMvh8zI.svg"
     },
-    "dist/assets/mindmap-definition-VGOIOE7T-CS04WMcP.js": {
-      "hash": "ca62ca4f4faf493bb82890b491d449f2a0124c70c549e5e843917a4f6c714ba6",
+    "dist/assets/mindmap-definition-VGOIOE7T-BFzty-FE.js": {
+      "hash": "6f93c487e32263804b1db27a0236f549f19a8bd0e39d93d3020d52b918a6fd7e",
       "size": 21002,
-      "path": "dist/assets/mindmap-definition-VGOIOE7T-CS04WMcP.js"
+      "path": "dist/assets/mindmap-definition-VGOIOE7T-BFzty-FE.js"
     },
     "dist/assets/ordinal-Cboi1Yqb.js": {
       "hash": "71be569ce2355b7f256a834b3a4c11668fe80a880b3587c1b3b14e9e5dedf478",
       "size": 1189,
       "path": "dist/assets/ordinal-Cboi1Yqb.js"
     },
-    "dist/assets/pieDiagram-ADFJNKIX-DNrqEis-.js": {
-      "hash": "abcb60ec2990913483cb1027b0bc9e87f5561a7476d2ff079ee888b5346944a7",
+    "dist/assets/pieDiagram-ADFJNKIX--gq-VOy0.js": {
+      "hash": "a93820ef0a04391a2385eb83a56205894a5448eedd6b72ba4ca6d1ffdb9b16aa",
       "size": 5228,
-      "path": "dist/assets/pieDiagram-ADFJNKIX-DNrqEis-.js"
+      "path": "dist/assets/pieDiagram-ADFJNKIX--gq-VOy0.js"
     },
-    "dist/assets/quadrantDiagram-AYHSOK5B-MHBwp_6O.js": {
-      "hash": "f2e1faf9da70cf260e462059358d56afc86b46f6166e4e886ce392a7311ad71b",
+    "dist/assets/quadrantDiagram-AYHSOK5B-OTzsRt8x.js": {
+      "hash": "a41482f0b9d2835fc3b57b952e11045b9189835c5db1790ed8c1ed8d71d3cbf3",
       "size": 34285,
-      "path": "dist/assets/quadrantDiagram-AYHSOK5B-MHBwp_6O.js"
+      "path": "dist/assets/quadrantDiagram-AYHSOK5B-OTzsRt8x.js"
     },
-    "dist/assets/requirementDiagram-UZGBJVZJ-Cy8fomE-.js": {
-      "hash": "d470d05834b11235545ee72c1866fbb0b2cc2522a6e7c7a1700137feacb97f64",
+    "dist/assets/requirementDiagram-UZGBJVZJ-DnDxn5Vm.js": {
+      "hash": "a6a8e30325dd9c47fdb4d56b39a2b0a401d516c9b481bfef351e67c5180fef61",
       "size": 30228,
-      "path": "dist/assets/requirementDiagram-UZGBJVZJ-Cy8fomE-.js"
+      "path": "dist/assets/requirementDiagram-UZGBJVZJ-DnDxn5Vm.js"
     },
-    "dist/assets/sankeyDiagram-TZEHDZUN-HPZ5TORt.js": {
-      "hash": "337d5fc57b8d14aeaf3bf82bfd5c70327f2045d111a755d5db29141a1dcc8ce4",
+    "dist/assets/sankeyDiagram-TZEHDZUN-Bal-9OPs.js": {
+      "hash": "3ac33b9a5fb844d83af40f60a7687dab42ca4fab9b6d4f515d19f151ed51b166",
       "size": 22198,
-      "path": "dist/assets/sankeyDiagram-TZEHDZUN-HPZ5TORt.js"
+      "path": "dist/assets/sankeyDiagram-TZEHDZUN-Bal-9OPs.js"
     },
-    "dist/assets/sequenceDiagram-WL72ISMW-BwzWC5w3.js": {
-      "hash": "694f69c74fa9d2e8715335e36f8c2c2714afbf1ebce49bb50e3fa8e8e736afaa",
+    "dist/assets/sequenceDiagram-WL72ISMW-BCK-HLNe.js": {
+      "hash": "90b65f9e0c01905db450522a1a060fa500639473ec0e4139b684cdf08c273d4d",
       "size": 98068,
-      "path": "dist/assets/sequenceDiagram-WL72ISMW-BwzWC5w3.js"
+      "path": "dist/assets/sequenceDiagram-WL72ISMW-BCK-HLNe.js"
     },
-    "dist/assets/stateDiagram-FKZM4ZOC-DX92vjnA.js": {
-      "hash": "4ca3ed067d11f53197d4339f205856e554639b4ea3b692cfab18f9c4ee30bfd1",
+    "dist/assets/stateDiagram-FKZM4ZOC-Cwj9fVl-.js": {
+      "hash": "4fcd4f16c1b31e9befa48787a3080d58a7e2cb1f3fed30091deabbcf73c133bb",
       "size": 10351,
-      "path": "dist/assets/stateDiagram-FKZM4ZOC-DX92vjnA.js"
+      "path": "dist/assets/stateDiagram-FKZM4ZOC-Cwj9fVl-.js"
     },
-    "dist/assets/stateDiagram-v2-4FDKWEC3-DlxQs6gy.js": {
-      "hash": "10d9d932100a40b81351e0d73b3770684ec04750824c2b512d48a0d9259e0a86",
+    "dist/assets/stateDiagram-v2-4FDKWEC3-C-hMTrqr.js": {
+      "hash": "1f9e29ee8305a9870582e36d4d924fdf80d05e6152978eceaa85e80102410c65",
       "size": 356,
-      "path": "dist/assets/stateDiagram-v2-4FDKWEC3-DlxQs6gy.js"
+      "path": "dist/assets/stateDiagram-v2-4FDKWEC3-C-hMTrqr.js"
     },
-    "dist/assets/timeline-definition-IT6M3QCI-ucj-agwz.js": {
-      "hash": "2f94f55b7690fa169fdbf1663926beb2df25ef3c6c09a7bb49d0d30a00867aba",
+    "dist/assets/timeline-definition-IT6M3QCI-BF_S32Ma.js": {
+      "hash": "a67e89a426f6c46e25d923132424d2588c73f30f68397e9f8e334d49b30dbda0",
       "size": 23687,
-      "path": "dist/assets/timeline-definition-IT6M3QCI-ucj-agwz.js"
+      "path": "dist/assets/timeline-definition-IT6M3QCI-BF_S32Ma.js"
     },
-    "dist/assets/treemap-GDKQZRPO-DokK-tq3.js": {
-      "hash": "8977041453f55768a7cc4dc6f14d4856b50e8f74293a1014f2fa974b6f08f1ff",
-      "size": 453178,
-      "path": "dist/assets/treemap-GDKQZRPO-DokK-tq3.js"
+    "dist/assets/treemap-GDKQZRPO-BFny2LLh.js": {
+      "hash": "6af43f836e0f388fa12e23b14ba08d7b30f704dfce9d0a8883fef0d6062375a4",
+      "size": 452892,
+      "path": "dist/assets/treemap-GDKQZRPO-BFny2LLh.js"
     },
-    "dist/assets/xychartDiagram-PRI3JC2R-V7kE7cL_.js": {
-      "hash": "12b21a7cf4e328eb3b3def18eb4542b7af3ecaafc2372fa8957d026e38d87170",
+    "dist/assets/xychartDiagram-PRI3JC2R-BUU0u5Bu.js": {
+      "hash": "60383537a8bffd61edfc32f1c32dc14378dad851ef57b9e56fd8ceab43c2c01d",
       "size": 40171,
-      "path": "dist/assets/xychartDiagram-PRI3JC2R-V7kE7cL_.js"
+      "path": "dist/assets/xychartDiagram-PRI3JC2R-BUU0u5Bu.js"
     },
     "dist/discussion_group.png": {
       "hash": "9a7bc5225c39539afacd65f7a0e33f316c8f270b621a318ee2a4219505decc8e",
@@ -298,7 +298,7 @@
       "path": "dist/icon.png"
     },
     "dist/index.html": {
-      "hash": "9bc8530f37701db9de87b111eb685190452a4ea95f99135d46fec0926e309706",
+      "hash": "2d2bdbf58110f97487d3d1cdbc2cd56840c9ad49721c002f526356d47479813b",
       "size": 1744,
       "path": "dist/index.html"
     },
@@ -343,8 +343,8 @@
       "path": "resources/skills/_workflow-common/scripts/execute_workflow.sh"
     },
     "resources/skills/agent-browser/SKILL.md": {
-      "hash": "b4f1a45c56eac6b1fe33a38c5b7c68b2e3831be8c770efb919ff52e079173ac9",
-      "size": 29342,
+      "hash": "fcaa417babb310bc3f477998700fb909d135a624127191d9bf9c1e81d1aba8ac",
+      "size": 33712,
       "path": "resources/skills/agent-browser/SKILL.md"
     },
     "resources/skills/ai-playwright/SKILL.md": {
@@ -2617,6 +2617,26 @@
       "size": 19967,
       "path": "resources/skills/web-artifacts-builder/scripts/shadcn-components.tar.gz"
     },
+    "resources/skills/web-content-fetcher/README.md": {
+      "hash": "d136f3323bb78a107374c672930eb21cbf36f3b0154ce032041f7b3a3e9bcdf8",
+      "size": 1515,
+      "path": "resources/skills/web-content-fetcher/README.md"
+    },
+    "resources/skills/web-content-fetcher/SKILL.md": {
+      "hash": "6437a47378cd7a6bae458d852eea570545cd740a0a9f29c1af4940d0ac4e33be",
+      "size": 2170,
+      "path": "resources/skills/web-content-fetcher/SKILL.md"
+    },
+    "resources/skills/web-content-fetcher/requirements.txt": {
+      "hash": "c0fa563402d3f07b18eeec57cc42a429370ff158cd7f4a3817945dc4ff2bcc0e",
+      "size": 38,
+      "path": "resources/skills/web-content-fetcher/requirements.txt"
+    },
+    "resources/skills/web-content-fetcher/scripts/fetch.py": {
+      "hash": "dafd0a664e99e35ae8e73db95b24a04e6f663e3f4d162deac89002132183177a",
+      "size": 2670,
+      "path": "resources/skills/web-content-fetcher/scripts/fetch.py"
+    },
     "resources/skills/xlsx/LICENSE.txt": {
       "hash": "79f6d8f5b427252fa3b1c11ecdbdb6bf610b944f7530b4de78f770f38741cfaa",
       "size": 1467,
@@ -2637,110 +2657,10 @@
       "size": 2415,
       "path": "resources/skills/xuecheng/SKILL.md"
     },
-    "resources/skills/为表格添加字段/SKILL.md": {
-      "hash": "e8af66c1b876180ec8f42e4fe493848062866eafaf446905f1ba3148c066dea0",
-      "size": 1921,
-      "path": "resources/skills/为表格添加字段/SKILL.md"
-    },
-    "resources/skills/修改单选多选字段可选值/SKILL.md": {
-      "hash": "bb6cd3df27abe5a61bb489bc1ec4fa7ad69af8337f4f87ab274d8786454f5c2f",
-      "size": 1943,
-      "path": "resources/skills/修改单选多选字段可选值/SKILL.md"
-    },
-    "resources/skills/修改表格用户角色/SKILL.md": {
-      "hash": "7fe8bf39f7dac38f69e0ff5bed0a8e7fcac5854ac96581ffd4e85fbe4033740f",
-      "size": 1693,
-      "path": "resources/skills/修改表格用户角色/SKILL.md"
-    },
-    "resources/skills/删除表格记录/SKILL.md": {
-      "hash": "20ca9368182916fadb201fd589b924f2cf8751a34c32e04868ac7755387df2a3",
-      "size": 1667,
-      "path": "resources/skills/删除表格记录/SKILL.md"
-    },
-    "resources/skills/应用下新增用户/SKILL.md": {
-      "hash": "387d8dcd2d4f766c292edf869e0aa2e6affff2183d421440ddbe21a7b242ee92",
-      "size": 1630,
-      "path": "resources/skills/应用下新增用户/SKILL.md"
-    },
-    "resources/skills/应用导出为swagger/SKILL.md": {
-      "hash": "50d8bba53d28fad94521a11b79f2f85d4f6f2bf031a8e3c6ebdee87d2b8de3da",
-      "size": 1506,
-      "path": "resources/skills/应用导出为swagger/SKILL.md"
-    },
-    "resources/skills/文生图工作流/SKILL.md": {
-      "hash": "e3cef798516794da6835b9937f04b285f7ffe4675815c823e76fd5a128c253d7",
-      "size": 2780,
-      "path": "resources/skills/文生图工作流/SKILL.md"
-    },
-    "resources/skills/新建应用/SKILL.md": {
-      "hash": "3787d68a691db1a5d56918a0f7a0cbfef7ba562ca07ccf937af5a9af188ca0a4",
-      "size": 1524,
-      "path": "resources/skills/新建应用/SKILL.md"
-    },
-    "resources/skills/新建数据表/SKILL.md": {
-      "hash": "64a3aba02458301228db925f19102772d8e4ee72f667d0d2521915cf469228b1",
-      "size": 1773,
-      "path": "resources/skills/新建数据表/SKILL.md"
-    },
-    "resources/skills/新建空间/SKILL.md": {
-      "hash": "021fc41e4ae30b3b1dbb3acbb471b381331411d0581042ee7bef1d89e5416384",
-      "size": 1206,
-      "path": "resources/skills/新建空间/SKILL.md"
-    },
-    "resources/skills/查找数据表/SKILL.md": {
-      "hash": "33871cc390dd6387343a6b123696eca5a46eec29a84acfa53d0abbdae0c2dd66",
-      "size": 1739,
-      "path": "resources/skills/查找数据表/SKILL.md"
-    },
-    "resources/skills/查看应用下用户列表/SKILL.md": {
-      "hash": "fdc9603f5d2e4f5fbd89c79cb2692b7a3ecbe730d5a0e47886d00f02b6852b35",
-      "size": 1414,
-      "path": "resources/skills/查看应用下用户列表/SKILL.md"
-    },
-    "resources/skills/查看表格下用户列表/SKILL.md": {
-      "hash": "6c18b40c7b0474deacc684f4944b5f142a36f081741281687463262440b61675",
-      "size": 1521,
-      "path": "resources/skills/查看表格下用户列表/SKILL.md"
-    },
-    "resources/skills/根据数据表记录查询记录主键id/SKILL.md": {
-      "hash": "6ac1a065ff113a30c31de3d784ceb9e7b07f1cf61faa11ba9e78ecce05048ae9",
-      "size": 1940,
-      "path": "resources/skills/根据数据表记录查询记录主键id/SKILL.md"
-    },
-    "resources/skills/添加表格记录/SKILL.md": {
-      "hash": "b8e7d48033ba7d6047f9ef818b73910b64e43ad576558e6348a56f5341d38d6b",
-      "size": 1664,
-      "path": "resources/skills/添加表格记录/SKILL.md"
-    },
-    "resources/skills/编辑表格记录/SKILL.md": {
-      "hash": "d6c880faa6cbf9579e4f312d46c576e58061f4a4281cf81f92644f38c85de330",
-      "size": 1700,
-      "path": "resources/skills/编辑表格记录/SKILL.md"
-    },
-    "resources/skills/获取指定表格的数据/SKILL.md": {
-      "hash": "df10a77221478bf4e18aa9069f21bb0da23e17fe71eb48a6888983c64925c5bf",
-      "size": 2287,
-      "path": "resources/skills/获取指定表格的数据/SKILL.md"
-    },
     "resources/skills/获取用户令牌/SKILL.md": {
       "hash": "0256533f92d8acaf2fee3906bc7fcef8e8688de4bcb480cc176c0236ba6b96d9",
       "size": 1183,
       "path": "resources/skills/获取用户令牌/SKILL.md"
-    },
-    "resources/skills/获取表格指定行记录/SKILL.md": {
-      "hash": "1984f5010455eab292ace5a2bf4c246710a8e150d221cde2f2801ff6f20bb7b0",
-      "size": 1674,
-      "path": "resources/skills/获取表格指定行记录/SKILL.md"
-    },
-    "resources/skills/获取表格详细信息/SKILL.md": {
-      "hash": "9bb889707fe2cf8af4c03cd78e835e4e41df73f39956bcb4a7f1672320ffd737",
-      "size": 3062,
-      "path": "resources/skills/获取表格详细信息/SKILL.md"
-    },
-    "resources/skills/表格下新增用户/SKILL.md": {
-      "hash": "37b5cc4e8bdd54651de9b460af7ce0c846e6820a35777cb71981b4d3b8736d49",
-      "size": 1735,
-      "path": "resources/skills/表格下新增用户/SKILL.md"
     },
     "resources/skills/部署发布/SKILL.md": {
       "hash": "4e1a55122f9a4c102c8aec4c989019131c89d3e2b2a4a7f1c87e81d6c8e62a19",
