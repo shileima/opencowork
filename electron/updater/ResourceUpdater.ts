@@ -11,6 +11,7 @@
 import { app } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { execSync } from 'node:child_process'
 import AdmZip from 'adm-zip'
 import { directoryManager } from '../config/DirectoryManager'
@@ -319,7 +320,7 @@ export class ResourceUpdater {
         percentage: 70
       })
 
-      await this.applyUpdate(downloadDir, remoteManifest, (applyProgress) => {
+      await this.applyUpdate(downloadDir, filesToUpdate, (applyProgress) => {
         onProgress?.({
           stage: 'applying',
           total: applyProgress.total,
@@ -715,7 +716,18 @@ export class ResourceUpdater {
   }
 
   /**
+   * 计算文件的 SHA-256 hash（与 generate-resource-manifest.mjs 保持一致）
+   */
+  private computeFileHash(filePath: string): string {
+    const content = fs.readFileSync(filePath)
+    return crypto.createHash('sha256').update(content).digest('hex')
+  }
+
+  /**
    * 计算需要更新的文件
+   * 
+   * 除了比对两份 manifest 的 hash 之外，还会验证磁盘上实际文件的 hash，
+   * 防止 hotUpdateDir 中的文件被手动修改或损坏后永远检测不到。
    */
   private calculateUpdateFiles(
     localManifest: ResourceManifest | null,
@@ -731,11 +743,11 @@ export class ResourceUpdater {
     let matchedCount = 0
     let missingCount = 0
     let hashMismatchCount = 0
+    let diskMismatchCount = 0
 
     for (const [filePath, remoteFile] of Object.entries(remoteManifest.files)) {
       const localFile = localManifest.files[filePath]
 
-      // 文件不存在或 hash 不匹配
       if (!localFile) {
         filesToUpdate.push(remoteFile)
         missingCount++
@@ -743,11 +755,31 @@ export class ResourceUpdater {
         filesToUpdate.push(remoteFile)
         hashMismatchCount++
       } else {
-        matchedCount++
+        // manifest hash 一致，进一步验证磁盘上实际文件的 hash，
+        // 防止 hotUpdateDir 被手动修改或损坏导致状态不一致
+        const diskPath = path.join(this.hotUpdateDir, filePath)
+        if (!fs.existsSync(diskPath)) {
+          filesToUpdate.push(remoteFile)
+          missingCount++
+        } else {
+          try {
+            const actualHash = this.computeFileHash(diskPath)
+            if (actualHash !== remoteFile.hash) {
+              console.warn(`[ResourceUpdater] Disk hash mismatch (hot-update corrupted?): ${filePath}`)
+              filesToUpdate.push(remoteFile)
+              diskMismatchCount++
+            } else {
+              matchedCount++
+            }
+          } catch {
+            filesToUpdate.push(remoteFile)
+            diskMismatchCount++
+          }
+        }
       }
     }
 
-    console.log(`[ResourceUpdater] File comparison: ${matchedCount} matched, ${missingCount} missing, ${hashMismatchCount} hash mismatched, ${filesToUpdate.length} total to update`)
+    console.log(`[ResourceUpdater] File comparison: ${matchedCount} matched, ${missingCount} missing, ${hashMismatchCount} manifest-hash mismatched, ${diskMismatchCount} disk-hash mismatched, ${filesToUpdate.length} total to update`)
 
     return filesToUpdate
   }
@@ -1114,18 +1146,17 @@ export class ResourceUpdater {
    */
   private async applyUpdate(
     downloadDir: string,
-    manifest: ResourceManifest,
+    filesToUpdate: FileInfo[],
     onProgress?: (progress: { total: number; downloaded: number; current: string }) => void
   ): Promise<void> {
     try {
-      console.log('[ResourceUpdater] Applying updates to hot-update directory...')
+      console.log(`[ResourceUpdater] Applying ${filesToUpdate.length} updated files to hot-update directory...`)
 
-      const files = Object.values(manifest.files)
       let processed = 0
-      const total = files.length
+      const total = filesToUpdate.length
 
-      // 复制新文件到热更新目录
-      for (const file of files) {
+      // 只复制本次需要更新的文件（增量），避免遍历全量 manifest 产生大量"文件不存在"警告
+      for (const file of filesToUpdate) {
         const sourcePath = path.join(downloadDir, file.path)
         const targetPath = path.join(this.hotUpdateDir, file.path)
 
@@ -1136,18 +1167,16 @@ export class ResourceUpdater {
         })
 
         if (!fs.existsSync(sourcePath)) {
-          console.warn(`[ResourceUpdater] Source file not found: ${sourcePath}`)
+          console.warn(`[ResourceUpdater] Source file not found after extraction: ${sourcePath}`)
           processed++
           continue
         }
 
-        // 确保目标目录存在
         const targetParent = path.dirname(targetPath)
         if (!fs.existsSync(targetParent)) {
           fs.mkdirSync(targetParent, { recursive: true })
         }
 
-        // 复制文件到热更新目录
         fs.copyFileSync(sourcePath, targetPath)
         processed++
       }
@@ -1164,7 +1193,7 @@ export class ResourceUpdater {
       // 清理临时目录中的旧下载
       this.cleanupTempDir()
 
-      console.log(`[ResourceUpdater] Applied ${processed} files to hot-update directory`)
+      console.log(`[ResourceUpdater] Applied ${processed}/${total} files to hot-update directory`)
     } catch (error) {
       console.error('[ResourceUpdater] Failed to apply update:', error)
       throw error
