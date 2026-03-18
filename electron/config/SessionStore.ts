@@ -8,10 +8,12 @@ export interface Session {
     createdAt: number;
     updatedAt: number;
     workspaceDir?: string;
-    /** 区分会话来源：cowork（协作模式）| project（项目模式）。旧数据没有此字段视为 cowork */
-    mode?: 'cowork' | 'project';
+    /** 区分会话来源：cowork（协作模式）| project（代码模式）| automation（自动化模式）。旧数据没有此字段视为 cowork */
+    mode?: 'cowork' | 'project' | 'automation';
     messages: Anthropic.MessageParam[];
 }
+
+export type SessionMode = 'cowork' | 'project' | 'automation';
 
 interface SessionStoreSchema {
     sessions: Session[];
@@ -36,9 +38,39 @@ class SessionStore {
     }
 
     // Get all sessions (summary only, without full messages for list view)
-    getSessions(): Omit<Session, 'messages'>[] {
+    // Optionally filter by mode; for 'cowork', also handles legacy sessions without mode field
+    getSessions(mode?: SessionMode, coworkWorkspaceDir?: string): Omit<Session, 'messages'>[] {
         const sessions = this.store.get('sessions') || [];
-        return sessions.map(s => ({
+        const filtered = mode
+            ? sessions.filter(s => {
+                // cowork 模式：workspaceDir 匹配 cowork 目录时视为 cowork 会话
+                // 兼容历史数据中 mode 被误标为 'project' 的协作模式会话
+                const isCoworkDir = (dir?: string) =>
+                    !!dir && (
+                        (coworkWorkspaceDir && dir === coworkWorkspaceDir) ||
+                        dir.endsWith('/.qa-cowork') ||
+                        dir.endsWith('\\.qa-cowork')
+                    );
+                if (mode === 'cowork') {
+                    if (isCoworkDir(s.workspaceDir)) return true;
+                    if (s.mode) return s.mode === 'cowork';
+                    // 无 mode 字段的旧数据：workspaceDir 为空也视为 cowork
+                    return !s.workspaceDir;
+                }
+                if (s.mode) return s.mode === mode;
+                // Legacy data without mode field: infer from workspaceDir
+                if (mode === 'automation') {
+                    // 旧数据无 automation mode，历史上 automation session 可能被误存为 project
+                    return false;
+                } else {
+                    // project mode: workspaceDir exists and is not cowork dir
+                    if (!s.workspaceDir) return false;
+                    if (isCoworkDir(s.workspaceDir)) return false;
+                    return true;
+                }
+            })
+            : sessions;
+        return filtered.map(s => ({
             id: s.id,
             title: s.title,
             createdAt: s.createdAt,
@@ -71,7 +103,7 @@ class SessionStore {
     }
 
     // Update session messages
-    updateSession(id: string, messages: Anthropic.MessageParam[], title?: string, workspaceDir?: string, mode?: 'cowork' | 'project'): void {
+    updateSession(id: string, messages: Anthropic.MessageParam[], title?: string, workspaceDir?: string, mode?: SessionMode): void {
         const MAX_STORED_MESSAGES = 200;
         const sessions = this.store.get('sessions') || [];
         const index = sessions.findIndex(s => s.id === id);
@@ -109,7 +141,7 @@ class SessionStore {
     }
 
     // Create or update session only if it has meaningful content
-    saveSession(id: string | null, messages: Anthropic.MessageParam[], workspaceDir?: string, mode?: 'cowork' | 'project'): string {
+    saveSession(id: string | null, messages: Anthropic.MessageParam[], workspaceDir?: string, mode?: SessionMode): string {
         // Check if there's real content (user or assistant messages with actual text)
         const hasRealContent = messages.some(m => {
             const content = m.content;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Minus, Square, X, Zap, FolderKanban, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, ChevronDown, FolderOpen, FolderPlus, Trash2, Loader2, Rocket, CheckCircle, Monitor, Bot } from 'lucide-react';
 import { CoworkView } from './components/CoworkView';
 import { SettingsView } from './components/SettingsView';
@@ -94,18 +94,23 @@ function App() {
     }
   }, [activeView]);
 
-  // 从 project/automation 模式切换回 cowork 时，自动加载最近的历史任务
-  const prevActiveViewRef = useRef<ViewType | null>(null);
-  useEffect(() => {
-    const prev = prevActiveViewRef.current;
-    prevActiveViewRef.current = activeView;
-    if ((prev === 'project' || prev === 'automation') && activeView === 'cowork') {
-      setHistory([]);
+  // 切换模式：先通知主进程清空并切换，再更新本地状态，确保新视图加载的是本模式的历史
+  const handleModeSwitch = useCallback((newView: ViewType) => {
+    if (isProcessing) return;
+    if (newView === activeView) return;
+    // 1. 先通知主进程切换并清空（在 re-render 之前执行，避免旧视图的异步逻辑覆盖）
+    window.ipcRenderer.invoke('app:set-active-view', newView);
+    // 2. 立即清空聊天区
+    setHistory([]);
+    // 3. 更新视图
+    setActiveView(newView);
+    // 4. 协作模式：加载最近会话
+    if (newView === 'cowork') {
       window.ipcRenderer.invoke('session:auto-load').catch((err) => {
         console.warn('[App] session:auto-load on switch failed:', err);
       });
     }
-  }, [activeView]);
+  }, [activeView, isProcessing]);
 
   // 从 localStorage 加载资源管理器隐藏状态；任务列表面板默认展示，不恢复隐藏状态
   useEffect(() => {
@@ -887,36 +892,42 @@ ${err}
         {/* Right section: Navigation tabs + version + action buttons */}
         <div className="flex items-center gap-3 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           {/* Navigation Tabs */}
-          <div className="flex items-center gap-0.5 bg-stone-100 dark:bg-zinc-800 rounded-lg p-0.5">
+          <div
+            className="flex items-center gap-0.5 bg-stone-100 dark:bg-zinc-800 rounded-lg p-0.5"
+            title={isProcessing ? '任务执行中，请等待完成后再切换模式' : undefined}
+          >
             <button
-              onClick={() => setActiveView('cowork')}
-              title={t('cowork')}
+              onClick={() => handleModeSwitch('cowork')}
+              title={isProcessing ? '任务执行中，请等待完成后再切换模式' : t('cowork')}
+              disabled={isProcessing}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'cowork'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
-                }`}
+                } ${isProcessing && activeView !== 'cowork' ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}
             >
               <Zap size={12} />
               <span className="max-[480px]:hidden">{t('cowork')}</span>
             </button>
             <button
-              onClick={() => setActiveView('project')}
-              title={t('project')}
+              onClick={() => handleModeSwitch('project')}
+              title={isProcessing ? '任务执行中，请等待完成后再切换模式' : t('project')}
+              disabled={isProcessing}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'project'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
-                }`}
+                } ${isProcessing && activeView !== 'project' ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}
             >
               <FolderKanban size={12} />
               <span className="max-[480px]:hidden">{t('project')}</span>
             </button>
             <button
-              onClick={() => setActiveView('automation')}
-              title={t('automation')}
+              onClick={() => handleModeSwitch('automation')}
+              title={isProcessing ? '任务执行中，请等待完成后再切换模式' : t('automation')}
+              disabled={isProcessing}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'automation'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
-                }`}
+                } ${isProcessing && activeView !== 'automation' ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}
             >
               <Bot size={12} />
               <span className="max-[480px]:hidden">{t('automation')}</span>

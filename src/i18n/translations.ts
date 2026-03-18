@@ -3,7 +3,7 @@ export const translations = {
         // Navigation
         cowork: 'Cowork',
         chat: 'Chat',
-        project: 'Project',
+        project: 'Code',
         taskWorkspace: 'Task Workspace',
         chatAssistant: 'Chat Assistant',
 
@@ -431,7 +431,7 @@ export const translations = {
         // Navigation
         cowork: '协作',
         chat: '对话',
-        project: '项目',
+        project: '代码',
         taskWorkspace: '任务工作区',
         chatAssistant: '对话助手',
 

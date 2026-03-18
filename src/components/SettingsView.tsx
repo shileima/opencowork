@@ -382,7 +382,6 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         try {
             const result = await window.ipcRenderer?.invoke('resource:clear-hot-update') as { success: boolean; error?: string; message?: string };
             if (result?.success) {
-                // 清理成功后自动重启应用
                 setTimeout(() => {
                     window.ipcRenderer?.invoke('resource:restart-app');
                 }, 800);

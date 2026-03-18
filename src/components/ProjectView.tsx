@@ -436,9 +436,14 @@ export function ProjectView({
                     setTimeout(removeFallback, 500);
                 }
             } else {
-                // 如果有项目但没有任务，清空聊天区域并等待用户点击"新建任务"
-                setCurrentTaskId(null);
-                window.ipcRenderer.invoke('project:clear-chat').catch(() => {});
+                // 如果有项目但没有任务，新建一个空任务并加载空对话
+                const createResult = await window.ipcRenderer.invoke('project:task:create', project.id, t('newTask')) as { success: boolean; task?: ProjectTask };
+                if (createResult.success && createResult.task) {
+                    setCurrentTaskId(createResult.task.id);
+                } else {
+                    setCurrentTaskId(null);
+                    window.ipcRenderer.invoke('project:clear-chat').catch(() => {});
+                }
             }
         }
     };

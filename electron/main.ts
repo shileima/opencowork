@@ -9,7 +9,7 @@ import { createRequire } from 'node:module'
 import dotenv from 'dotenv'
 import { AgentRuntime } from './agent/AgentRuntime'
 import { configStore, TrustLevel } from './config/ConfigStore'
-import { sessionStore } from './config/SessionStore'
+import { sessionStore, SessionMode } from './config/SessionStore'
 import { scriptStore } from './config/ScriptStore'
 import { projectStore } from './config/ProjectStore'
 import { rpaProjectStore } from './config/RPAProjectStore'
@@ -370,7 +370,7 @@ app.on('before-quit', async () => {
     mainAgent = null;
     floatingBallAgent = null;
   }
-  
+
   // 5. 停止资源更新器
   if (resourceUpdater) {
     resourceUpdater.stopAutoUpdateCheck()
@@ -480,18 +480,15 @@ app.whenReady().then(() => {
   // 4. Initialize resource updater (fast, just creates instance)
   resourceUpdater = new ResourceUpdater()
   
-  // 开发环境也启用自动更新检查 (用于测试)
   const notifyUpdateFound = (updateInfo: any) => {
     console.log('[Main] Resource update found, notifying renderer...')
-    // 通知所有窗口有新版本
     mainWin?.webContents.send('resource:update-available', updateInfo)
     floatingBallWin?.webContents.send('resource:update-available', updateInfo)
   }
   
   if (app.isPackaged) {
-    resourceUpdater.startAutoUpdateCheck(1 / 60, notifyUpdateFound) // 每1分钟检查一次 (测试用)
+    resourceUpdater.startAutoUpdateCheck(1 / 60, notifyUpdateFound)
   } else {
-    // 开发环境: 每1分钟检查一次
     resourceUpdater.startAutoUpdateCheck(1 / 60, notifyUpdateFound)
   }
 
@@ -538,7 +535,7 @@ ipcMain.handle('agent:send-message', async (event, message: string | { content: 
   const targetAgent = isFloatingBall ? floatingBallAgent : mainAgent
   console.log('[Preview:Debug] agent:send-message received, viewContext:', viewContext, 'isFloatingBall:', isFloatingBall, 'targetAgent exists:', !!targetAgent, 'currentTaskIdForSession:', currentTaskIdForSession, 'currentRpaTaskIdForSession:', currentRpaTaskIdForSession)
   if (!targetAgent) return { error: 'Agent not initialized' }
-  // 协作视图：无项目/任务；项目视图：projectStore；自动化视图：rpaProjectStore
+  // 协作视图：无项目/任务；代码视图：projectStore；自动化视图：rpaProjectStore
   const isCoworkView = viewContext === 'cowork' || isFloatingBall
   const isAutomationView = viewContext === 'automation'
   let currentProject = null
@@ -604,7 +601,22 @@ ipcMain.handle('agent:abort', (event) => {
 })
 
 ipcMain.handle('app:set-active-view', (_, view: 'cowork' | 'project' | 'automation') => {
+  const prevView = currentActiveView
   currentActiveView = view
+
+  // 切换到 project 或 automation 时：清空两个模式的 task 上下文，清空 agent，等待新视图加载本模式第一条任务
+  if (view === 'project' || view === 'automation') {
+    currentTaskIdForSession = null
+    currentRpaTaskIdForSession = null
+    sessionStore.setSessionId(null, false)
+    if (mainAgent) {
+      mainAgent.clearHistory()
+    }
+    if (mainWin && !mainWin.isDestroyed()) {
+      mainWin.webContents.send('agent:history-update', [])
+    }
+    console.log(`[Main] Switched to ${view} mode, cleared chat (prev: ${prevView})`)
+  }
 })
 
 ipcMain.handle('agent:confirm-response', (_, { id, approved, remember, tool, path }: { id: string, approved: boolean, remember?: boolean, tool?: string, path?: string }) => {
@@ -721,8 +733,9 @@ ipcMain.handle('agent:get-history', (event) => {
 })
 
 // Session Management
-ipcMain.handle('session:list', () => {
-  return sessionStore.getSessions()
+ipcMain.handle('session:list', (_, mode?: SessionMode) => {
+  const coworkDir = directoryManager.getCoworkWorkspaceDir()
+  return sessionStore.getSessions(mode, coworkDir)
 })
 
 /** Cowork 模式挂载时按需加载最近会话，避免 Project 模式被 Cowork 历史覆盖 */
@@ -765,9 +778,10 @@ ipcMain.handle('session:save', (event, messages: Anthropic.MessageParam[]) => {
 
   try {
     // 根据当前视图模式来标记 session 来源并关联任务
+    // 直接使用 currentActiveView 决定 sessionMode，避免切换到 cowork 模式后仍用旧 projectStore 状态判断
+    const sessionMode: SessionMode = currentActiveView
     const isAutomation = currentActiveView === 'automation'
     const currentProject = isAutomation ? rpaProjectStore.getCurrentProject() : projectStore.getCurrentProject()
-    const sessionMode: 'cowork' | 'project' = currentProject ? 'project' : 'cowork'
     const taskIdForSession = isAutomation ? currentRpaTaskIdForSession : currentTaskIdForSession
 
     // Use the smart save method that only saves if there's meaningful content
@@ -821,9 +835,9 @@ ipcMain.handle('session:save-current', (event) => {
   const authorizedFolders = configStore.getAll().authorizedFolders || []
   const currentWorkspaceDir = authorizedFolders.length > 0 ? authorizedFolders[0].path : undefined
   try {
+    const sessionMode: SessionMode = currentActiveView
     const isAutomation = currentActiveView === 'automation'
     const currentProject = isAutomation ? rpaProjectStore.getCurrentProject() : projectStore.getCurrentProject()
-    const sessionMode: 'cowork' | 'project' = currentProject ? 'project' : 'cowork'
     const taskIdForSession = isAutomation ? currentRpaTaskIdForSession : currentTaskIdForSession
     const sessionId = sessionStore.saveSession(currentId, messages, currentWorkspaceDir, sessionMode)
     if (sessionId) {
@@ -1165,25 +1179,20 @@ ipcMain.handle('config:test-connection', async (_, { apiKey, apiUrl, model }) =>
 })
 
 ipcMain.handle('app:info', () => {
-  // 获取有效版本（优先热更新版本）
   const appVersion = app.getVersion()
   const hotUpdateVersion = directoryManager.getHotUpdateVersion()
   const effectiveVersion = resourceUpdater?.getCurrentVersion() || appVersion
-  
-  console.log(`[Main] app:info - appVersion: ${appVersion}, hotUpdateVersion: ${hotUpdateVersion}, effectiveVersion: ${effectiveVersion}`)
-  
   return {
     name: 'QACowork',
     version: effectiveVersion,
-    appVersion: appVersion, // 原始应用版本
-    hotUpdateVersion: hotUpdateVersion, // 热更新版本（如果有）
-    author: 'shileima', 
+    appVersion: appVersion,
+    hotUpdateVersion: hotUpdateVersion,
+    author: 'shileima',
     homepage: 'https://github.com/shileima/opencowork'
   };
 })
 
 ipcMain.handle('app:get-version', () => {
-  // 返回有效版本（优先热更新版本）
   return resourceUpdater?.getCurrentVersion() || app.getVersion()
 })
 
@@ -1324,7 +1333,6 @@ ipcMain.handle('resource:check-update', async () => {
     if (!resourceUpdater) {
       return { success: false, error: 'Resource updater not initialized' }
     }
-
     const result = await resourceUpdater.checkForUpdates()
     return { success: true, ...result }
   } catch (error: any) {
@@ -1339,49 +1347,33 @@ ipcMain.handle('resource:perform-update', async () => {
     if (!resourceUpdater) {
       return { success: false, error: 'Resource updater not initialized' }
     }
-
-    // 发送更新进度
     const success = await resourceUpdater.performUpdate((progress) => {
       mainWin?.webContents.send('resource:update-progress', progress)
       floatingBallWin?.webContents.send('resource:update-progress', progress)
     })
-
     if (success) {
-      // 更新完成后获取新版本号
       const newVersion = resourceUpdater.getCurrentVersion()
       console.log(`[Main] Resource update completed. New version: ${newVersion}`)
-
-      // 更新成功后延迟 1.5 秒自动重启，给前端时间展示完成提示
       setTimeout(() => {
         console.log('[Main] Auto-restarting after resource update...')
         try {
           app.relaunch()
           app.quit()
         } catch (restartError) {
-          console.error('[Main] app.relaunch() failed, trying alternative restart:', restartError)
+          console.error('[Main] app.relaunch() failed:', restartError)
           try {
-            // 备用方案：直接退出，让用户手动重启
             app.exit(0)
           } catch (exitError) {
             console.error('[Main] app.exit() also failed:', exitError)
           }
         }
       }, 1500)
-      
-      return { 
-        success: true, 
-        willRestart: true,
-        message: `资源更新完成！新版本: v${newVersion}`,
-        version: newVersion
-      }
+      return { success: true, willRestart: true, message: `资源更新完成！新版本: v${newVersion}`, version: newVersion }
     }
-
     return { success: false, error: '更新失败：未知错误' }
   } catch (error: any) {
     console.error('[Main] Resource update failed:', error)
-    const errorMessage = error?.message || '未知错误'
-    console.error('[Main] Error details:', error)
-    return { success: false, error: `更新失败: ${errorMessage}` }
+    return { success: false, error: `更新失败: ${error?.message || '未知错误'}` }
   }
 })
 
@@ -1622,15 +1614,12 @@ ipcMain.handle('window:restore-from-mini', () => restoreMainWindowFromMini())
  * 优先使用热更新目录，否则使用内置资源
  */
 function getBuiltinMcpConfigPath(): string | null {
-  // 优先检查热更新目录
   const hotUpdateMcpDir = directoryManager.getHotUpdateMcpDir()
   const hotUpdateMcpConfig = path.join(hotUpdateMcpDir, 'builtin-mcp.json')
   if (fs.existsSync(hotUpdateMcpConfig)) {
     console.log('[MCP] Using hot-update MCP config')
     return hotUpdateMcpConfig
   }
-
-  // 回退到内置资源
   const builtinPath = directoryManager.getBuiltinMcpConfigPath()
   if (fs.existsSync(builtinPath)) {
     return builtinPath
@@ -1723,14 +1712,11 @@ const getSkillsDir = () => directoryManager.getSkillsDir();
  * 优先使用热更新目录，否则使用内置资源
  */
 const getBuiltinSkillsSourceDir = (): string | null => {
-  // 优先检查热更新目录
   const hotUpdateSkillsDir = directoryManager.getHotUpdateSkillsDir()
   if (fs.existsSync(hotUpdateSkillsDir)) {
     console.log('[Skills] Using hot-update skills directory')
     return hotUpdateSkillsDir
   }
-
-  // 回退到内置资源
   if (app.isPackaged) {
     const possiblePaths = [
       path.join(process.resourcesPath, 'resources', 'skills'),
@@ -2109,12 +2095,12 @@ ipcMain.handle('project:create-new', async (event, name: string) => {
   if (!name || typeof name !== 'string') return { success: false, error: 'Invalid project name' };
   const sanitized = name.trim().replace(/[/\\:*?"<>|]/g, '-').replace(/-+/g, '-') || 'project';
 
-  // 模板路径：优先热更新目录，再回退到内置（与 skills/dist 一致）
-  const hotUpdateTemplatesDir = directoryManager.getHotUpdateTemplatesDir();
-  const hotUpdateReactVite = path.join(hotUpdateTemplatesDir, 'react-vite');
-  let templateDir: string;
+  // 模板路径：优先热更新目录，再回退到内置
+  const hotUpdateTemplatesDir = directoryManager.getHotUpdateTemplatesDir()
+  const hotUpdateReactVite = path.join(hotUpdateTemplatesDir, 'react-vite')
+  let templateDir: string
   if (fs.existsSync(hotUpdateReactVite)) {
-    templateDir = hotUpdateReactVite;
+    templateDir = hotUpdateReactVite
   } else if (app.isPackaged) {
     templateDir = path.join(process.resourcesPath, 'templates', 'react-vite');
   } else {
@@ -2205,7 +2191,7 @@ ipcMain.handle('project:get-current', () => {
   return projectStore.getCurrentProject();
 });
 
-// Project 模式：切换到项目视图时，确保主工作目录为 ~/.qa-cowork（不发送 project:switched 事件）
+// Code 模式：切换到代码视图时，确保主工作目录为 ~/.qa-cowork（不发送 project:switched 事件）
 ipcMain.handle('project:ensure-working-dir', () => {
   const project = projectStore.getCurrentProject();
   if (project) applyProjectWorkingDirs(project);
@@ -4283,37 +4269,34 @@ function autoLoadLatestSession() {
       console.log('[Main] Agent not ready, skip auto-load session')
       return
     }
-    
-    const sessions = sessionStore.getSessions()
+
     const coworkWorkspaceDir = directoryManager.getCoworkWorkspaceDir()
-    if (sessions && sessions.length > 0) {
-      // 只加载 cowork 模式的会话，避免加载 project 模式任务历史
-      // 判断规则：
-      //   1. 有 mode 字段时：直接按 mode === 'cowork' 判断（新数据）
-      //   2. 无 mode 字段的旧数据：通过 workspaceDir 判断
-      //      - workspaceDir 为空 或 等于 ~/.qa-cowork 目录 → cowork 会话
-      //      - workspaceDir 是其他路径（项目目录）→ project 会话，排除
-      const coworkSessions = sessions.filter(s => {
-        if (s.mode) return s.mode === 'cowork'
-        // 旧数据兜底：workspaceDir 是 cowork 目录或为空才认定为 cowork 会话
-        if (!s.workspaceDir) return true
-        return s.workspaceDir === coworkWorkspaceDir || s.workspaceDir.endsWith('/.qa-cowork') || s.workspaceDir.endsWith('\\.qa-cowork')
-      })
-      const sortedSessions = [...coworkSessions].sort((a, b) => b.updatedAt - a.updatedAt)
-      const latestSession = sortedSessions[0]
-      
-      if (latestSession) {
-        console.log(`[Main] Auto-loading latest session: ${latestSession.id} (${latestSession.title})`)
-        sessionStore.setSessionId(latestSession.id, false)
-        const fullSession = sessionStore.getSession(latestSession.id)
-        if (fullSession && fullSession.messages.length > 0) {
-          mainAgent.loadHistory(fullSession.messages)
-          mainWin?.webContents.send('session:auto-loaded', latestSession.id)
-          console.log(`[Main] Successfully auto-loaded session: ${latestSession.title}`)
+    // 使用 SessionStore 的过滤逻辑，与历史任务面板「历史任务」列表一致
+    const coworkSessions = sessionStore.getSessions('cowork', coworkWorkspaceDir)
+    const sortedSessions = [...coworkSessions].sort((a, b) => b.updatedAt - a.updatedAt)
+    const latestSession = sortedSessions[0]
+
+    if (latestSession) {
+      console.log(`[Main] Auto-loading latest session: ${latestSession.id} (${latestSession.title})`)
+      sessionStore.setSessionId(latestSession.id, false)
+      const fullSession = sessionStore.getSession(latestSession.id)
+      if (fullSession && fullSession.messages.length > 0) {
+        mainAgent.loadHistory(fullSession.messages)
+        if (mainWin && !mainWin.isDestroyed()) {
+          mainWin.webContents.send('agent:history-update', fullSession.messages)
         }
+        mainWin?.webContents.send('session:auto-loaded', latestSession.id)
+        console.log(`[Main] Successfully auto-loaded session: ${latestSession.title}`)
+        return
       }
-    } else {
-      console.log('[Main] No cowork sessions found, skipping auto-load')
+    }
+
+    // 无 cowork 会话，或最近会话为空：初始化干净的新会话状态
+    console.log('[Main] No cowork sessions found or latest is empty, initializing new session')
+    sessionStore.setSessionId(null, false)
+    mainAgent.clearHistory()
+    if (mainWin && !mainWin.isDestroyed()) {
+      mainWin.webContents.send('agent:history-update', [])
     }
   } catch (error) {
     console.error('[Main] Error auto-loading latest session:', error)

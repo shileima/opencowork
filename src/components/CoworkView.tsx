@@ -71,8 +71,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
 
 
     useEffect(() => {
-        // Cowork 模式挂载时按需加载最近会话（不再在启动时全局加载，避免 Project 模式被 Cowork 历史覆盖）
-        window.ipcRenderer.invoke('session:auto-load').catch((err) => console.warn('[CoworkView] session:auto-load failed:', err));
+        // 会话加载由 App.tsx 在切换到协作模式时统一触发（session:auto-load），此处不再重复调用
         window.ipcRenderer.invoke('config:get-all').then((cfg) => {
             setConfig(cfg as any); // Use full config
         });
@@ -109,7 +108,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
             // 标记正在加载会话，避免自动保存覆盖
             isLoadingSessionRef.current = true;
             // 刷新会话列表
-            window.ipcRenderer.invoke('session:list').then((list) => {
+            window.ipcRenderer.invoke('session:list', 'cowork').then((list) => {
                 setSessions(list as SessionSummary[]);
             });
         });
@@ -169,7 +168,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                             if (showHistory) {
                                 // 延迟一下，确保会话已保存到存储
                                 setTimeout(() => {
-                                    window.ipcRenderer.invoke('session:list').then((list) => {
+                                    window.ipcRenderer.invoke('session:list', 'cowork').then((list) => {
                                         setSessions(list as SessionSummary[]);
                                     });
                                 }, 300);
@@ -207,7 +206,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
 
         const removeContextSwitchedListener = window.ipcRenderer.on('agent:context-switched', () => {
             showToast(t('contextSwitchedToNewSession'), 'info');
-            window.ipcRenderer.invoke('session:list').then((list) => {
+            window.ipcRenderer.invoke('session:list', 'cowork').then((list) => {
                 setSessions(list as SessionSummary[]);
             });
         });
@@ -250,7 +249,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
     // Fetch session list when history panel is opened
     useEffect(() => {
         if (showHistory) {
-            window.ipcRenderer.invoke('session:list').then((list) => {
+            window.ipcRenderer.invoke('session:list', 'cowork').then((list) => {
                 setSessions(list as SessionSummary[]);
             });
         }
@@ -261,7 +260,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
         if (!showHistory) return;
         
         const interval = setInterval(() => {
-            window.ipcRenderer.invoke('session:list').then((list) => {
+            window.ipcRenderer.invoke('session:list', 'cowork').then((list) => {
                 setSessions(list as SessionSummary[]);
             });
         }, 2000); // 每2秒刷新一次
@@ -499,7 +498,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                 // 刷新历史任务列表（如果打开的话）
                                 if (showHistory) {
                                     setTimeout(() => {
-                                        window.ipcRenderer.invoke('session:list').then((list) => {
+                                        window.ipcRenderer.invoke('session:list', 'cowork').then((list) => {
                                             setSessions(list as SessionSummary[]);
                                         });
                                     }, 100);

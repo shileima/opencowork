@@ -55,19 +55,15 @@ export class SkillManager {
      * 优先使用热更新目录，否则使用内置资源
      */
     private async getBuiltinSkillsSourceDir(): Promise<string | null> {
-        // 优先检查热更新目录
         const hotUpdateSkillsDir = directoryManager.getHotUpdateSkillsDir();
         if (await this.pathExists(hotUpdateSkillsDir)) {
             console.log('[SkillManager] Using hot-update skills directory');
             return hotUpdateSkillsDir;
         }
-
-        // 回退到内置资源
         const builtinDir = directoryManager.getBuiltinSkillsDir();
         if (await this.pathExists(builtinDir)) {
             return builtinDir;
         }
-
         return null;
     }
 

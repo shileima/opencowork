@@ -48,7 +48,7 @@ export function FloatingBallPage() {
     // Fetch session list when history is opened
     useEffect(() => {
         if (showHistory) {
-            window.ipcRenderer.invoke('session:list').then((list) => {
+            window.ipcRenderer.invoke('session:list', 'cowork').then((list) => {
                 setSessions(list as SessionSummary[]);
             });
         }
@@ -137,7 +137,7 @@ ${error}
             }
             showToast(t('contextSwitchedToNewSession'), 'info');
             if (showHistory) {
-                window.ipcRenderer.invoke('session:list').then((list) => {
+                window.ipcRenderer.invoke('session:list', 'cowork').then((list) => {
                     setSessions(list as SessionSummary[]);
                 });
             }

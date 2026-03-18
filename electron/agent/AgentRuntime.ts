@@ -1011,15 +1011,15 @@ When creating new projects or generating code, if the user does NOT specify a te
 **When to deviate**: Only use a different stack if the user explicitly specifies it (e.g., "use Next.js", "use Vue", "use npm instead of pnpm").
 
 ### Tool Usage Protocol
-${currentProject && !isAutomation ? `⚠️ **PROJECT MODE - STRICT CONSTRAINTS**:
-You are in **Project Mode**. Your ONLY purpose is to generate code files for the user's project.
+${currentProject && !isAutomation ? `⚠️ **当前模式：CODE MODE（代码模式）**:
+You are in **Code Mode**. Your ONLY purpose is to generate code files for the user's project.
 - **FORBIDDEN**: Do NOT use browser automation skills (agent-browser, webapp-testing, etc.)
 - **FORBIDDEN**: Do NOT use web search or information retrieval skills
 - **FORBIDDEN**: Do NOT attempt to search the internet or access external URLs
 - **ALLOWED**: Only use \`write_file\`, \`read_file\`, \`list_dir\`, \`run_command\` (for pnpm install/dev), \`open_browser_preview\`, \`kill_project_dev_server\`
 - **ALLOWED**: Only use \`react-project-builder\` skill if needed for project structure guidance
-- If the user asks something unrelated to code generation (e.g., searching for information, querying external services), politely explain that Project Mode is focused on code generation and ask them to clarify what code they need.
-` : currentProject && isAutomation ? `⚠️ **AUTOMATION MODE - RPA 自动化脚本**:
+- If the user asks something unrelated to code generation (e.g., searching for information, querying external services), politely explain that Code Mode is focused on code generation and ask them to clarify what code they need.
+` : currentProject && isAutomation ? `⚠️ **当前模式：AUTOMATION MODE（自动化模式）**:
 You are in **Automation Mode**. **Default**: Create and execute Playwright scripts (follow **ai-playwright** skill: task analysis → DOM probe → generate script → install deps + run → screenshot each step). Do NOT use agent-browser unless the user explicitly asks for it or Playwright execution fails.
 - **PREFER**: ai-playwright (Playwright scripts). **FALLBACK**: agent-browser only when user explicitly requests or Playwright unavailable.
 - **ALLOWED**: write_file, read_file, list_dir, run_command (node/pnpm for Playwright), agent-browser only when needed as above.
@@ -1029,7 +1029,13 @@ You are in **Automation Mode**. **Default**: Create and execute Playwright scrip
 - **Generate PDF/file**: Do NOT put PDF or file generation logic inside the automation script. Use **generate-file** skill for that; automation script only does web operations. Each run executes only the main script to re-do web operations.
 - **Fresh data on each run**: If the script to run reads local JSON/data to produce PDF or reports and the user wants "latest content" each time, run the **data-fetch/crawl** step or script first (e.g. open page, scrape, write JSON), then run the current script. Do NOT assume local JSON is up-to-date unless the user explicitly says "use local data". See ai-playwright and generate-file skills.
 - **New tab / active tab**: When generating scripts, you MUST explicitly mark which step opens a new browser tab (e.g. \`opensNewTab: true\`). Before each step, verify: (1) whether a new tab has opened and switch to it if needed, (2) that you are operating on the active tab. See ai-playwright skill for \`waitForEvent('page')\` and tab verification.
-` : `1. **Skills First**: Before any task, check for relevant skills in \`${skillsDir}\`
+` : `⚡ **当前模式：COWORK MODE（协作模式）**:
+You are in **Cowork Mode**. This is the general-purpose AI assistant mode for flexible task execution, research, file management, coding, browser automation, and any other tasks.
+- **ALLOWED**: All skills and tools — browser automation (agent-browser), web search, file operations, code execution, terminal commands, etc.
+- **No project constraint**: You are NOT inside a specific project. No code-generation-only restriction applies.
+- **Output files**: By default, save generated files (Excel, PDF, CSV, images, data files, etc.) to \`${coworkOutputDir}\`
+- **Workspace**: The default working directory is the .qa-cowork directory; use it for storing task artifacts.
+1. **Skills First**: Before any task, check for relevant skills in \`${skillsDir}\`
 `}2. **MCP Integration**: Leverage available MCP servers for enhanced capabilities
 3. **Tool Prefixes**: MCP tools use namespace prefixes (e.g., \`tool_name__action\`)
 
@@ -1107,6 +1113,7 @@ When executing Playwright automation scripts:
 - **Exception**: If the script explicitly requires closing (e.g., cleanup scripts), follow the script's logic, but prefer keeping it open when in doubt
 
 ## Current Context
+**当前模式 (Current Mode)**: ${!isAutomation && !currentProject ? '⚡ 协作模式（Cowork Mode）— 通用任务助手，无项目约束，所有技能和工具均可用' : isAutomation && currentProject ? '🤖 自动化模式（Automation Mode）— RPA 脚本专属，使用 Playwright 自动化' : '💻 代码模式（Code Mode）— 代码生成专属，仅限文件读写与命令执行'}
 **Working Directory**: ${workingDirContext}
 **Skills Directory**: \`${skillsDir}\`
 
@@ -1411,7 +1418,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         const meituanUrl = this.tryGetMeituanUrlFromAgentBrowserCommand(args.command);
                                         const commandToRun = meituanUrl != null
                                             ? this.getOpenInDefaultBrowserCommand(meituanUrl.startsWith('http') ? meituanUrl : `https://${meituanUrl}`)
-                                            : this.rewriteAgentBrowserCommandForMeituan(args.command);
+                                            : this.rewriteAgentBrowserCommandForPersistence(args.command);
                                         result = await this.fsTools.runCommand({ ...args, command: commandToRun }, defaultCwd);
                                         // 开发服务器启动后自动打开内置浏览器并导航到预览地址
                                         console.log('[Preview:Debug] run_command result includes [Dev server]:', result.includes('[Dev server started in background]'));
@@ -1802,6 +1809,9 @@ ${skillInfo.instructions}
     /** 美团内网专用 session，agent-browser 会持久化到 ~/.agent-browser/meituan-sso/，首次扫码后后续免扫码 */
     private static MEITUAN_SSO_SESSION = 'meituan-sso';
 
+    /** 非美团外部站点的默认持久化 session-name，首次登录后 cookie 自动保存，后续重启免登录 */
+    private static DEFAULT_BROWSER_SESSION_NAME = 'opencowork-default';
+
     /**
      * 若为 agent-browser open <美团内网 URL> 且未指定 --session，则改写为在 open <url> 之后插入 --session meituan-sso，
      * 使登录态持久化到同一 profile，实现「只需第一次扫码」。
@@ -1825,6 +1835,23 @@ ${skillInfo.instructions}
         const sessionPart = hasSession ? '' : ` --session ${AgentRuntime.MEITUAN_SSO_SESSION}`;
         const sessionNamePart = hasSessionName ? '' : ` --session-name ${AgentRuntime.MEITUAN_SSO_SESSION}`;
         return prefix + sessionPart + sessionNamePart + (rest ? ' ' + rest : '');
+    }
+
+    /**
+     * 对所有非美团的 agent-browser open 命令注入 --session-name opencowork-default，
+     * 使 agent-browser 将 cookies/localStorage 持久化到本地 JSON 状态文件。
+     * 首次使用某网站需手动登录（headed 模式），登录完成后状态自动保存；
+     * 此后每次重启 agent-browser daemon，都会从状态文件恢复登录态，无需再次登录。
+     */
+    private rewriteAgentBrowserCommandForPersistence(command: string): string {
+        const trimmed = command.trim();
+        const urlMatch = trimmed.match(AgentRuntime.AGENT_BROWSER_OPEN_URL_REGEX);
+        if (!urlMatch) return command;
+        const hasSessionName = /--session-name\s+\S+/.test(trimmed);
+        if (hasSessionName) return command;
+        const prefix = urlMatch[0].replace(/\s*$/, '');
+        const rest = trimmed.slice(urlMatch[0].length);
+        return prefix + ` --session-name ${AgentRuntime.DEFAULT_BROWSER_SESSION_NAME}` + (rest ? ' ' + rest : '');
     }
 
     /**
