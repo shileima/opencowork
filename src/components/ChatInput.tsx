@@ -225,15 +225,15 @@ export function ChatInput({
                         `}</style>
 
                         {/* Toolbar Row */}
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-0.5">
+                        <div className="flex items-center justify-between gap-1">
+                            <div className="flex items-center gap-0.5 min-w-0 overflow-hidden">
                                 {lockedProjectName ? (
                                     <div
-                                        className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-stone-600 dark:text-zinc-400 bg-stone-100/80 dark:bg-zinc-800 rounded-lg cursor-default"
-                                        title={t('currentProject') || '当前项目'}
+                                        className="flex items-center gap-1 pl-0 pr-2 py-1 text-xs font-medium text-stone-600 dark:text-zinc-400 bg-stone-100/80 dark:bg-zinc-800 rounded-lg cursor-default min-w-0"
+                                        title={lockedProjectName}
                                     >
                                         <FolderOpen size={14} className="shrink-0" />
-                                        <span className="truncate max-w-[100px]">{lockedProjectName}</span>
+                                        <span className="truncate max-w-[60px]">{lockedProjectName}</span>
                                     </div>
                                 ) : (
                                     <button
@@ -380,7 +380,7 @@ export function ChatInput({
                             </div>
 
                             {/* Send/Stop Button */}
-                            <div>
+                            <div className="shrink-0">
                                 {isProcessing ? (
                                     <button
                                         type="button"

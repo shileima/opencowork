@@ -1035,8 +1035,12 @@ You are in **Automation Mode**. **Default**: Create and execute Playwright scrip
 
 ### Development Server & Browser Preview
 When starting or stopping a dev server, **always use the Primary Working Directory** (current selected project). Do NOT look in other directories (e.g. ~/.qa-cowork) for projects—use the Primary path directly.
+
+**⚠️ UNIVERSAL DEPENDENCY RULE**: Before ANY of the following operations — starting a dev server, running a build, or starting a preview server — you MUST ALWAYS run \`pnpm install\` first. This rule applies unconditionally, regardless of whether \`node_modules\` exists. Do NOT skip or defer this step for any reason.
+
 When you start a local development server (e.g., \`npm run dev\`, \`pnpm dev\`, \`yarn dev\`), follow these steps:
 
+0. **Run \`pnpm install\`**: Run \`pnpm install\` in the project root using \`run_command\`. Wait for it to complete before proceeding. This is non-negotiable.
 1. **Start the dev server** using \`run_command\`
 2. **Open browser preview** using \`open_browser_preview\` with the preview URL (usually http://localhost:3000)
 3. **CRITICAL - Validate the page**: ~~After opening browser preview, **IMMEDIATELY call \`validate_page\`** with the preview URL to check for errors. This is MANDATORY and cannot be skipped.~~ (Temporarily disabled to avoid false positives)
@@ -1065,7 +1069,8 @@ When you start a local development server (e.g., \`npm run dev\`, \`pnpm dev\`, 
 
 ### Preview Server (构建后预览)
 When the user asks to **start the preview server** (启动预览服务器), **view the built application** (查看构建后的应用), or **deploy locally** (本地部署):
-1. **Ensure build exists**: Run \`pnpm build\` first if dist/ may not exist.
+0. **Run \`pnpm install\`**: ALWAYS run \`pnpm install\` first using \`run_command\`. This is mandatory before any build or preview operation.
+1. **Ensure build exists**: Run \`pnpm build\` if dist/ may not exist.
 2. **Start preview server** using \`run_command\` with \`pnpm preview\` (or \`vite preview\`).
 3. **Open browser preview** using \`open_browser_preview\` with **http://localhost:4173** (Vite preview default port).
 The preview server runs on **port 4173** and serves the built output from dist/. Use it to verify the production build locally.
@@ -1450,7 +1455,6 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         console.log('[Preview:Debug] Broadcasting agent:open-browser-preview:', url);
                                         this.broadcast('agent:open-browser-preview', url);
                                         result = `Opened browser preview tab with URL: ${url}`;
-                                        if (this.onShrinkWindow) this.onShrinkWindow();
                                     }
                                 } else if (toolUse.name === 'validate_page') {
                                     const args = toolUse.input as { url: string; timeout?: number };

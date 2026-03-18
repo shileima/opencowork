@@ -506,7 +506,7 @@ export function ProjectView({
         };
 
         console.log('[Preview:Debug] Sending preview message, taskId:', result.task.id);
-        onSendMessage('请运行本地开发服务（npm run dev 或类似命令），启动成功后自动打开内置浏览器进行预览。');
+        onSendMessage('请严格按以下顺序执行：1. 先在项目目录运行 pnpm install 安装依赖（必须执行，不可跳过）；2. pnpm install 完成后，运行 pnpm dev 启动本地开发服务；3. 服务成功启动后，调用 open_browser_preview 打开内置浏览器预览。');
     }, [currentProject, isProcessing, t, onSendMessage]);
 
     handlePreviewRef.current = handlePreview;

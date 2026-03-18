@@ -1038,16 +1038,11 @@ ipcMain.handle('script:execute', async (event, scriptId: string, userMessage?: s
   }
 })
 
-// 打开外部链接（在系统默认浏览器中打开；美团内网改用内置浏览器，避免「扫码用户登录」报错）
+// 打开外部链接（在系统默认浏览器中打开，并缩小主窗口至右下角）
 ipcMain.handle('app:open-external-url', async (_event, url: string) => {
   try {
     if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
       return { success: false, error: 'Invalid URL' }
-    }
-    // 美团内网用内置浏览器打开，避免系统浏览器报扫码登录错误
-    if (url.includes('.sankuai.com') || url.includes('.meituan.com')) {
-      mainWin?.webContents.send('agent:open-browser-preview', url)
-      return { success: true }
     }
     await shell.openExternal(url)
     shrinkMainWindowToBottomRight()
