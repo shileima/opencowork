@@ -1241,7 +1241,8 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     type: 'tool_use',
                                     id: currentToolUse.id,
                                     name: currentToolUse.name,
-                                    input: parsedInput
+                                    input: parsedInput,
+                                    caller: { type: 'direct' as const }
                                 });
                                 currentToolUse = null;
                             } else if (textBuffer) {
@@ -1812,30 +1813,8 @@ ${skillInfo.instructions}
     /** 非美团外部站点的默认持久化 session-name，首次登录后 cookie 自动保存，后续重启免登录 */
     private static DEFAULT_BROWSER_SESSION_NAME = 'opencowork-default';
 
-    /**
-     * 若为 agent-browser open <美团内网 URL> 且未指定 --session，则改写为在 open <url> 之后插入 --session meituan-sso，
-     * 使登录态持久化到同一 profile，实现「只需第一次扫码」。
-     * 注意：--session 必须放在 open <url> 之后，否则 agent-browser 会误解析为未传子命令导致认为浏览器未启动。
-     */
     /** 匹配 agent-browser [--flag [value]]* open <url>，允许 --session meituan-sso 等带值的选项 */
     private static readonly AGENT_BROWSER_OPEN_URL_REGEX = /agent-browser(?:\s+--\S+(?:\s+\S+)?)*\s+open\s+["']?(\S+?)["']?(?:\s|$)/;
-
-    private rewriteAgentBrowserCommandForMeituan(command: string): string {
-        const trimmed = command.trim();
-        const urlMatch = trimmed.match(AgentRuntime.AGENT_BROWSER_OPEN_URL_REGEX);
-        if (!urlMatch) return command;
-        const url = urlMatch[1];
-        if (!this.isMeituanIntranetUrl(url)) return command;
-        const hasSession = /--session\s+\S+/.test(trimmed);
-        const hasSessionName = /--session-name\s+\S+/.test(trimmed);
-        if (hasSession && hasSessionName) return command;
-        // 在 open "<url>" 之后插入 --session 与 --session-name，使 agent-browser 将 cookies/localStorage 持久化到 ~/.agent-browser/sessions/，第二次打开时自动恢复免扫码
-        const prefix = urlMatch[0].replace(/\s*$/, '');
-        const rest = trimmed.slice(urlMatch[0].length);
-        const sessionPart = hasSession ? '' : ` --session ${AgentRuntime.MEITUAN_SSO_SESSION}`;
-        const sessionNamePart = hasSessionName ? '' : ` --session-name ${AgentRuntime.MEITUAN_SSO_SESSION}`;
-        return prefix + sessionPart + sessionNamePart + (rest ? ' ' + rest : '');
-    }
 
     /**
      * 对所有非美团的 agent-browser open 命令注入 --session-name opencowork-default，
