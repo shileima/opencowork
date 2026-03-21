@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Minus, Square, X, Zap, FolderKanban, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, ChevronDown, FolderOpen, FolderPlus, Trash2, Loader2, Rocket, CheckCircle, Monitor, Bot } from 'lucide-react';
 import { CoworkView } from './components/CoworkView';
 import { SettingsView } from './components/SettingsView';
@@ -11,13 +11,8 @@ import { SplashScreen } from './components/SplashScreen';
 import { SsoLoginView } from './components/SsoLoginView';
 import { useI18n } from './i18n/I18nContext';
 import Anthropic from '@anthropic-ai/sdk';
-
-interface SsoUserInfo {
-  name: string;
-  subject: string;
-  mtEmpId: number;
-  expire: number;
-}
+import api from './api';
+import type { Project, RPAProject, SsoUserInfo } from './api/types';
 
 type ViewType = 'cowork' | 'project' | 'automation';
 
@@ -31,13 +26,13 @@ function App() {
   const [activeView, setActiveView] = useState<ViewType>('project');
   const [isTaskPanelHidden, setIsTaskPanelHidden] = useState(false);
   const [isExplorerPanelHidden, setIsExplorerPanelHidden] = useState(false);
-  const [projects, setProjects] = useState<any[]>([]);
-  const [currentProject, setCurrentProject] = useState<any | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
-  const [rpaProjects, setRpaProjects] = useState<any[]>([]);
-  const [currentRpaProject, setCurrentRpaProject] = useState<any | null>(null);
+  const [rpaProjects, setRpaProjects] = useState<RPAProject[]>([]);
+  const [currentRpaProject, setCurrentRpaProject] = useState<RPAProject | null>(null);
   const [showRpaProjectDropdown, setShowRpaProjectDropdown] = useState(false);
   const [isRpaExecuting, setIsRpaExecuting] = useState(false);
   const [showNewRpaProjectDialog, setShowNewRpaProjectDialog] = useState(false);
@@ -59,6 +54,17 @@ function App() {
   const NARROW_BREAKPOINT = 880;
   const [isNarrowWindow, setIsNarrowWindow] = useState(() => window.innerWidth < NARROW_BREAKPOINT);
 
+  // 缓存排序后的项目列表,避免每次渲染都重新计算
+  const sortedProjects = useMemo(() =>
+    [...projects].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
+    [projects]
+  );
+
+  const sortedRpaProjects = useMemo(() =>
+    [...rpaProjects].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
+    [rpaProjects]
+  );
+
   useEffect(() => {
     const handleResize = () => {
       const narrow = window.innerWidth < NARROW_BREAKPOINT;
@@ -76,23 +82,20 @@ function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 当切换到 Project 或 Automation 模式时最大化窗口，切换回 Cowork 时恢复窗口大小
+  // 当切换视图时，合并所有窗口管理和状态更新操作，优化性能
   useEffect(() => {
-    window.ipcRenderer.invoke('window:set-maximized', activeView === 'project' || activeView === 'automation');
-  }, [activeView]);
+    const shouldMaximize = activeView === 'project' || activeView === 'automation';
 
-  // 通知主进程当前视图，用于 session 保存时关联正确的任务
-  useEffect(() => {
-    window.ipcRenderer.invoke('app:set-active-view', activeView);
-  }, [activeView]);
-
-  // 切换到协作/会话模式时，将默认工作目录设为 ~/.qa-cowork
-  useEffect(() => {
-    if (activeView === 'cowork') {
-      window.ipcRenderer.invoke('cowork:ensure-working-dir').catch((err) => {
+    // 合并多个 IPC 调用，减少往返次数
+    Promise.all([
+      api.window.setMaximized(shouldMaximize),
+      api.app.setActiveView(activeView),
+      activeView === 'cowork' ? api.cowork.ensureWorkingDir().catch(err => {
         console.warn('[App] cowork:ensure-working-dir failed:', err);
-      });
-    }
+      }) : Promise.resolve()
+    ]).catch(err => {
+      console.error('[App] 视图切换失败:', err);
+    });
   }, [activeView]);
 
   // 切换模式：先通知主进程清空并切换，再更新本地状态，确保新视图加载的是本模式的历史
@@ -231,7 +234,7 @@ function App() {
 
   const loadProjects = async () => {
     try {
-      const list = await window.ipcRenderer.invoke('project:list') as any[];
+      const list = await api.project.list();
       setProjects(list);
     } catch (error) {
       console.error('Failed to load projects:', error);
@@ -265,10 +268,16 @@ function App() {
     const name = newProjectName.trim();
     if (!name) return;
     try {
-      const result = await window.ipcRenderer.invoke('project:create-new', name) as { success: boolean; error?: string; project?: unknown };
+      const result = await api.project.create(name);
       if (result.success) {
-        await loadProjects();
-        await loadCurrentProject();
+        // 合并后续操作,减少 IPC 往返
+        const [projects, currentProject] = await Promise.all([
+          api.project.list(),
+          api.project.getCurrent()
+        ]);
+
+        setProjects(projects);
+        setCurrentProject(currentProject);
         setShowProjectDropdown(false);
         setShowNewProjectDialog(false);
         setNewProjectName('');
@@ -284,7 +293,7 @@ function App() {
 
   const loadCurrentProject = async () => {
     try {
-      const project = await window.ipcRenderer.invoke('project:get-current') as any | null;
+      const project = await api.project.getCurrent();
       setCurrentProject(project);
       // Project 模式：确保主工作目录为 ~/.qa-cowork
       if (project) {
@@ -297,7 +306,7 @@ function App() {
 
   const loadRpaProjects = async () => {
     try {
-      const list = await window.ipcRenderer.invoke('rpa:project:list') as any[];
+      const list = await api.rpaProject.list();
       setRpaProjects(list);
     } catch (error) {
       console.error('Failed to load RPA projects:', error);
@@ -306,7 +315,7 @@ function App() {
 
   const loadCurrentRpaProject = async () => {
     try {
-      const project = await window.ipcRenderer.invoke('rpa:get-current-project') as any | null;
+      const project = await api.rpaProject.getCurrent();
       setCurrentRpaProject(project);
     } catch (error) {
       console.error('Failed to load current RPA project:', error);
@@ -330,21 +339,23 @@ function App() {
     setNewRpaProjectName('');
   };
 
-  const handleDeleteRpaProject = async (e: React.MouseEvent, project: { id: string; name: string; path?: string }) => {
+  const handleDeleteRpaProject = async (e: React.MouseEvent, project: RPAProject) => {
     e.stopPropagation();
     const confirmMessage = `确定要删除 RPA 项目 "${project.name}" 吗？\n\n此操作将：\n1. 从列表中删除该项目\n2. 删除该项目的所有任务\n3. 永久删除项目目录及文件\n\n此操作无法撤销。`;
     if (!window.confirm(confirmMessage)) return;
     try {
-      const result = await window.ipcRenderer.invoke('rpa:project:delete', project.id) as {
-        success: boolean;
-        error?: string;
-        warning?: string;
-        switchedToProjectId?: string;
-      };
+      const result = await api.rpaProject.delete(project.id);
       if (result.success) {
         if (result.warning) window.alert(`⚠️ ${result.warning}`);
-        await loadRpaProjects();
-        await loadCurrentRpaProject();
+
+        // 合并后续操作，减少 IPC 往返
+        const [updatedRpaProjects, updatedCurrentRpaProject] = await Promise.all([
+          api.rpaProject.list(),
+          api.rpaProject.getCurrent()
+        ]);
+
+        setRpaProjects(updatedRpaProjects);
+        setCurrentRpaProject(updatedCurrentRpaProject);
         setShowRpaProjectDropdown(false);
       } else {
         if (result.error) window.alert(`删除失败：${result.error}`);
@@ -359,11 +370,18 @@ function App() {
     const name = newRpaProjectName.trim();
     if (!name) return;
     try {
-      const result = await window.ipcRenderer.invoke('rpa:project:create', name) as { success: boolean; error?: string; project?: unknown };
+      const result = await api.rpaProject.create(name);
       if (result.success) {
         setHistory([]);
-        await loadRpaProjects();
-        await loadCurrentRpaProject();
+
+        // 合并后续操作，减少 IPC 往返
+        const [updatedRpaProjects, updatedCurrentRpaProject] = await Promise.all([
+          api.rpaProject.list(),
+          api.rpaProject.getCurrent()
+        ]);
+
+        setRpaProjects(updatedRpaProjects);
+        setCurrentRpaProject(updatedCurrentRpaProject);
         setShowRpaProjectDropdown(false);
         setShowNewRpaProjectDialog(false);
         setNewRpaProjectName('');
@@ -401,41 +419,35 @@ function App() {
     }
   };
 
-  const handleDeleteProject = async (e: React.MouseEvent, project: { id: string; name: string; path?: string }) => {
+  const handleDeleteProject = async (e: React.MouseEvent, project: Project) => {
     e.stopPropagation();
-    
+
     // 显示详细的确认对话框
     const confirmMessage = `确定要删除项目 "${project.name}" 吗？\n\n⚠️ 警告：此操作将：\n1. 从项目列表中删除该项目\n2. 删除该项目的所有关联任务\n3. 永久删除项目目录及其所有文件\n\n此操作无法撤销，请谨慎操作！`;
-    
+
     if (!window.confirm(confirmMessage)) return;
-    
+
     // 二次确认
     const doubleConfirm = window.confirm(`最后确认：确定要删除项目 "${project.name}" 及其所有本地文件吗？\n\n项目路径：${project.path || '未知'}\n\n点击"确定"将永久删除，无法恢复！`);
     if (!doubleConfirm) return;
-    
+
     try {
-      const result = await window.ipcRenderer.invoke('project:delete', project.id, project.path) as { 
-        success: boolean; 
-        error?: string; 
-        warning?: string;
-        switchedToProjectId?: string;
-      };
-      
+      const result = await api.project.delete(project.id);
+
       if (result.success) {
         // 如果有警告，显示警告信息
         if (result.warning) {
           window.alert(`⚠️ ${result.warning}`);
         }
-        
-        // 重新加载项目列表
-        await loadProjects();
-        
-        // 如果切换到了新项目，加载该项目；否则清空当前项目
-        if (result.switchedToProjectId) {
-          console.log(`Switched to project: ${result.switchedToProjectId}`);
-        }
-        await loadCurrentProject();
-        
+
+        // 合并后续操作，减少 IPC 往返
+        const [updatedProjects, updatedCurrentProject] = await Promise.all([
+          api.project.list(),
+          api.project.getCurrent()
+        ]);
+
+        setProjects(updatedProjects);
+        setCurrentProject(updatedCurrentProject);
         setShowProjectDropdown(false);
         window.ipcRenderer.send('project:switched');
       } else {
@@ -465,7 +477,7 @@ function App() {
   // 处理启动加载完成：先做 SSO 检查，再标记 isAppReady
   const handleSplashComplete = async (payload?: unknown) => {
     if (payload && typeof payload === 'object' && payload !== null && 'id' in payload && 'name' in payload) {
-      setCurrentProject(payload);
+      setCurrentProject(payload as Project);
     }
 
     // SSO 静默检查：有本地 token 则直接恢复，无则展示登录页
@@ -741,9 +753,7 @@ ${err}
                       {t('noProjects')}
                     </div>
                   ) : (
-                    [...rpaProjects]
-                      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-                      .map(project => (
+                    sortedRpaProjects.map(project => (
                         <div
                           key={project.id}
                           className={`group relative flex items-center rounded-md ${
@@ -860,9 +870,7 @@ ${err}
                     </div>
                   ) : (
                     <>
-                      {[...projects]
-                        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-                        .map(project => (
+                      {sortedProjects.map(project => (
                           <div
                             key={project.id}
                             className={`group relative flex items-center rounded-md ${
