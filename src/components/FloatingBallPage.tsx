@@ -324,11 +324,12 @@ ${error}
         setBallState('expanded'); // Expand to show conversation
 
         try {
-            // Send as object if images exist, otherwise string for backward compat
-            if (images.length > 0) {
-                await window.ipcRenderer.invoke('agent:send-message', { content, images });
-            } else {
-                await window.ipcRenderer.invoke('agent:send-message', content.trim());
+            const result = images.length > 0
+                ? await window.ipcRenderer.invoke('agent:send-message', { content, images })
+                : await window.ipcRenderer.invoke('agent:send-message', content.trim());
+            const r = result as { ok?: boolean } | undefined;
+            if (r && 'ok' in r && r.ok === false) {
+                setIsProcessing(false);
             }
         } catch (err) {
             console.error(err);
@@ -577,7 +578,7 @@ ${error}
                                     if (block.type === 'text' && block.text) {
                                         return (
                                             <div key={i} className="text-sm text-stone-600 dark:text-zinc-300 leading-relaxed max-w-none">
-                                                <MarkdownRenderer content={block.text} className="prose-sm" isDark={true} />
+                                                <MarkdownRenderer content={block.text} className="prose-sm" isDark={true} chatSurface />
                                             </div>
                                         );
                                     }
@@ -597,7 +598,7 @@ ${error}
                     {/* Streaming */}
                     {streamingText && (
                         <div className="text-sm text-stone-600 leading-relaxed max-w-none">
-                            <MarkdownRenderer content={streamingText} className="prose-sm" />
+                            <MarkdownRenderer content={streamingText} className="prose-sm" chatSurface />
                             <span className="inline-block w-1.5 h-4 bg-orange-500 ml-0.5 animate-pulse" />
                         </div>
                     )}

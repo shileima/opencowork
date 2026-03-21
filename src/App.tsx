@@ -39,6 +39,7 @@ function App() {
   const [rpaProjects, setRpaProjects] = useState<any[]>([]);
   const [currentRpaProject, setCurrentRpaProject] = useState<any | null>(null);
   const [showRpaProjectDropdown, setShowRpaProjectDropdown] = useState(false);
+  const [isRpaExecuting, setIsRpaExecuting] = useState(false);
   const [showNewRpaProjectDialog, setShowNewRpaProjectDialog] = useState(false);
   const [newRpaProjectName, setNewRpaProjectName] = useState('');
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
@@ -601,9 +602,14 @@ ${err}
     setIsProcessing(true);
     try {
       console.log('[Preview:Debug] invoking agent:send-message...');
-      const result = await window.ipcRenderer.invoke('agent:send-message', msg, activeView) as { error?: string } | undefined;
+      const result = await window.ipcRenderer.invoke('agent:send-message', msg, activeView) as
+        | { error?: string; ok?: boolean; status?: number }
+        | undefined;
       console.log('[Preview:Debug] agent:send-message returned:', result);
-      if (result?.error) {
+      if (result && 'ok' in result && result.ok === false) {
+        console.error('[App] agent:send-message API error:', result.status, result.error);
+        setIsProcessing(false);
+      } else if (result?.error) {
         console.error(result.error);
         if (result.error === 'Agent not initialized') {
           window.alert('AI 引擎尚未就绪，请稍候几秒后重试。\n\n如果问题持续，请检查 Settings 中的 API Key 是否已配置。');
@@ -687,14 +693,21 @@ ${err}
             <div className="relative" ref={rpaProjectDropdownRef}>
               <button
                 ref={rpaProjectButtonRef}
+                disabled={isProcessing || isRpaExecuting}
+                title={isProcessing || isRpaExecuting ? '执行中，请等待完成后再切换项目' : undefined}
                 onClick={() => {
+                  if (isProcessing || isRpaExecuting) return;
                   if (rpaProjectButtonRef.current) {
                     const rect = rpaProjectButtonRef.current.getBoundingClientRect();
                     setDropdownPosition({ top: rect.bottom + 4, left: rect.left });
                   }
                   setShowRpaProjectDropdown(!showRpaProjectDropdown);
                 }}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-stone-700 dark:text-zinc-200 hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
+                className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                  isProcessing || isRpaExecuting
+                    ? 'text-stone-400 dark:text-zinc-500 opacity-50 cursor-not-allowed'
+                    : 'text-stone-700 dark:text-zinc-200 hover:bg-stone-100 dark:hover:bg-zinc-800'
+                }`}
               >
                 <Bot size={14} />
                 <span className="max-w-[200px] truncate">
@@ -788,14 +801,21 @@ ${err}
             <div className="relative" ref={projectDropdownRef}>
               <button
                 ref={projectButtonRef}
+                disabled={isProcessing}
+                title={isProcessing ? '任务执行中，请等待完成后再切换项目' : undefined}
                 onClick={() => {
+                  if (isProcessing) return;
                   if (projectButtonRef.current) {
                     const rect = projectButtonRef.current.getBoundingClientRect();
                     setDropdownPosition({ top: rect.bottom + 4, left: rect.left });
                   }
                   setShowProjectDropdown(!showProjectDropdown);
                 }}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-stone-700 dark:text-zinc-200 hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
+                className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                  isProcessing
+                    ? 'text-stone-400 dark:text-zinc-500 opacity-50 cursor-not-allowed'
+                    : 'text-stone-700 dark:text-zinc-200 hover:bg-stone-100 dark:hover:bg-zinc-800'
+                }`}
               >
                 <FolderOpen size={14} />
                 <span className="max-w-[200px] truncate">
@@ -862,6 +882,18 @@ ${err}
                             >
                               <FolderOpen size={12} />
                               <span className="flex-1 truncate" title={project.path}>{project.name}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                window.ipcRenderer.invoke('directory:open-path', project.path);
+                              }}
+                              className="p-1 text-stone-400 hover:text-amber-500 dark:hover:text-amber-400 rounded transition-colors opacity-0 group-hover:opacity-100"
+                              title={t('openFolder')}
+                              aria-label={t('openFolder')}
+                            >
+                              <FolderOpen size={12} />
                             </button>
                             <button
                               type="button"
@@ -961,13 +993,17 @@ ${err}
               disabled={isProcessing}
               className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
                 isProcessing
-                  ? 'bg-blue-400 text-white cursor-not-allowed'
+                  ? 'bg-stone-400 text-white cursor-not-allowed'
                   : 'bg-blue-500 hover:bg-blue-600 text-white'
               }`}
               title={t('previewButtonTitle')}
               aria-label={t('preview')}
             >
-              <Monitor size={14} />
+              {isProcessing ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Monitor size={14} />
+              )}
               {t('preview') || '预览'}
             </button>
           )}
@@ -1082,6 +1118,7 @@ ${err}
             isTaskPanelHidden={isTaskPanelHidden}
             onToggleTaskPanel={() => setIsTaskPanelHidden(!isTaskPanelHidden)}
             isNarrowWindow={isNarrowWindow}
+            onExecutingChange={setIsRpaExecuting}
           />
         ) : (
           <ProjectView

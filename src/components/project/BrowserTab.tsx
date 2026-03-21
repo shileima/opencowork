@@ -1,13 +1,22 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { ExternalLink, RotateCw, Globe, AlertCircle } from 'lucide-react';
+import { ExternalLink, RotateCw, Globe, AlertCircle, TerminalSquare } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
 
-const DEFAULT_URL = ''; // 默认为空，避免启动时立即尝试连接
-const LOAD_TIMEOUT_MS = 10000; // 10 秒加载超时（主进程检测到 ERR_CONNECTION_REFUSED 时会提前通知）
+const DEFAULT_URL = '';
+const LOAD_TIMEOUT_MS = 15000;
+
+interface WebviewElement extends HTMLElement {
+    src: string;
+    loadURL(url: string): Promise<void>;
+    reload(): void;
+    stop(): void;
+    getWebContentsId(): number;
+    getURL(): string;
+    isLoading(): boolean;
+}
 
 interface BrowserTabProps {
     initialUrl?: string;
-    /** 外部刷新触发器：数值变化时强制刷新 iframe */
     refreshTrigger?: number;
 }
 
@@ -20,16 +29,6 @@ const ensureProtocol = (url: string): string => {
     return trimmed;
 };
 
-/** 用于 URL 比较：localhost 与 127.0.0.1 视为等价 */
-const urlHostEquivalent = (a: string, b: string): boolean => {
-    const norm = (u: string) =>
-        ensureProtocol(u || '')
-            .replace(/\/$/, '')
-            .replace(/(https?:\/\/)localhost(?=[:/]|$)/gi, '$1127.0.0.1');
-    return norm(a) === norm(b);
-};
-
-/** macOS 上 Vite 可能只绑定 ::1，127.0.0.1 无法访问。将 127.0.0.1 转为 localhost 以兼容 */
 const toLoadableUrl = (url: string): string => {
     if (!url) return url;
     return url.replace(/(https?:\/\/)127\.0\.0\.1(?=[:/]|$)/gi, '$1localhost');
@@ -40,9 +39,16 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     const [url, setUrl] = useState(initialUrl || '');
     const [currentUrl, setCurrentUrl] = useState(initialUrl || '');
     const [isLoading, setIsLoading] = useState(!!(initialUrl || '').trim());
-    const [refreshKey, setRefreshKey] = useState(0);
     const [loadError, setLoadError] = useState<string | null>(null);
-    const iframeRef = useRef<HTMLIFrameElement | null>(null);
+    const [showDevTools, setShowDevTools] = useState(false);
+    const [devToolsKey, setDevToolsKey] = useState(0);
+
+    const webviewRef = useRef<WebviewElement | null>(null);
+    const devtoolsRef = useRef<WebviewElement | null>(null);
+    const lastNavigatedUrl = useRef('');
+    const prevRefreshTrigger = useRef(0);
+    const webviewReady = useRef(false);
+    const pendingRefreshRef = useRef(false);
 
     const handleNavigate = useCallback(() => {
         const fullUrl = ensureProtocol(url);
@@ -56,13 +62,16 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
 
     const handleRefresh = useCallback(() => {
         setLoadError(null);
-        if (currentUrl) {
+        if (currentUrl && webviewRef.current && webviewReady.current) {
             setIsLoading(true);
-            setRefreshKey(prev => prev + 1);
+            try {
+                webviewRef.current.reload();
+            } catch {
+                setCurrentUrl((u) => u);
+            }
         }
     }, [currentUrl]);
 
-    // 当父组件更新 URL（如 Agent 调用 open_browser_preview）时同步，保持 localhost / 127.0.0.1 原样
     useEffect(() => {
         const fullUrl = initialUrl ? ensureProtocol(initialUrl) : '';
         if (fullUrl) {
@@ -73,16 +82,84 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
         }
     }, [initialUrl]);
 
-    // 外部刷新触发器（如对话完成后自动刷新）
     useEffect(() => {
-        if (refreshTrigger > 0 && currentUrl) {
+        if (refreshTrigger > 0 && refreshTrigger !== prevRefreshTrigger.current && currentUrl && webviewRef.current) {
+            prevRefreshTrigger.current = refreshTrigger;
             setIsLoading(true);
             setLoadError(null);
-            setRefreshKey(prev => prev + 1);
+            if (webviewReady.current) {
+                try {
+                    webviewRef.current.reload();
+                } catch {
+                    pendingRefreshRef.current = true;
+                }
+            } else {
+                pendingRefreshRef.current = true;
+            }
         }
     }, [refreshTrigger, currentUrl]);
 
-    // 加载超时：长时间未 onload 时显示友好提示
+    // Navigate webview when currentUrl changes
+    useEffect(() => {
+        const wv = webviewRef.current;
+        const targetUrl = toLoadableUrl(currentUrl);
+        if (!wv || !targetUrl || targetUrl === lastNavigatedUrl.current) return;
+        lastNavigatedUrl.current = targetUrl;
+        if (webviewReady.current) {
+            wv.loadURL(targetUrl).catch(() => {});
+        }
+    }, [currentUrl]);
+
+    // Webview event listeners
+    useEffect(() => {
+        const wv = webviewRef.current;
+        if (!wv) return;
+
+        const onDomReady = () => {
+            webviewReady.current = true;
+            if (pendingRefreshRef.current && webviewRef.current) {
+                pendingRefreshRef.current = false;
+                try {
+                    webviewRef.current.reload();
+                } catch {}
+            }
+        };
+        const onStartLoading = () => {
+            setIsLoading(true);
+            setLoadError(null);
+        };
+        const onStopLoading = () => {
+            setIsLoading(false);
+        };
+        const onFailLoad = (e: Event & { errorCode?: number; errorDescription?: string; validatedURL?: string }) => {
+            if (e.errorCode === -3) return; // Aborted
+            setIsLoading(false);
+            if (e.errorCode === -102 || e.errorCode === -106) {
+                setLoadError(`无法连接到 ${currentUrl}。请确保开发服务器正在运行。`);
+            } else if (e.errorCode !== undefined) {
+                setLoadError(`加载失败 (${e.errorCode}): ${e.errorDescription || ''}`);
+            }
+        };
+        const onDidNavigate = (e: Event & { url?: string }) => {
+            if (e.url) setUrl(e.url);
+        };
+
+        wv.addEventListener('dom-ready', onDomReady);
+        wv.addEventListener('did-start-loading', onStartLoading);
+        wv.addEventListener('did-stop-loading', onStopLoading);
+        wv.addEventListener('did-fail-load', onFailLoad as EventListener);
+        wv.addEventListener('did-navigate', onDidNavigate as EventListener);
+
+        return () => {
+            wv.removeEventListener('dom-ready', onDomReady);
+            wv.removeEventListener('did-start-loading', onStartLoading);
+            wv.removeEventListener('did-stop-loading', onStopLoading);
+            wv.removeEventListener('did-fail-load', onFailLoad as EventListener);
+            wv.removeEventListener('did-navigate', onDidNavigate as EventListener);
+        };
+    }, [currentUrl]);
+
+    // Load timeout
     useEffect(() => {
         if (!isLoading || !currentUrl) return;
         const timer = setTimeout(() => {
@@ -90,34 +167,48 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
             setLoadError('timeout');
         }, LOAD_TIMEOUT_MS);
         return () => clearTimeout(timer);
-    }, [isLoading, currentUrl, refreshKey]);
+    }, [isLoading, currentUrl]);
 
-    // 主进程检测到 iframe ERR_CONNECTION_REFUSED 时立即显示错误，无需等待超时
+    // Connect DevTools webview after it mounts
     useEffect(() => {
-        const remove = window.ipcRenderer.on('agent:iframe-load-failed', (_event, ...args) => {
-            const failedUrl = args[0] as string;
-            if (urlHostEquivalent(failedUrl, currentUrl)) {
-                setIsLoading(false);
-                setLoadError(`无法连接到 ${currentUrl}。请确保开发服务器正在运行。`);
+        if (!showDevTools) return;
+        const devtools = devtoolsRef.current;
+        const page = webviewRef.current;
+        if (!devtools || !page) return;
+
+        const connectDevTools = async () => {
+            try {
+                const pageWcId = page.getWebContentsId();
+                const devtoolsWcId = devtools.getWebContentsId();
+                if (pageWcId && devtoolsWcId) {
+                    await window.ipcRenderer.invoke('browser:open-devtools', pageWcId, devtoolsWcId);
+                }
+            } catch (e) {
+                console.error('[BrowserTab] Failed to connect devtools:', e);
             }
-        });
-        return remove;
-    }, [currentUrl]);
+        };
 
-    const handleIframeLoad = useCallback(() => {
-        setIsLoading(false);
-        setLoadError(null);
-    }, []);
+        devtools.addEventListener('dom-ready', connectDevTools, { once: true });
+        return () => devtools.removeEventListener('dom-ready', connectDevTools);
+    }, [showDevTools, devToolsKey]);
 
-    const handleIframeError = useCallback(() => {
-        setIsLoading(false);
-        setLoadError(`无法连接到 ${currentUrl}。请确保开发服务器正在运行。`);
-    }, [currentUrl]);
+    const toggleDevTools = useCallback(async () => {
+        if (showDevTools) {
+            const wv = webviewRef.current;
+            if (wv) {
+                try {
+                    await window.ipcRenderer.invoke('browser:close-devtools', wv.getWebContentsId());
+                } catch {}
+            }
+            setShowDevTools(false);
+        } else {
+            setDevToolsKey(prev => prev + 1);
+            setShowDevTools(true);
+        }
+    }, [showDevTools]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter') {
-            handleNavigate();
-        }
+        if (e.key === 'Enter') handleNavigate();
     };
 
     const handleOpenExternal = useCallback(async () => {
@@ -130,9 +221,18 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
         }
     }, [currentUrl]);
 
+    const setWebviewRef = useCallback((node: HTMLElement | null) => {
+        webviewRef.current = node as WebviewElement | null;
+        webviewReady.current = false;
+    }, []);
+
+    const setDevtoolsRef = useCallback((node: HTMLElement | null) => {
+        devtoolsRef.current = node as WebviewElement | null;
+    }, []);
+
     return (
         <div className="flex flex-col h-full min-w-[390px] bg-stone-100 dark:bg-zinc-900">
-            {/* URL Bar：底边 border 右侧留 pr-2 间距 */}
+            {/* URL Bar */}
             <div className="shrink-0 flex">
                 <div className="flex-1 flex items-center gap-2 py-2 border-b border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mr-2">
                 <div className="flex items-center gap-0 shrink-0">
@@ -149,7 +249,7 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                     <button
                         type="button"
                         onClick={handleRefresh}
-                        className="p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 rounded transition-colors"
+                        className="p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         title={t('refresh') || '刷新'}
                         aria-label={t('refresh') || '刷新'}
                         disabled={!currentUrl}
@@ -166,90 +266,113 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                     className="flex-1 px-3 py-2 text-sm bg-stone-50 dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 rounded-lg text-stone-800 dark:text-zinc-200 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-500"
                     aria-label={t('browserUrlPlaceholder') || 'URL 地址'}
                 />
+                {currentUrl && (
+                    <button
+                        type="button"
+                        onClick={toggleDevTools}
+                        className={`shrink-0 p-1.5 rounded transition-colors ${
+                            showDevTools
+                                ? 'text-orange-500 bg-orange-50 dark:bg-orange-500/10'
+                                : 'text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300'
+                        }`}
+                        title="开发者工具"
+                        aria-label="开发者工具"
+                    >
+                        <TerminalSquare size={16} />
+                    </button>
+                )}
                 </div>
             </div>
 
-            {/* Content Area：右侧留出间距，与资源管理器分隔更美观；背景与 URL 栏/资源管理器统一 */}
-            <div className="flex-1 min-h-0 relative overflow-hidden pr-2 bg-stone-100 dark:bg-zinc-900">
+            {/* Content Area */}
+            <div className="flex-1 min-h-0 relative overflow-hidden pr-2 bg-stone-100 dark:bg-zinc-900 flex flex-col">
                 {currentUrl ? (
                     <>
-                        {isLoading && !loadError && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-stone-50 dark:bg-zinc-900 z-10">
-                                <RotateCw size={24} className="animate-spin text-orange-500" />
+                        {/* Page preview area */}
+                        <div className={`relative min-h-0 ${showDevTools ? 'h-[55%]' : 'h-full'}`}>
+                            {isLoading && !loadError && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-stone-50 dark:bg-zinc-900 z-10">
+                                    <RotateCw size={24} className="animate-spin text-orange-500" />
+                                </div>
+                            )}
+                            {loadError ? (
+                                <div
+                                    className="absolute inset-0 flex flex-col items-center justify-center bg-stone-50 dark:bg-zinc-900 p-8 z-20"
+                                    role="alert"
+                                    aria-live="polite"
+                                >
+                                    <AlertCircle size={64} className="mb-6 text-amber-500 dark:text-amber-400 opacity-80" aria-hidden />
+                                    <h2 className="text-xl font-semibold text-stone-700 dark:text-zinc-300 mb-2">
+                                        {loadError === 'timeout'
+                                            ? (t('browserLoadTimeout') || '页面加载超时')
+                                            : (t('browserLoadFailed') || '页面加载失败')}
+                                    </h2>
+                                    <p className="text-sm text-stone-500 dark:text-zinc-500 text-center max-w-md mb-6">
+                                        {loadError === 'timeout'
+                                            ? (t('browserLoadTimeoutHint') || '开发服务器可能未启动，请在终端运行 npm run dev 或 pnpm dev。')
+                                            : (t('browserLoadFailedHint') || '请确保开发服务器已启动，或让 AI 助手帮您启动。')}
+                                    </p>
+                                    {loadError !== 'timeout' && (
+                                        <p className="text-xs text-stone-400 dark:text-zinc-600 text-center max-w-md mb-6">
+                                            {loadError}
+                                        </p>
+                                    )}
+                                    <div className="flex flex-wrap gap-3 justify-center">
+                                        <button
+                                            type="button"
+                                            onClick={handleOpenExternal}
+                                            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors"
+                                            aria-label="在系统浏览器中打开"
+                                        >
+                                            <ExternalLink size={16} />
+                                            {t('browserOpenInSystem') || '在系统浏览器中打开'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleRefresh}
+                                            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-stone-600 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 border border-stone-300 dark:border-zinc-600 rounded-lg transition-colors"
+                                            aria-label={t('browserRetry') || '重试'}
+                                        >
+                                            <RotateCw size={16} />
+                                            {t('browserRetry') || '重试'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setLoadError(null)}
+                                            className="px-4 py-2.5 text-sm font-medium text-stone-600 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 border border-stone-300 dark:border-zinc-600 rounded-lg transition-colors"
+                                            aria-label={t('browserClose') || '关闭'}
+                                        >
+                                            {t('browserClose') || '关闭'}
+                                        </button>
+                                    </div>
+                                    <div className="mt-8 p-4 bg-stone-100 dark:bg-zinc-800/50 rounded-lg border border-stone-200 dark:border-zinc-700 max-w-md">
+                                        <p className="text-xs font-medium text-stone-600 dark:text-zinc-400 mb-2">💡 {t('browserSuggestionsTitle') || '解决建议'}</p>
+                                        <ul className="text-xs text-stone-500 dark:text-zinc-500 space-y-1.5 list-disc list-inside">
+                                            <li>{t('browserSuggestion1') || '在终端运行 npm run dev 或 pnpm dev 启动开发服务器'}</li>
+                                            <li>{t('browserSuggestion2') || '告诉 AI 助手「启动开发服务器」自动打开预览'}</li>
+                                            <li>{t('browserSuggestion3') || '确认端口正确（常见：3000、5173、8080）'}</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            ) : null}
+                            <webview
+                                ref={setWebviewRef}
+                                src={toLoadableUrl(currentUrl)}
+                                style={{ width: '100%', height: '100%', display: loadError ? 'none' : 'flex' }}
+                            />
+                        </div>
+
+                        {/* DevTools panel */}
+                        {showDevTools && (
+                            <div className="h-[45%] min-h-[120px] border-t-2 border-stone-300 dark:border-zinc-600 bg-white dark:bg-zinc-900">
+                                <webview
+                                    key={devToolsKey}
+                                    ref={setDevtoolsRef}
+                                    src="about:blank"
+                                    style={{ width: '100%', height: '100%' }}
+                                />
                             </div>
                         )}
-                        {loadError ? (
-                            <div
-                                className="absolute inset-0 flex flex-col items-center justify-center bg-stone-50 dark:bg-zinc-900 p-8 z-20"
-                                role="alert"
-                                aria-live="polite"
-                            >
-                                <AlertCircle size={64} className="mb-6 text-amber-500 dark:text-amber-400 opacity-80" aria-hidden />
-                                <h2 className="text-xl font-semibold text-stone-700 dark:text-zinc-300 mb-2">
-                                    {loadError === 'timeout'
-                                        ? (t('browserLoadTimeout') || '页面加载超时')
-                                        : (t('browserLoadFailed') || '页面加载失败')}
-                                </h2>
-                                <p className="text-sm text-stone-500 dark:text-zinc-500 text-center max-w-md mb-6">
-                                    {loadError === 'timeout'
-                                        ? (t('browserLoadTimeoutHint') || '开发服务器可能未启动，请在终端运行 npm run dev 或 pnpm dev。')
-                                        : (t('browserLoadFailedHint') || '请确保开发服务器已启动，或让 AI 助手帮您启动。')}
-                                </p>
-                                {loadError !== 'timeout' && (
-                                    <p className="text-xs text-stone-400 dark:text-zinc-600 text-center max-w-md mb-6">
-                                        {loadError}
-                                    </p>
-                                )}
-                                <div className="flex flex-wrap gap-3 justify-center">
-                                    <button
-                                        type="button"
-                                        onClick={handleOpenExternal}
-                                        className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors"
-                                        aria-label="在系统浏览器中打开"
-                                    >
-                                        <ExternalLink size={16} />
-                                        {t('browserOpenInSystem') || '在系统浏览器中打开'}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={handleRefresh}
-                                        className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-stone-600 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 border border-stone-300 dark:border-zinc-600 rounded-lg transition-colors"
-                                        aria-label={t('browserRetry') || '重试'}
-                                    >
-                                        <RotateCw size={16} />
-                                        {t('browserRetry') || '重试'}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setLoadError(null)}
-                                        className="px-4 py-2.5 text-sm font-medium text-stone-600 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 border border-stone-300 dark:border-zinc-600 rounded-lg transition-colors"
-                                        aria-label={t('browserClose') || '关闭'}
-                                    >
-                                        {t('browserClose') || '关闭'}
-                                    </button>
-                                </div>
-                                <div className="mt-8 p-4 bg-stone-100 dark:bg-zinc-800/50 rounded-lg border border-stone-200 dark:border-zinc-700 max-w-md">
-                                    <p className="text-xs font-medium text-stone-600 dark:text-zinc-400 mb-2">💡 {t('browserSuggestionsTitle') || '解决建议'}</p>
-                                    <ul className="text-xs text-stone-500 dark:text-zinc-500 space-y-1.5 list-disc list-inside">
-                                        <li>{t('browserSuggestion1') || '在终端运行 npm run dev 或 pnpm dev 启动开发服务器'}</li>
-                                        <li>{t('browserSuggestion2') || '告诉 AI 助手「启动开发服务器」自动打开预览'}</li>
-                                        <li>{t('browserSuggestion3') || '确认端口正确（常见：3000、5173、8080）'}</li>
-                                    </ul>
-                                </div>
-                            </div>
-                        ) : null}
-                        <iframe
-                            ref={iframeRef}
-                            key={`${currentUrl}-${refreshKey}`}
-                            src={toLoadableUrl(currentUrl)}
-                            className="w-full h-full border-0 min-h-0"
-                            style={{ display: loadError ? 'none' : 'block' }}
-                            sandbox="allow-scripts allow-same-origin"
-                            referrerPolicy="no-referrer"
-                            title={t('browserPreview') || '浏览器预览'}
-                            onLoad={handleIframeLoad}
-                            onError={handleIframeError}
-                        />
                     </>
                 ) : (
                     <div className="h-full flex flex-col items-center justify-center text-stone-400 dark:text-zinc-500 p-6">

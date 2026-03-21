@@ -702,7 +702,7 @@ export const CoworkView = memo(function CoworkView({ history, onSendMessage, onA
                                     <div className="animate-in fade-in duration-200 block w-full">
                                         <div className="text-stone-700 dark:text-zinc-300 text-[12px] leading-6 max-w-none">
                                             <div className="relative group">
-                                                <MarkdownRenderer content={streamingText} isDark={true} className="prose-sm" />
+                                                <MarkdownRenderer content={streamingText} isDark={true} chatSurface className="prose-sm" />
                                                 <span className="inline-block w-[3px] h-[1em] bg-current ml-0.5 align-middle rounded-sm animate-[blink_1s_step-end_infinite]" />
                                                 {streamingText && streamingText.trim().length > 0 && (
                                                     <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -905,7 +905,7 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
                     return (
                         <div key={i} className="text-stone-700 dark:text-zinc-300 text-[12px] leading-6 max-w-none">
                             <div className="relative group">
-                                <MarkdownRenderer content={block.text} isDark={true} className="prose-sm" />
+                                <MarkdownRenderer content={block.text} isDark={true} chatSurface className="prose-sm" />
                                 {block.text && block.text.trim().length > 0 && (
                                     <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                         <CopyButton content={block.text} size="sm" />

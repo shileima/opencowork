@@ -18,6 +18,8 @@ interface MarkdownRendererProps {
     content: string;
     className?: string;
     isDark?: boolean;
+    /** 聊天区：代码块与行内代码不使用底色/卡片样式，与正文同一背景 */
+    chatSurface?: boolean;
 }
 
 import { useI18n } from '../i18n/I18nContext';
@@ -65,7 +67,7 @@ function formatXmlForDisplay(xml: string): string {
     }
 }
 
-export function MarkdownRenderer({ content, className = '', isDark = false }: MarkdownRendererProps) {
+export function MarkdownRenderer({ content, className = '', isDark = false, chatSurface = false }: MarkdownRendererProps) {
     const { t } = useI18n();
     
     // 如果内容为空，不渲染任何内容
@@ -78,9 +80,39 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
-                    code({ node: _node, inline, className, children, ...props }: { node?: unknown; inline?: boolean; className?: string; children?: React.ReactNode }) {
-                        const match = /language-([\w-]+)/.exec(className || '');
+                    ...(chatSurface
+                        ? {
+                              pre({ children, ...props }: { children?: React.ReactNode }) {
+                                  return (
+                                      <pre
+                                          className="m-0 my-1 max-w-full min-w-0 overflow-x-auto !bg-transparent p-0 shadow-none ring-0 border-0"
+                                          {...props}
+                                      >
+                                          {children}
+                                      </pre>
+                                  );
+                              },
+                          }
+                        : {}),
+                    code({ node: _node, inline, className: codeClassName, children, ...props }: { node?: unknown; inline?: boolean; className?: string; children?: React.ReactNode }) {
+                        const match = /language-([\w-]+)/.exec(codeClassName || '');
                         const codeContent = String(children).replace(/\n$/, '');
+
+                        if (chatSurface && !inline) {
+                            if (match?.[1] === 'mermaid') {
+                                return <MermaidDiagram code={codeContent} isDark={isDark} />;
+                            }
+                            return (
+                                <code
+                                    className={`block w-full min-w-0 font-mono text-[0.75rem] leading-5 whitespace-pre-wrap break-words break-all !bg-transparent border-0 p-0 shadow-none rounded-none ${
+                                        isDark ? 'text-zinc-300' : 'text-stone-700'
+                                    }`}
+                                    {...props}
+                                >
+                                    {codeContent}
+                                </code>
+                            );
+                        }
 
                         if (!inline && match) {
                             // Mermaid handling
@@ -198,10 +230,33 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
                         // Detect Windows paths (E:\...) or Unix paths (/.../...)
                         const isFilePath = /^[A-Za-z]:[/\\]|^\/\w+/.test(codeText);
 
+                        if (chatSurface && inline) {
+                            if (isFilePath) {
+                                return (
+                                    <code
+                                        className={`${codeClassName ?? ''} font-mono text-[0.75rem] text-orange-400 dark:text-orange-300 underline decoration-zinc-500/60 underline-offset-2 !bg-transparent border-0 p-0 rounded-none cursor-pointer hover:opacity-90`}
+                                        onClick={() => window.ipcRenderer.invoke('shell:open-path', codeText)}
+                                        title={t('openInFileManager')}
+                                        {...props}
+                                    >
+                                        📁 {children}
+                                    </code>
+                                );
+                            }
+                            return (
+                                <code
+                                    className={`${codeClassName ?? ''} font-mono text-[0.75rem] !bg-transparent border-0 p-0 rounded-none ${isDark ? 'text-zinc-300' : 'text-stone-800'}`}
+                                    {...props}
+                                >
+                                    {children}
+                                </code>
+                            );
+                        }
+
                         if (isFilePath) {
                             return (
                                 <code
-                                    className={`${className} px-1.5 py-0.5 rounded-md bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 font-mono text-sm border border-blue-200 dark:border-blue-800 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors`}
+                                    className={`${codeClassName ?? ''} px-1.5 py-0.5 rounded-md bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 font-mono text-sm border border-blue-200 dark:border-blue-800 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors`}
                                     onClick={() => window.ipcRenderer.invoke('shell:open-path', codeText)}
                                     title={t('openInFileManager')}
                                     {...props}
@@ -213,7 +268,7 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
 
                         return (
                             <code
-                                className={`${className} px-1.5 py-0.5 rounded-md bg-stone-100 dark:bg-zinc-800 text-stone-800 dark:text-zinc-200 font-mono text-sm border border-stone-200 dark:border-zinc-700`}
+                                className={`${codeClassName ?? ''} px-1.5 py-0.5 rounded-md bg-stone-100 dark:bg-zinc-800 text-stone-800 dark:text-zinc-200 font-mono text-sm border border-stone-200 dark:border-zinc-700`}
                                 {...props}
                             >
                                 {children}
@@ -222,6 +277,13 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
                     },
                     // Improved Table Styling
                     table({ children }) {
+                        if (chatSurface) {
+                            return (
+                                <div className="overflow-x-auto my-3 max-w-full">
+                                    <table className="w-full text-left border-collapse text-sm">{children}</table>
+                                </div>
+                            );
+                        }
                         return (
                             <div className="overflow-x-auto my-6 border border-stone-200 dark:border-zinc-800 rounded-xl shadow-sm">
                                 <table className="w-full text-left border-collapse text-sm">
@@ -231,6 +293,9 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
                         );
                     },
                     thead({ children }) {
+                        if (chatSurface) {
+                            return <thead className="!bg-transparent text-stone-700 dark:text-zinc-200">{children}</thead>;
+                        }
                         return <thead className="bg-stone-50 dark:bg-zinc-800/50 text-stone-700 dark:text-zinc-200">{children}</thead>;
                     },
                     th({ children }) {
@@ -265,6 +330,13 @@ export function MarkdownRenderer({ content, className = '', isDark = false }: Ma
                         return <h3 className="text-base font-semibold mt-4 mb-2 text-stone-800 dark:text-zinc-200">{children}</h3>;
                     },
                     blockquote({ children }) {
+                        if (chatSurface) {
+                            return (
+                                <blockquote className="border-l-4 border-orange-400/50 dark:border-orange-500/40 pl-3 my-3 text-stone-600 dark:text-zinc-400 italic !bg-transparent py-0 rounded-none">
+                                    {children}
+                                </blockquote>
+                            );
+                        }
                         return <blockquote className="border-l-4 border-orange-200 dark:border-orange-500/30 pl-4 py-2 my-4 text-stone-600 dark:text-zinc-400 italic bg-orange-50/30 dark:bg-orange-900/10 rounded-r-lg">{children}</blockquote>;
                     },
                     a({ href, children }) {

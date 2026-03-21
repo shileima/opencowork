@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, screen, dialog, globalShortcut, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, screen, dialog, globalShortcut, Tray, Menu, nativeImage, webContents } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -573,16 +573,16 @@ ipcMain.handle('agent:send-message', async (event, message: string | { content: 
   } catch (apiError: unknown) {
     const err = apiError as { status?: number; message?: string; error?: { message?: string } }
     const targetWindow = (isFloatingBall && floatingBallWin && !floatingBallWin.isDestroyed()) ? floatingBallWin : mainWin
-    const payload = { message: '', taskId, projectId }
-    if (err?.status === 400 && targetWindow?.webContents && !targetWindow.isDestroyed()) {
-      const raw = err?.error?.message || err?.message || String(apiError)
-      const friendly = /provider_response_error|upstream_error|bad response status code/i.test(raw)
-        ? '代理或上游服务返回 400，请检查 OneAPI/代理与模型配置。'
-        : `${(raw as string).slice(0, 150)}…`
-      payload.message = friendly
-      targetWindow.webContents.send('agent:error', payload)
-    } else if (targetWindow?.webContents && !targetWindow.isDestroyed()) {
-      payload.message = err?.message || (apiError instanceof Error ? apiError.message : String(apiError))
+    const status = err?.status
+
+    // 常见 API 状态码：AgentRuntime.processMessageWithContext 已 broadcast agent:error，此处不再重复发送、也不再 throw，
+    // 避免主进程「Error occurred in handler for 'agent:send-message'」及双重错误提示
+    if (typeof status === 'number' && [400, 401, 403, 404, 408, 409, 413, 422, 429, 500, 502, 503, 504].includes(status)) {
+      return { ok: false as const, status }
+    }
+
+    const payload = { message: err?.message || (apiError instanceof Error ? apiError.message : String(apiError)), taskId, projectId }
+    if (targetWindow?.webContents && !targetWindow.isDestroyed()) {
       targetWindow.webContents.send('agent:error', payload)
     }
     throw apiError
@@ -1064,6 +1064,35 @@ ipcMain.handle('app:open-external-url', async (_event, url: string) => {
   } catch (error) {
     console.error('[Main] Error opening external URL:', error)
     return { success: false, error: (error as Error).message }
+  }
+})
+
+ipcMain.handle('browser:open-devtools', (_event, pageWebContentsId: number, devtoolsWebContentsId: number) => {
+  try {
+    const pageWc = webContents.fromId(pageWebContentsId)
+    const devtoolsWc = webContents.fromId(devtoolsWebContentsId)
+    if (pageWc && devtoolsWc) {
+      pageWc.setDevToolsWebContents(devtoolsWc)
+      pageWc.openDevTools()
+      return { success: true }
+    }
+    return { success: false, error: 'WebContents not found' }
+  } catch (err) {
+    console.error('[Main] Error opening devtools:', err)
+    return { success: false, error: String(err) }
+  }
+})
+
+ipcMain.handle('browser:close-devtools', (_event, pageWebContentsId: number) => {
+  try {
+    const pageWc = webContents.fromId(pageWebContentsId)
+    if (pageWc?.isDevToolsOpened()) {
+      pageWc.closeDevTools()
+    }
+    return { success: true }
+  } catch (err) {
+    console.error('[Main] Error closing devtools:', err)
+    return { success: false, error: String(err) }
   }
 })
 
@@ -3299,7 +3328,7 @@ ipcMain.handle('fs:read-file', async (_, filePath: string) => {
   }
 });
 
-ipcMain.handle('fs:write-file', async (_, filePath: string, content: string) => {
+ipcMain.handle('fs:write-file', async (_, filePath: string, content: string, options?: { silent?: boolean }) => {
   try {
     // 权限检查
     const folders = configStore.getAll().authorizedFolders || [];
@@ -3313,12 +3342,14 @@ ipcMain.handle('fs:write-file', async (_, filePath: string, content: string) => 
       await fs.promises.mkdir(dir, { recursive: true });
     }
     await fs.promises.writeFile(filePath, content, 'utf-8');
-    // 通知所有窗口文件已更改，用于刷新资源管理器
-    if (mainWin && !mainWin.isDestroyed()) {
-      mainWin.webContents.send('fs:file-changed', filePath);
-    }
-    if (floatingBallWin && !floatingBallWin.isDestroyed()) {
-      floatingBallWin.webContents.send('fs:file-changed', filePath);
+    // silent 模式跳过通知（用户手动保存时内容已在内存中，无需触发刷新链路）
+    if (!options?.silent) {
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.send('fs:file-changed', filePath);
+      }
+      if (floatingBallWin && !floatingBallWin.isDestroyed()) {
+        floatingBallWin.webContents.send('fs:file-changed', filePath);
+      }
     }
     return { success: true };
   } catch (error) {
@@ -4524,6 +4555,7 @@ function createMainWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
+      webviewTag: true,
     },
     show: false,
   })

@@ -112,6 +112,7 @@ export function ProjectView({
     const hoverRightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const isExplorerPanelHiddenRef = useRef(isExplorerPanelHidden);
     const onToggleExplorerPanelRef = useRef(onToggleExplorerPanel);
+    const explorerAutoHiddenByBrowserRef = useRef(false);
     currentTaskIdRef.current = currentTaskId;
     currentProjectRef.current = currentProject;
     historyRef.current = history;
@@ -271,6 +272,7 @@ export function ProjectView({
             multiTabEditorRefRef.current?.openBrowserTab?.(url);
             if (!isExplorerPanelHiddenRef.current) {
                 onToggleExplorerPanelRef.current();
+                explorerAutoHiddenByBrowserRef.current = true;
             }
         });
 
@@ -511,7 +513,7 @@ export function ProjectView({
         };
 
         console.log('[Preview:Debug] Sending preview message, taskId:', result.task.id);
-        onSendMessage('请严格按以下顺序执行：1. 先在项目目录运行 pnpm install 安装依赖（必须执行，不可跳过）；2. pnpm install 完成后，运行 pnpm dev 启动本地开发服务；3. 服务成功启动后，调用 open_browser_preview 打开内置浏览器预览。');
+        onSendMessage('请严格按以下顺序执行：1. 先在项目目录运行 pnpm install 安装依赖（必须执行，不可跳过）；2. pnpm install 完成后，运行 pnpm dev 启动本地开发服务；3. 服务成功启动后，调用 open_browser_preview 打开内置浏览器预览（必须传入 cwd 为项目根路径，与 run_command 一致，否则自动修复无法获取错误输出）；4. 若 open_browser_preview 返回后仍有 Vite 红屏或 esbuild 构建错误（如 Failed to resolve → pnpm add；.ts 里写 JSX → 改为 .tsx 并修正 import；Cannot find name → 补全 import），则自动修复代码，修复后 Vite 会热更新，无需重启开发服务器。注意："require is not defined" 是第三方 CJS 依赖的已知误报，只要页面能正常渲染就直接忽略，不要尝试修复。');
     }, [currentProject, isProcessing, t, onSendMessage]);
 
     handlePreviewRef.current = handlePreview;
@@ -702,9 +704,8 @@ export function ProjectView({
     };
 
     const handleFileSave = async (filePath: string, content: string) => {
-        const result = await window.ipcRenderer.invoke('fs:write-file', filePath, content) as { success: boolean; error?: string };
+        const result = await window.ipcRenderer.invoke('fs:write-file', filePath, content, { silent: true }) as { success: boolean; error?: string };
         if (result.success) {
-            // 更新文件内容
             setFileContents(prev => ({ ...prev, [filePath]: content }));
         }
     };
@@ -829,6 +830,14 @@ export function ProjectView({
                                             onRef={setMultiTabEditorRef}
                                             pendingOpenFile={pendingOpenFile}
                                             onConsumePendingOpenFile={() => setPendingOpenFile(null)}
+                                            onBrowserTabClose={() => {
+                                                if (explorerAutoHiddenByBrowserRef.current) {
+                                                    explorerAutoHiddenByBrowserRef.current = false;
+                                                    if (isExplorerPanelHiddenRef.current) {
+                                                        onToggleExplorerPanelRef.current();
+                                                    }
+                                                }
+                                            }}
                                         />
                                     }
                                     initialRatio={splitRatio}

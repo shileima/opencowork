@@ -8,6 +8,7 @@ import {
     ChevronRight,
     ChevronDown,
     ListCollapse,
+    ListTree,
     Edit2,
     Trash2,
 } from 'lucide-react';
@@ -21,6 +22,8 @@ interface PendingNewItem {
     /** 插入到该路径项之后；null 表示插入到当前目录首位 */
     afterPath: string | null;
 }
+
+const SKIP_RECURSIVE_DIRS = new Set(['node_modules', '.git', 'dist', '.next', '.cache', '.turbo', 'coverage']);
 
 /** 图标尺寸（紧凑方案） */
 const FILE_ICON_SIZE = 12;
@@ -67,16 +70,14 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
                     const allFiles: FileItem[] = [...result.items];
                     const loadSubDirs = async (items: FileItem[]) => {
                         for (const item of items) {
-                            if (item.isDirectory) {
+                            if (item.isDirectory && !SKIP_RECURSIVE_DIRS.has(item.name)) {
                                 try {
                                     const subResult = await window.ipcRenderer.invoke('fs:list-dir', item.path) as { success: boolean; items?: FileItem[]; error?: string };
                                     if (subResult.success && subResult.items) {
                                         allFiles.push(...subResult.items);
-                                        // 递归加载更深层的目录
                                         await loadSubDirs(subResult.items.filter(i => i.isDirectory));
                                     }
                                 } catch (err) {
-                                    // 忽略子目录加载错误，继续加载其他目录
                                     console.warn(`Failed to load subdirectory ${item.path}:`, err);
                                 }
                             }
@@ -157,10 +158,10 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
             }
         });
 
-        // 监听文件系统文件变化事件（包括预览服务修改、手动保存等）
         const removeFileChangedListener = window.ipcRenderer.on('fs:file-changed', (_event, ...args) => {
             const filePath = args[0] as string;
             if (!filePath || !filePath.startsWith(projectPath)) return;
+            if (/[\\/]node_modules[\\/]|[\\/]\.git[\\/]/.test(filePath)) return;
             // 跳过刚删除的路径，避免重复刷新（删除已做乐观更新）
             const isRecentlyDeleted = [...deletedPathsRef.current].some(
                 d => filePath === d || filePath.startsWith(d + '/')
@@ -169,9 +170,9 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
             setSavingFilePath(filePath);
             setTimeout(() => {
                 handleRefresh().then(() => {
-                    setTimeout(() => setSavingFilePath(null), 1200);
+                    setTimeout(() => setSavingFilePath(null), 300);
                 });
-            }, 300);
+            }, 100);
         });
 
         return () => {
@@ -181,8 +182,23 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
         };
     }, [projectPath, handleRefresh]);
 
+    const isAllCollapsed = expandedDirs.size === 0;
+
     const handleCollapseAll = () => {
         setExpandedDirs(new Set());
+    };
+
+    const handleExpandAll = () => {
+        if (!projectPath) return;
+        const dirPaths = files.filter(f => f.isDirectory).map(f => f.path);
+        if (dirPaths.length === 0) return;
+        setExpandedDirs(new Set(dirPaths));
+        for (const dirPath of dirPaths) {
+            const hasChildren = files.some(f => f.path !== dirPath && f.path.startsWith(dirPath + '/'));
+            if (!hasChildren) {
+                loadDirectory(dirPath, false);
+            }
+        }
     };
 
     const handleToggleDir = async (dirPath: string) => {
@@ -558,12 +574,12 @@ export function FileExplorer({ projectPath, onOpenFile, onFileDeleted }: FileExp
                 <h3 className="text-sm font-normal text-stone-700 dark:text-zinc-200">{t('fileExplorer')}</h3>
                 <div className="flex items-center gap-1">
                     <button
-                        onClick={handleCollapseAll}
+                        onClick={isAllCollapsed ? handleExpandAll : handleCollapseAll}
                         className="p-1.5 text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300 rounded transition-colors"
-                        title={t('collapseAll') || '折叠全部'}
-                        aria-label={t('collapseAll') || '折叠全部'}
+                        title={isAllCollapsed ? (t('expandAll') || '全部展开') : (t('collapseAll') || '折叠全部')}
+                        aria-label={isAllCollapsed ? (t('expandAll') || '全部展开') : (t('collapseAll') || '折叠全部')}
                     >
-                        <ListCollapse size={14} />
+                        {isAllCollapsed ? <ListTree size={14} /> : <ListCollapse size={14} />}
                     </button>
                     <button
                         onClick={handleNewFile}

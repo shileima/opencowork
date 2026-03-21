@@ -1,8 +1,58 @@
 import { useRef } from 'react';
-import Editor from '@monaco-editor/react';
+import Editor, { type Monaco, loader } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { useI18n } from '../../i18n/I18nContext';
 import { Loader2 } from 'lucide-react';
+
+/**
+ * 内嵌编辑器没有磁盘 node_modules / tsconfig 工程上下文。
+ * 通过通配符模块声明让所有 import 解析为 any，避免「找不到模块」误报；
+ * 同时保留语义校验，能捕获未定义变量、语法错误等。
+ */
+function configureMonacoForIsolatedFiles(monaco: Monaco) {
+    const ts = monaco.languages.typescript;
+
+    const diag = {
+        noSemanticValidation: false,
+        noSyntaxValidation: false,
+        noSuggestionDiagnostics: true,
+        diagnosticCodesToIgnore: [2307, 7016, 2686],
+    };
+    ts.typescriptDefaults.setDiagnosticsOptions(diag);
+    ts.javascriptDefaults.setDiagnosticsOptions(diag);
+
+    const sharedCompilerOptions = {
+        target: ts.ScriptTarget.ESNext,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.NodeJs,
+        jsx: ts.JsxEmit.ReactJSX,
+        allowJs: true,
+        allowNonTsExtensions: true,
+        esModuleInterop: true,
+        skipLibCheck: true,
+    };
+    ts.typescriptDefaults.setCompilerOptions(sharedCompilerOptions);
+    ts.javascriptDefaults.setCompilerOptions(sharedCompilerOptions);
+
+    const globalShim = [
+        'declare module "*";',
+        'declare namespace JSX {',
+        '  type Element = any;',
+        '  interface IntrinsicElements { [tag: string]: any; }',
+        '}',
+    ].join('\n');
+    ts.typescriptDefaults.addExtraLib(globalShim, 'file:///global-shim.d.ts');
+    ts.javascriptDefaults.addExtraLib(globalShim, 'file:///global-shim.d.ts');
+}
+
+/** 释放 Monaco model（关闭 tab 时调用），停止 TS Worker 对该文件的持续分析 */
+export function disposeMonacoModel(filePath: string) {
+    loader.init().then((monaco) => {
+        const uri = monaco.Uri.parse(filePath);
+        const model = monaco.editor.getModel(uri);
+        model?.dispose();
+    }).catch(() => { /* best-effort */ });
+}
 
 interface MonacoEditorProps {
     filePath: string | null;
@@ -15,6 +65,8 @@ interface MonacoEditorProps {
 export function MonacoEditor({ filePath, content, onChange, onSave }: MonacoEditorProps) {
     const { t } = useI18n();
     const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+    const onSaveRef = useRef(onSave);
+    onSaveRef.current = onSave;
 
     const loadingPlaceholder = (
         <div className="h-full w-full flex flex-col items-center justify-center bg-[#1e1e1e] text-zinc-400 gap-3" role="status" aria-label={t('loading')}>
@@ -55,13 +107,12 @@ export function MonacoEditor({ filePath, content, onChange, onSave }: MonacoEdit
     const handleEditorDidMount = (editorInst: editor.IStandaloneCodeEditor, monacoInst: typeof import('monaco-editor')) => {
         editorRef.current = editorInst;
         
-        // 添加保存快捷键 (Ctrl/Cmd+S)，从编辑器实例取当前内容，避免 state 未同步导致保存旧内容
         if (monacoInst?.KeyMod && monacoInst?.KeyCode) {
             editorInst.addCommand(
                 monacoInst.KeyMod.CtrlCmd | monacoInst.KeyCode.KeyS,
                 () => {
-                    const currentContent = editorRef.current?.getValue() ?? content;
-                    onSave?.(currentContent);
+                    const currentContent = editorRef.current?.getValue() ?? '';
+                    onSaveRef.current?.(currentContent);
                 }
             );
         }
@@ -71,9 +122,11 @@ export function MonacoEditor({ filePath, content, onChange, onSave }: MonacoEdit
         <div className="h-full w-full">
             <Editor
                 height="100%"
+                path={filePath ?? undefined}
                 language={getLanguage(filePath)}
                 value={content}
                 onChange={(value) => onChange(value || '')}
+                beforeMount={configureMonacoForIsolatedFiles}
                 onMount={handleEditorDidMount}
                 theme="vs-dark"
                 loading={loadingPlaceholder}

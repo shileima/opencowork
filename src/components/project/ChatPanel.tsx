@@ -117,7 +117,7 @@ export function ChatPanel({
                                             ) : (
                                                 <div className="text-stone-700 dark:text-zinc-300 text-xs leading-5 max-w-none">
                                                     <div className="relative group">
-                                                        <MarkdownRenderer content={content} isDark={true} className="chat-message-prose prose-sm !text-xs !leading-5" />
+                                                        <MarkdownRenderer content={content} isDark={true} chatSurface className="chat-message-prose prose-sm !text-xs !leading-5" />
                                                         {content && content.trim().length > 0 && (
                                                             <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                                 <CopyButton content={content} size="sm" />
@@ -135,7 +135,7 @@ export function ChatPanel({
                                 <div className="animate-in fade-in duration-200">
                                     <div className="text-stone-700 dark:text-zinc-300 text-xs leading-5 max-w-none">
                                         <div className="relative group">
-                                            <MarkdownRenderer content={streamingText} isDark={true} className="chat-message-prose prose-sm !text-xs !leading-5" />
+                                            <MarkdownRenderer content={streamingText} isDark={true} chatSurface className="chat-message-prose prose-sm !text-xs !leading-5" />
                                             <span className="inline-block w-[3px] h-[1em] bg-current ml-0.5 align-middle rounded-sm animate-[blink_1s_step-end_infinite]" />
                                             {streamingText && streamingText.trim().length > 0 && (
                                                 <div className="absolute right-0 -bottom-2 opacity-0 group-hover:opacity-100 transition-opacity">

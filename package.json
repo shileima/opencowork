@@ -12,6 +12,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:hot": "ELECTRON_HOT_RESTART=1 vite",
     "build": "node scripts/prepare-playwright.mjs && node scripts/verify-builtin-resources.cjs && tsc && vite build && node scripts/copy-playwright-wrapper.mjs && electron-builder",
     "build:dir": "node scripts/prepare-playwright.mjs && node scripts/verify-builtin-resources.cjs && tsc && vite build && node scripts/copy-playwright-wrapper.mjs && electron-builder --dir",
     "build:icons": "node scripts/build-icons.mjs",

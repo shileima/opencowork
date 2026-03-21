@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Shell, HatGlasses, Globe } from 'lucide-react';
-import { MonacoEditor } from './MonacoEditor';
+import { MonacoEditor, disposeMonacoModel } from './MonacoEditor';
 import { getFileIconConfig } from './fileIcons';
 import { TerminalPanel } from './TerminalPanel';
 import { BrowserTab } from './BrowserTab';
@@ -56,17 +56,21 @@ interface MultiTabEditorProps {
     /** 待打开文件（ref 未就绪时由父组件暂存，挂载后由此处消费） */
     pendingOpenFile?: { filePath: string; content: string } | null;
     onConsumePendingOpenFile?: () => void;
+    onBrowserTabClose?: () => void;
 }
 
-export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFileSave, onRef, pendingOpenFile, onConsumePendingOpenFile }: MultiTabEditorProps) {
+export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFileSave, onRef, pendingOpenFile, onConsumePendingOpenFile, onBrowserTabClose }: MultiTabEditorProps) {
     const { t } = useI18n();
     const [tabs, setTabs] = useState<Tab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [browserRefreshTrigger, setBrowserRefreshTrigger] = useState(0);
     const tabsRef = useRef<Tab[]>([]);
     const tabScrollContainerRef = useRef<HTMLDivElement>(null);
+    const recentlySavedPathsRef = useRef<Set<string>>(new Set());
     const onConsumePendingOpenFileRef = useRef(onConsumePendingOpenFile);
     onConsumePendingOpenFileRef.current = onConsumePendingOpenFile;
+    const onBrowserTabCloseRef = useRef(onBrowserTabClose);
+    onBrowserTabCloseRef.current = onBrowserTabClose;
 
     // 保持 tabsRef 与 tabs 同步
     useEffect(() => {
@@ -178,27 +182,31 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
 
     const closeTab = (tabId: string) => {
         const tabToClose = tabs.find(tab => tab.id === tabId);
-        // 如果是终端 tab，确保至少保留一个
         if (tabToClose?.type === 'terminal') {
             const terminalTabs = tabs.filter(tab => tab.type === 'terminal');
-            if (terminalTabs.length <= 1) {
-                // 如果只剩一个终端 tab，不允许关闭
-                return;
-            }
+            if (terminalTabs.length <= 1) return;
+        }
+        if (tabToClose?.type === 'editor') {
+            disposeMonacoModel(tabToClose.filePath);
         }
         const newTabs = tabs.filter(tab => tab.id !== tabId);
         setTabs(newTabs);
         if (activeTabId === tabId) {
             setActiveTabId(newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null);
         }
+        if (tabToClose?.type === 'browser') {
+            onBrowserTabCloseRef.current?.();
+        }
     };
 
     const closeAllTabs = useCallback(() => {
+        tabsRef.current.forEach(tab => {
+            if (tab.type === 'editor') disposeMonacoModel(tab.filePath);
+        });
         setTabs([]);
         setActiveTabId(null);
     }, []);
 
-    /** 关闭内置浏览器 tab（停止本地服务后调用） */
     const closeBrowserTab = useCallback(() => {
         const currentTabs = tabsRef.current;
         const browserTab = currentTabs.find(tab => tab.type === 'browser');
@@ -210,35 +218,38 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
                 ? (nextTabs.length > 0 ? nextTabs[nextTabs.length - 1].id : null)
                 : prev
         );
+        onBrowserTabCloseRef.current?.();
     }, []);
 
-    /** 根据文件路径关闭对应的编辑器 tab，用于资源管理器删除文件时同步关闭已打开的 tab */
     const closeTabByFilePath = useCallback((filePath: string) => {
         const currentTabs = tabsRef.current;
         const tab = currentTabs.find(t => t.type === 'editor' && t.filePath === filePath);
         if (!tab) return;
+        disposeMonacoModel(filePath);
         const nextTabs = currentTabs.filter(t => t.id !== tab.id);
         setTabs(nextTabs);
         setActiveTabId(prev => (prev === tab.id ? (nextTabs.length > 0 ? nextTabs[nextTabs.length - 1].id : null) : prev));
     }, []);
 
     const handleEditorChange = (tabId: string, content: string) => {
-        setTabs(tabs.map(tab => {
+        setTabs(prevTabs => prevTabs.map(tab => {
             if (tab.id === tabId && tab.type === 'editor') {
                 return { ...tab, content, isModified: true };
             }
             return tab;
         }));
-        const tab = tabs.find(t => t.id === tabId);
+        const tab = tabsRef.current.find(t => t.id === tabId);
         if (tab && tab.type === 'editor') {
             onFileChange(tab.filePath, content);
         }
     };
 
     const handleEditorSave = (tabId: string, contentFromEditor?: string) => {
-        const tab = tabs.find(t => t.id === tabId);
+        const tab = tabsRef.current.find(t => t.id === tabId);
         if (tab && tab.type === 'editor') {
             const contentToSave = contentFromEditor ?? tab.content;
+            recentlySavedPathsRef.current.add(tab.filePath);
+            setTimeout(() => recentlySavedPathsRef.current.delete(tab.filePath), 2000);
             onFileSave(tab.filePath, contentToSave);
             setTabs(prevTabs =>
                 prevTabs.map(t => {
@@ -260,30 +271,25 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
         const removeFileChangedListener = window.ipcRenderer.on('fs:file-changed', async (_event, ...args) => {
             const filePath = args[0] as string;
             if (!filePath || !filePath.startsWith(projectPath || '')) return;
+            if (/[\\/]node_modules[\\/]|[\\/]\.git[\\/]/.test(filePath)) return;
 
-            // 使用 ref 获取最新的 tabs，避免闭包问题
+            // 跳过用户刚手动保存的文件（内容已在内存中，无需回读磁盘）
+            if (recentlySavedPathsRef.current.has(filePath)) return;
+
             const currentTabs = tabsRef.current;
             const editorTab = currentTabs.find(tab => tab.type === 'editor' && tab.filePath === filePath) as EditorTab | undefined;
             
             if (editorTab) {
-                // 如果文件正在被用户编辑，不自动覆盖（避免丢失用户的修改）
-                if (editorTab.isModified) {
-                    // 可以选择提示用户或静默跳过
-                    console.log(`File ${filePath} has been modified externally but is being edited, skipping auto-reload`);
-                    return;
-                }
+                if (editorTab.isModified) return;
 
-                // 延迟一下，确保文件写入完成
                 setTimeout(async () => {
                     try {
                         const result = await window.ipcRenderer.invoke('fs:read-file', filePath) as { success: boolean; content?: string; error?: string };
                         if (result.success && result.content !== undefined) {
-                            // 再次检查标签页是否还存在且未被修改
                             const latestTabs = tabsRef.current;
                             const latestTab = latestTabs.find(tab => tab.id === editorTab.id && tab.type === 'editor') as EditorTab | undefined;
                             
                             if (latestTab && !latestTab.isModified) {
-                                // 更新标签页内容
                                 setTabs(prevTabs =>
                                     prevTabs.map(tab =>
                                         tab.id === editorTab.id && tab.type === 'editor'
@@ -291,14 +297,13 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
                                             : tab
                                     )
                                 );
-                                // 更新父组件的文件内容缓存
                                 onFileChange(filePath, result.content);
                             }
                         }
                     } catch (error) {
                         console.error(`Failed to reload file ${filePath}:`, error);
                     }
-                }, 300);
+                }, 100);
             }
         });
 

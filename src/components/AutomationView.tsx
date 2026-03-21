@@ -40,6 +40,7 @@ interface AutomationViewProps {
     isTaskPanelHidden: boolean;
     onToggleTaskPanel: () => void;
     isNarrowWindow?: boolean;
+    onExecutingChange?: (executing: boolean) => void;
 }
 
 const deriveTaskTitleFromMessage = (text: string, maxLen = 28): string => {
@@ -201,7 +202,8 @@ export function AutomationView({
     isProcessing,
     isTaskPanelHidden,
     onToggleTaskPanel,
-    isNarrowWindow = false
+    isNarrowWindow = false,
+    onExecutingChange
 }: AutomationViewProps) {
     const { t } = useI18n();
     const { showToast } = useToast();
@@ -219,6 +221,7 @@ export function AutomationView({
     const [scriptTabs, setScriptTabs] = useState<AutomationScriptTab[]>([]);
     const [activeScriptTabId, setActiveScriptTabId] = useState<string | null>(null);
     const [isExecuting, setIsExecuting] = useState(false);
+    useEffect(() => { onExecutingChange?.(isExecuting); }, [isExecuting, onExecutingChange]);
     const [isLoadingHistory, setIsLoadingHistory] = useState(false);
     /** 执行任务卡片列表：每次点击执行新增一条，展示步骤输出与进度 */
     const [executionRuns, setExecutionRuns] = useState<RPAExecutionRun[]>([]);
@@ -406,12 +409,12 @@ export function AutomationView({
         return () => remove();
     }, [setSingleScriptTab]);
 
-    // 上下文切换（400 错误自动重试）：显示提示，任务已通过 rpa:task:created 自动切换
+    // 上下文切换（400 错误自动重试）：复用同一任务、新 session，仅 toast 提示
     useEffect(() => {
         const remove = window.ipcRenderer.on('agent:context-switched', (_: unknown, ...args: unknown[]) => {
             const payload = args[0] as { newTaskId?: string; projectId?: string } | undefined;
             if (payload?.newTaskId) {
-                showToast('遇到错误，已新建任务自动重试...');
+                showToast('遇到错误，正在同一任务下自动重试...');
             }
         });
         return () => remove();
@@ -791,7 +794,7 @@ export function AutomationView({
         const fullPath = tab?.filePath || `${currentProject.path}/script_${currentTaskId}.js`;
         const fileName = fullPath.split(/[/\\]/).pop()!;
         try {
-            const wr = await window.ipcRenderer.invoke('fs:write-file', fullPath, content) as { success: boolean; error?: string };
+            const wr = await window.ipcRenderer.invoke('fs:write-file', fullPath, content, { silent: true }) as { success: boolean; error?: string };
             if (wr.success) {
                 setScriptTabs(prev => prev.map(t => t.id === activeScriptTabId ? { ...t, content, isModified: false } : t));
                 await window.ipcRenderer.invoke('rpa:task:update', currentProject.id, currentTaskId, { scriptFileName: fileName });

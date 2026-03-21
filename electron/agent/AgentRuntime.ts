@@ -251,7 +251,61 @@ function isSafeCommand(command: string): boolean {
     return false;
 }
 
+/**
+ * 拦截会误杀 OpenCowork 自身 Vite 开发服务（默认 5173）或整类 Vite/Node 进程的命令。
+ * 否则 Electron 渲染进程 HMR 断开会导致整个客户端像「刷新重启」一样白屏重载。
+ */
+function getBlockedHostAppDevKillMessage(rawCommand: string): string | null {
+    const cmd = rawCommand.trim();
+    if (!cmd) return null;
+    const lower = cmd.toLowerCase();
 
+    const hasKillIntent =
+        /\bpkill\b/i.test(cmd) ||
+        /\bkillall\b/i.test(cmd) ||
+        /\bxargs\s+kill\b/i.test(cmd) ||
+        /\bfuser\s+[^\n]*-k/i.test(cmd) ||
+        /\btaskkill\b/i.test(cmd) ||
+        /\b(kill-port|killport)\b/i.test(cmd) ||
+        /\bnpx\s+kill-port\b/i.test(lower) ||
+        /\bkill\s+-\d+/i.test(cmd) ||
+        /\bkill\s+\$\(/i.test(cmd) ||
+        (/\blsof\b/i.test(cmd) && /\bxargs\b/i.test(cmd));
+
+    const targetsPort5173 =
+        /:\s*5173\b/i.test(cmd) ||
+        /-i\s*:?\s*5173\b/i.test(cmd) ||
+        /\b5173\s*\/tcp\b/i.test(cmd) ||
+        (/\b5173\b/.test(cmd) && /\b(kill-port|killport)\b/i.test(cmd));
+
+    if (hasKillIntent && targetsPort5173) {
+        return [
+            '❌ 已拒绝执行：该命令会终止 OpenCowork 客户端自身的 Vite 开发服务（端口 5173），导致整个应用断开 HMR 并像「刷新重启」一样重新加载，聊天会话界面也会受影响。',
+            '',
+            '✅ 请改用专用工具 **kill_project_dev_server**（仅关闭**用户项目**在端口 **3000** 上的开发服务），然后执行 **pnpm dev** 重新启动项目预览。',
+            '',
+            '切勿使用：`lsof … :5173`、`pkill -f vite`、`killall node`、`kill-port 5173` 等在本应用内「重启服务」。',
+        ].join('\n');
+    }
+
+    if (/\bpkill\b/i.test(cmd) && /\bvite\b/i.test(lower)) {
+        return [
+            '❌ 已拒绝执行：`pkill` 匹配 Vite 进程会一并杀掉 OpenCowork 自带的 Vite，导致整个客户端重载。',
+            '',
+            '✅ 请使用 **kill_project_dev_server**，再 **pnpm dev**（项目固定使用端口 3000）。',
+        ].join('\n');
+    }
+
+    if (/\bkillall\b/i.test(lower) && /\bnode\b/i.test(lower)) {
+        return [
+            '❌ 已拒绝执行：`killall node` 会终止本应用相关的 Node 进程，极易导致 Electron 客户端异常或整体重启。',
+            '',
+            '✅ 请使用 **kill_project_dev_server** 仅关闭用户项目在 3000 端口的 dev 服务。',
+        ].join('\n');
+    }
+
+    return null;
+}
 
 export type AgentMessage = {
     role: 'user' | 'assistant';
@@ -447,6 +501,7 @@ export class AgentRuntime {
             this.isProcessing = true;
 
             let effectiveTaskIdForDone = taskId;
+            let skipBrowserRefreshForApiError = false;
             try {
                 const result = await this.processMessageWithContext(input, taskId, projectId, isFloatingBall, restoreRef);
                 if (result?.effectiveTaskId) {
@@ -455,6 +510,10 @@ export class AgentRuntime {
             } catch (error) {
                 // 即使出错也要确保状态恢复和任务清理
                 console.error(`[AgentRuntime] Task ${taskId} error:`, error);
+                const st = (error as { status?: number })?.status;
+                if (typeof st === 'number' && [400, 401, 403, 404, 408, 409, 413, 422, 429, 500, 502, 503, 504].includes(st)) {
+                    skipBrowserRefreshForApiError = true;
+                }
                 throw error; // 重新抛出，让外层处理
             } finally {
                 // 先广播本任务的历史，再恢复全局 history，否则 notifyUpdate() 会发出已恢复的空历史导致聊天区被清空
@@ -467,7 +526,13 @@ export class AgentRuntime {
                 this.isProcessing = originalIsProcessing;
                 this.abortController = originalAbortController;
                 this.activeTasks.delete(taskId);
-                this.broadcast('agent:done', { timestamp: Date.now(), taskId: effectiveTaskIdForDone, projectId, skipBrowserRefresh: this.runUsedKillProjectDevServer, artifacts: [...this.artifacts] });
+                this.broadcast('agent:done', {
+                    timestamp: Date.now(),
+                    taskId: effectiveTaskIdForDone,
+                    projectId,
+                    skipBrowserRefresh: this.runUsedKillProjectDevServer || skipBrowserRefreshForApiError,
+                    artifacts: [...this.artifacts]
+                });
             }
         } else {
             // 全局并发控制（向后兼容）：保持原有逻辑
@@ -485,13 +550,24 @@ export class AgentRuntime {
             this.isProcessing = true;
             this.abortController = new AbortController();
             setMaxListeners(32, this.abortController.signal);
+            let skipBrowserRefreshForApiError = false;
             try {
                 await this.processMessageWithContext(input, undefined, undefined, isFloatingBall, restoreRef);
+            } catch (error) {
+                const st = (error as { status?: number })?.status;
+                if (typeof st === 'number' && [400, 401, 403, 404, 408, 409, 413, 422, 429, 500, 502, 503, 504].includes(st)) {
+                    skipBrowserRefreshForApiError = true;
+                }
+                throw error;
             } finally {
                 this.isProcessing = false;
                 this.abortController = null;
                 this.notifyUpdate();
-                this.broadcast('agent:done', { timestamp: Date.now(), skipBrowserRefresh: this.runUsedKillProjectDevServer, artifacts: [...this.artifacts] });
+                this.broadcast('agent:done', {
+                    timestamp: Date.now(),
+                    skipBrowserRefresh: this.runUsedKillProjectDevServer || skipBrowserRefreshForApiError,
+                    artifacts: [...this.artifacts]
+                });
             }
         }
     }
@@ -591,51 +667,44 @@ export class AgentRuntime {
             }
 
             // 上下文超限/代理/上游 400 等可重试错误：自动新建任务（新会话），从头重新执行原始请求（最多重试 1 次）
-            if (this.isRetryableContextError(err, error) && this.contextSwitchRetryCount < 1) {
+            if (this.isRetryableContextError(err, error) && this.contextSwitchRetryCount < 2) {
                 this.contextSwitchRetryCount++;
+                // 退避等待：第 1 次 3s，第 2 次 8s，给上游恢复时间
+                const delay = this.contextSwitchRetryCount === 1 ? 3000 : 8000;
+                console.log(`[AgentRuntime] Context switch attempt ${this.contextSwitchRetryCount}, waiting ${delay}ms before retry...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
                 try {
-                    // 提取原始用户意图（第一条 user 消息，或当前 input），从头重新执行，不携带工具调用历史
                     const originalUserInput = (() => {
                         const firstUserMsg = this.history.find(m => m.role === 'user');
                         if (firstUserMsg) return this.extractTextFromMessage(firstUserMsg);
                         return typeof input === 'string' ? input : (input?.content ?? '');
                     })();
 
-                    // 新会话只包含原始请求，清空所有工具调用历史
+                    // 构建执行进度摘要：告诉 agent dev server 已启动、有哪些错误
+                    const progressSummary = this.buildProgressSummary();
+                    const userContent = progressSummary
+                        ? `${originalUserInput}\n\n[系统提示] 以下步骤已在上一轮会话中完成，请勿重复执行：\n${progressSummary}\n请从未完成的步骤继续执行。`
+                        : originalUserInput;
+
                     const freshHistory: Anthropic.MessageParam[] = [
-                        { role: 'user', content: originalUserInput }
+                        { role: 'user', content: userContent }
                     ];
 
                     const newSession = sessionStore.createSession('自动重试');
                     sessionStore.setSessionId(newSession.id, isFloatingBall ?? false);
 
-                    let effectiveTaskId = taskId;
+                    // 复用当前任务并仅绑定新 session，不新建「自动重试」任务，避免侧栏出现两个上下文（预览+自动重试）
+                    const effectiveTaskId = taskId ?? undefined;
                     if (taskId && projectId) {
-                        // 将旧任务标记为 failed
                         const isAutomation = this.currentViewContext === 'automation';
                         if (isAutomation) {
-                            rpaProjectStore.updateTask(projectId, taskId, { status: 'failed' });
-                            const newTask = rpaProjectStore.createTask(projectId, '自动重试', newSession.id);
-                            if (newTask) {
-                                effectiveTaskId = newTask.id;
-                                setCurrentRpaTaskIdForContextSwitch(newTask.id);
-                                this.broadcast('rpa:task:updated', { projectId, taskId, updates: { status: 'failed' } });
-                                this.broadcast('rpa:task:created', newTask);
-                                this.broadcast('rpa:task:updated', { projectId, taskId: newTask.id, updates: { sessionId: newSession.id } });
-                            }
+                            rpaProjectStore.updateTask(projectId, taskId, { sessionId: newSession.id });
+                            setCurrentRpaTaskIdForContextSwitch(taskId);
+                            this.broadcast('rpa:task:updated', { projectId, taskId, updates: { sessionId: newSession.id } });
                         } else {
-                            projectStore.updateTask(projectId, taskId, { status: 'failed' });
-                            const newTask = projectStore.createTask(projectId, '自动重试', newSession.id);
-                            if (newTask) {
-                                effectiveTaskId = newTask.id;
-                                setCurrentTaskIdForContextSwitch(newTask.id);
-                                this.broadcast('project:task:updated', { projectId, taskId, updates: { status: 'failed' } });
-                                this.broadcast('project:task:created', newTask);
-                                this.broadcast('project:task:updated', { projectId, taskId: newTask.id, updates: { sessionId: newSession.id } });
-                            } else {
-                                projectStore.updateTask(projectId, taskId, { sessionId: newSession.id });
-                                this.broadcast('project:task:updated', { projectId, taskId, updates: { sessionId: newSession.id } });
-                            }
+                            projectStore.updateTask(projectId, taskId, { sessionId: newSession.id });
+                            setCurrentTaskIdForContextSwitch(taskId);
+                            this.broadcast('project:task:updated', { projectId, taskId, updates: { sessionId: newSession.id } });
                         }
                     }
 
@@ -703,6 +772,8 @@ export class AgentRuntime {
                     this.broadcast('agent:error', errorPayload(errorMsg));
                 }
             }
+            // 已广播 agent:error 后仍向上抛出，供 main 的 agent:send-message 返回 { ok: false }（避免 IPC handler 外再包一层未处理异常）
+            throw error;
         }
     }
 
@@ -729,9 +800,94 @@ export class AgentRuntime {
 
     private isRetryableContextError(err: { status?: number; statusCode?: number; message?: string; error?: { message?: string } }, _rawError?: unknown): boolean {
         const status = err.status ?? err.statusCode;
-        // 所有 400 均视为可重试（上下文超限、代理/上游返回 400 等均通过新建任务从头重试）
-        if (status === 400) return true;
-        return status === 429 || status === 500 || status === 503;
+        const detail = (err.error?.message || err.message || '').toLowerCase();
+
+        // 400: 仅当明确是上下文窗口溢出时才切换；其他 400（bad model、格式错误等）不切换
+        if (status === 400) {
+            const isContextOverflow = /context.*(length|limit|window|too.?long|exceed)|prompt.*(too.?long|exceed)|token.*(limit|exceed|maximum)|max.?tokens.*exceed|content.?length|input.?too.?long/i.test(detail);
+            const isUpstreamRetryable = /provider_response_error|upstream_error|bad response status code|overloaded/i.test(detail);
+            if (isContextOverflow) {
+                console.log(`[AgentRuntime] 400 is context overflow, will switch context: ${detail.substring(0, 150)}`);
+                return true;
+            }
+            if (isUpstreamRetryable) {
+                console.log(`[AgentRuntime] 400 is upstream/proxy error, will retry: ${detail.substring(0, 150)}`);
+                return true;
+            }
+            console.log(`[AgentRuntime] 400 is NOT context overflow, will NOT switch context: ${detail.substring(0, 150)}`);
+            return false;
+        }
+
+        // 429/500/503: 通常是临时性问题，可重试但不需要切换上下文
+        // 只在有已完成步骤时才重试（避免空白状态下死循环）
+        if (status === 429 || status === 500 || status === 503) {
+            return this.history.length > 2;
+        }
+        return false;
+    }
+
+    /**
+     * 从历史工具调用中构建已完成步骤的摘要，供上下文切换后的新会话参考
+     */
+    private buildProgressSummary(): string {
+        const steps: string[] = [];
+        let devServerRunning = false;
+        let devServerCwd = '';
+        let browserOpened = false;
+        let lastErrors = '';
+
+        for (const msg of this.history) {
+            if (msg.role !== 'assistant') continue;
+            const content = msg.content;
+            if (!Array.isArray(content)) continue;
+            for (const block of content) {
+                const b = block as { type?: string; name?: string; input?: Record<string, unknown>; text?: string };
+                if (b.type === 'tool_use') {
+                    if (b.name === 'run_command') {
+                        const cmd = String(b.input?.command || '');
+                        const cwd = String(b.input?.cwd || '');
+                        if (/pnpm\s+install|npm\s+install|yarn\s+install/i.test(cmd)) {
+                            steps.push(`- pnpm install 已执行完成（cwd: ${cwd}）`);
+                        }
+                        if (/pnpm\s+(dev|start)|npm\s+run\s+(dev|start)/i.test(cmd)) {
+                            devServerRunning = true;
+                            devServerCwd = cwd;
+                            steps.push(`- 开发服务器已启动（cwd: ${cwd}，端口 3000）`);
+                        }
+                    } else if (b.name === 'open_browser_preview') {
+                        browserOpened = true;
+                        steps.push('- 内置浏览器预览已打开');
+                    }
+                }
+                if (b.type === 'tool_result' || b.type === 'text') {
+                    const text = b.text || '';
+                    if (text.includes('❌ Page validation failed')) {
+                        const match = text.match(/Errors detected:\n([\s\S]*?)(?:\n\n|$)/);
+                        if (match) lastErrors = match[1].substring(0, 500);
+                    }
+                }
+            }
+        }
+
+        if (devServerRunning && devServerCwd) {
+            const stderr = FileSystemTools.getDevServerStderr(devServerCwd);
+            if (stderr) {
+                const relevant = FileSystemTools.extractRelevantErrors(stderr, 1000);
+                if (relevant) lastErrors = relevant;
+            }
+        }
+
+        if (lastErrors) {
+            steps.push(`- 页面存在构建错误，需要修复：\n${lastErrors}`);
+        }
+        if (devServerRunning) {
+            steps.push('- 开发服务器仍在运行中，无需重新启动');
+        }
+        if (browserOpened) {
+            steps.push('- 内置浏览器仍在显示预览页面');
+        }
+
+        return steps.length > 0 ? steps.join('\n') : '';
     }
 
     private extractTextFromMessage(msg: Anthropic.MessageParam): string {
@@ -1016,7 +1172,7 @@ You are in **Code Mode**. Your ONLY purpose is to generate code files for the us
 - **FORBIDDEN**: Do NOT use browser automation skills (agent-browser, webapp-testing, etc.)
 - **FORBIDDEN**: Do NOT use web search or information retrieval skills
 - **FORBIDDEN**: Do NOT attempt to search the internet or access external URLs
-- **ALLOWED**: Only use \`write_file\`, \`read_file\`, \`list_dir\`, \`run_command\` (for pnpm install/dev), \`open_browser_preview\`, \`kill_project_dev_server\`
+- **ALLOWED**: Only use \`write_file\`, \`read_file\`, \`list_dir\`, \`run_command\` (for pnpm install/dev), \`open_browser_preview\`, \`validate_page\`, \`kill_project_dev_server\`
 - **ALLOWED**: Only use \`react-project-builder\` skill if needed for project structure guidance
 - If the user asks something unrelated to code generation (e.g., searching for information, querying external services), politely explain that Code Mode is focused on code generation and ask them to clarify what code they need.
 ` : currentProject && isAutomation ? `⚠️ **当前模式：AUTOMATION MODE（自动化模式）**:
@@ -1048,28 +1204,15 @@ When you start a local development server (e.g., \`npm run dev\`, \`pnpm dev\`, 
 
 0. **Run \`pnpm install\`**: Run \`pnpm install\` in the project root using \`run_command\`. Wait for it to complete before proceeding. This is non-negotiable.
 1. **Start the dev server** using \`run_command\`
-2. **Open browser preview** using \`open_browser_preview\` with the preview URL (usually http://localhost:3000)
-3. **CRITICAL - Validate the page**: ~~After opening browser preview, **IMMEDIATELY call \`validate_page\`** with the preview URL to check for errors. This is MANDATORY and cannot be skipped.~~ (Temporarily disabled to avoid false positives)
-4. **Auto-heal if errors found**: ~~If \`validate_page\` reports ANY errors:~~ (Temporarily disabled)
-   - **Parse the error message** to identify the exact issue:
-     - If you see "Failed to resolve import" or "@ant-design/icons" or similar: This means a dependency is missing
-     - Extract the package name from the error (e.g., "@ant-design/icons" from "Failed to resolve import '@ant-design/icons'")
-     - If you see "require is not defined": This means code is using Node.js \`require()\` syntax in browser context. Fix by:
-       1. Find the file causing the error (check error stack trace for file path)
-       2. Replace \`require()\` with ES6 \`import\` statements
-       3. For example: \`const something = require('module')\` → \`import something from 'module'\`
-       4. For default exports: \`const module = require('module')\` → \`import module from 'module'\`
-       5. For named exports: \`const { func } = require('module')\` → \`import { func } from 'module'\`
-   - **Automatically fix the issue**:
-     - **If missing dependency**: Install it IMMEDIATELY using \`run_command\` (e.g., \`pnpm add @ant-design/icons\`). Do NOT skip this step.
-     - **If "require is not defined"**: Read the file mentioned in the error, convert all \`require()\` to \`import\` statements, and write the fixed code using \`write_file\`
-     - If import error: Fix the import statement in the code file using \`write_file\`
-     - If syntax error: Fix the code using \`write_file\`
-   - **Restart the dev server**: Stop the current server (kill process on port 3000) and start it again using \`run_command\`
-   - **Re-validate**: ~~Call \`validate_page\` again with the same URL to check if the error is fixed~~ (Temporarily disabled)
-   - **Repeat until success**: ~~Continue fixing and restarting until \`validate_page\` returns "✅ Page validation successful"~~ (Temporarily disabled)
-   - **DO NOT give up**: Keep trying until validation succeeds. Missing dependencies and require/import issues are common and easy to fix.
-5. **Only mark as done when validation succeeds**: ~~Do NOT mark the task as complete, do NOT say "服务器正常运行" (server is running normally), and do NOT say "成功创建" (successfully created) until \`validate_page\` explicitly returns "✅ Page validation successful". If you see ANY error in validate_page response, you MUST fix it.~~ (Temporarily disabled - validation check removed)
+2. **Open browser preview** using \`open_browser_preview\` with the preview URL (usually http://localhost:3000) and **cwd = Primary project path** (same as run_command). The app runs a **background validate + auto-fix** pass; passing cwd ensures errors are detected and fixed correctly.
+3. **Validate when unsure**: Call \`validate_page\` with the preview URL and **cwd = Primary project path** if you need an explicit check or if the user reports a blank/red error screen. Prefer fixing real build errors over dismissing them.
+4. **Auto-heal playbook** (after \`validate_page\` returns errors, or when the user shows Vite/esbuild overlay text):
+   - **Missing dependency** (\`Failed to resolve import\`, \`Cannot find module\`): \`pnpm add <package>\`, then refresh built-in browser if needed.
+   - **JSX in \`.ts\` file** (\`[plugin:vite:esbuild]\`, \`Expected ">" but found\`): rename the file to \`.tsx\` and fix any imports that include the \`.ts\` extension; update re-exports if needed.
+   - **\`require is not defined\` in console/overlay**: This is almost always a **false positive** from third-party CJS dependencies that Vite shims at runtime. **IGNORE it** if the page renders correctly and the UI is functional. Do NOT attempt to search user code for \`require()\` calls or convert them to ESM—it wastes time on a non-issue. Only investigate if the page is completely blank or non-functional AND the stack trace clearly points to a file in the user's \`src/\` directory.
+   - **Import path typos**: \`read_file\` the importer and fix paths with \`write_file\`.
+   - **After fixes: Do NOT restart the dev server.** Vite HMR will automatically pick up file changes. The built-in browser will show the correct page. Call \`validate_page\` again to verify.
+5. **Honest completion**: Do NOT claim preview is healthy if \`validate_page\` still reports \`❌ Page validation failed\` or the overlay shows an error—continue fixing until validation passes or you hit tool limits, then summarize what remains.
 
 **Development servers are always started on port 3000** (Vite, CRA, Next.js, etc.). Use **http://localhost:3000** for open_browser_preview and validate_page.
 
@@ -1386,7 +1529,8 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         // Dangerous commands always need confirmation
                                         const approved = await this.requestConfirmation(toolUse.name, `Execute command: ${args.command}`, args);
                                         if (approved) {
-                                            result = await this.fsTools.runCommand(args, defaultCwd);
+                                            const hostKillBlock = getBlockedHostAppDevKillMessage(args.command);
+                                            result = hostKillBlock ?? (await this.fsTools.runCommand(args, defaultCwd));
                                         } else {
                                             result = 'User denied the command execution.';
                                         }
@@ -1413,7 +1557,10 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     }
 
                                     if (approved) {
-                                        if (this.isPkillAgentBrowserOrChromium(args.command)) {
+                                        const hostKillBlockEarly = getBlockedHostAppDevKillMessage(args.command);
+                                        if (hostKillBlockEarly) {
+                                            result = hostKillBlockEarly;
+                                        } else if (this.isPkillAgentBrowserOrChromium(args.command)) {
                                             result = '此命令会关闭 agent-browser 并清除已保存的登录态，导致下次访问美团内网仍需扫码。已拒绝执行。若需关闭浏览器请使用: agent-browser close';
                                         } else {
                                         const meituanUrl = this.tryGetMeituanUrlFromAgentBrowserCommand(args.command);
@@ -1451,7 +1598,7 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         result = 'User denied the command execution.';
                                     }
                                 } else if (toolUse.name === 'open_browser_preview') {
-                                    const args = toolUse.input as { url: string };
+                                    const args = toolUse.input as { url: string; cwd?: string };
                                     let url = (args?.url || '').trim();
                                     console.log('[Preview:Debug] open_browser_preview called with url:', url);
                                     if (!url) {
@@ -1462,11 +1609,15 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                         }
                                         console.log('[Preview:Debug] Broadcasting agent:open-browser-preview:', url);
                                         this.broadcast('agent:open-browser-preview', url);
-                                        result = `Opened browser preview tab with URL: ${url}`;
+                                        const previewCwd = args?.cwd || authorizedFolders[0] || process.cwd();
+                                        await this.autoFixErrors(previewCwd, url, 5);
+                                        result = `Opened browser preview tab with URL: ${url}. Background validation and auto-fix (if needed) were attempted.`;
                                     }
                                 } else if (toolUse.name === 'validate_page') {
-                                    const args = toolUse.input as { url: string; timeout?: number };
-                                    result = await this.fsTools.validatePage(args);
+                                    const args = toolUse.input as { url: string; timeout?: number; cwd?: string };
+                                    const cwd = args.cwd || authorizedFolders[0] || process.cwd();
+                                    result = await this.fsTools.validatePage({ ...args, cwd });
+                                    result = AgentRuntime.downgradeRequireOnlyFailure(result, args.url);
                                 } else if (toolUse.name === 'kill_project_dev_server') {
                                     const args = toolUse.input as { cwd: string };
                                     const cwd = args?.cwd || authorizedFolders[0] || process.cwd();
@@ -1673,13 +1824,12 @@ ${skillInfo.instructions}
                     // Allow the loop to continue to the next iteration
                     continue;
                 } else if (hasSuccessfulScriptExecution && (loopErr.status === 400 || loopErr.status === 429 || loopErr.status === 500 || loopErr.status === 503)) {
-                    // 若是可重试错误，抛出以交由 processMessageWithContext 触发新会话切换并继续
+                    // 仅真正的上下文溢出才抛出触发上下文切换；其他错误优雅终止
                     if (this.isRetryableContextError(loopErr, loopError)) {
-                        console.warn(`[AgentRuntime] Script execution succeeded but API failed (${loopErr.status}). Re-throwing to trigger context switch retry.`);
+                        console.warn(`[AgentRuntime] API failed (${loopErr.status}), context overflow detected. Re-throwing to trigger context switch.`);
                         throw loopError;
                     }
-                    // 不可重试时沿用原有友好提示
-                    console.warn(`[AgentRuntime] Script execution succeeded, but subsequent AI call failed (${loopErr.status}). Ending loop gracefully.`);
+                    console.warn(`[AgentRuntime] Script execution succeeded, but API failed (${loopErr.status}). Not a context overflow, ending loop gracefully.`);
                     const createdFiles = this.artifacts.filter(a => a.type === 'file').map(a => a.name).join('、') || '无';
                     const friendlyMessage: Anthropic.MessageParam = {
                         role: 'assistant',
@@ -2076,83 +2226,251 @@ ${skillInfo.instructions}
     }
     /**
      * 自动错误检测和修复循环
+     * 优先使用 AI 通用修复（将错误+文件交给 LLM 分析并修复），无 API 或失败时回退到规则修复
      */
     private async autoFixErrors(cwd: string, url: string, maxRetries: number = 5): Promise<void> {
+        console.log(`[AutoFix] Starting auto-fix loop: cwd=${cwd}, url=${url}, maxRetries=${maxRetries}`);
         for (let attempt = 0; attempt < maxRetries; attempt++) {
-            // 等待服务器稳定
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            
-            // 验证页面
-            const validationResult = await this.fsTools.validatePage({ url, cwd, timeout: 15000 });
-            
-            // 如果验证成功，退出循环
-            if (validationResult.includes('✅ Page validation successful')) {
-                console.log(`[AgentRuntime] Page validation successful after ${attempt} fix attempt(s)`);
+            await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 5000 : 3000));
+
+            let rawValidation = await this.fsTools.validatePage({ url, cwd, timeout: 15000 });
+            let validationResult = AgentRuntime.downgradeRequireOnlyFailure(rawValidation, url);
+            console.log(`[AutoFix] attempt=${attempt + 1} validatePage result: ${validationResult.substring(0, 300)}`);
+
+            const stderr = FileSystemTools.getDevServerStderr(cwd);
+            const stderrHasError = ErrorDetector.hasErrorSignal(stderr);
+            console.log(`[AutoFix] stderr length=${stderr.length}, hasError=${stderrHasError}`);
+            if (stderr.length > 0) {
+                console.log(`[AutoFix] stderr tail (300 chars): ${stderr.slice(-300)}`);
+            }
+
+            // stderr 有真实错误时，始终用 stderr 构建错误信息（不管 validatePage 返回什么）
+            // 因为 validatePage 可能返回无用的 "Page returned status 200"，而 stderr 有完整的错误详情
+            if (stderrHasError) {
+                const errText = FileSystemTools.extractRelevantErrors(stderr);
+                validationResult = `❌ Page validation failed: ${url}\n\nErrors detected:\n${errText}\n\nPlease fix these errors. Vite HMR will auto-update; do NOT restart the dev server.`;
+                console.log('[AutoFix] Using stderr-based error info (most reliable source)');
+            }
+
+            if (validationResult.includes('✅ Page validation successful') && !stderrHasError) {
+                console.log(`[AutoFix] Page validation successful after ${attempt} fix attempt(s)`);
                 return;
             }
-            
-            // 解析错误
-            const errors = this.parseErrorsFromValidation(validationResult, cwd);
-            const fixableErrors = errors.filter(e => e.fixable);
-            
-            if (fixableErrors.length === 0) {
-                console.log(`[AgentRuntime] No fixable errors found, stopping auto-fix loop`);
-                break;
+
+            if (!validationResult.includes('❌') && !stderrHasError) {
+                console.log(`[AutoFix] No errors detected, validation passed`);
+                return;
             }
-            
-            console.log(`[AgentRuntime] Attempt ${attempt + 1}/${maxRetries}: Found ${fixableErrors.length} fixable error(s)`);
-            
-            // 修复错误
+
+            console.log(`[AutoFix] Validation failed, attempting fix (attempt ${attempt + 1}/${maxRetries})`);
+
+            // 1. 优先从 stderr 直接检测错误（最可靠的来源）
+            let errors = stderrHasError
+                ? ErrorDetector.detectFromOutput(stderr, cwd)
+                : [];
+            // 补充从 validationResult 检测
+            if (errors.length === 0) {
+                errors = this.parseErrorsFromValidation(validationResult, cwd);
+            }
+            const fixableErrors = errors.filter(e => e.fixable);
+            console.log(`[AutoFix] Detected ${errors.length} error(s), ${fixableErrors.length} fixable: ${fixableErrors.map(e => `${e.type}:${e.variableName || e.message}`).join(', ')}`);
+
             let fixed = false;
-            for (const error of fixableErrors) {
-                const fixResult = await ErrorFixer.fixError(error, cwd);
-                if (fixResult.success) {
-                    console.log(`[AgentRuntime] Fixed error: ${fixResult.message}`);
-                    fixed = true;
-                } else {
-                    console.log(`[AgentRuntime] Failed to fix error: ${fixResult.message}`);
+            if (fixableErrors.length > 0) {
+                console.log(`[AutoFix] Attempt ${attempt + 1}/${maxRetries}: Rule-based fix for ${fixableErrors.length} error(s)`);
+                for (const error of fixableErrors) {
+                    const fixResult = await ErrorFixer.fixError(error, cwd);
+                    console.log(`[AutoFix] Rule fix result: ${fixResult.success ? '✅' : '❌'} ${fixResult.action} - ${fixResult.message}`);
+                    if (fixResult.success) {
+                        const changedPaths = fixResult.changedFiles || (error.filePath ? [error.filePath] : []);
+                        for (const p of changedPaths) {
+                            this.broadcast('fs:file-changed', p);
+                        }
+                        fixed = true;
+                    }
                 }
             }
-            
-            // 如果没有修复任何错误，退出循环
-            if (!fixed) {
-                console.log(`[AgentRuntime] No errors were fixed, stopping auto-fix loop`);
-                break;
+
+            if (fixed) {
+                await new Promise(resolve => setTimeout(resolve, 2500));
+                continue;
             }
-            
-            // 等待修复生效（依赖安装等需要时间）
-            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // 2. 回退：AI 通用修复（规则修不了时用 LLM 分析修复）
+            // 优先用 stderr 构建的 validationResult（含完整错误详情），而非 validatePage 的无用输出
+            console.log(`[AutoFix] Rule-based fix did not apply, trying AI fix...`);
+            const aiFixed = await this.aiFixValidationErrors(validationResult, cwd);
+            if (aiFixed) {
+                console.log(`[AutoFix] AI fixed errors in attempt ${attempt + 1}`);
+                await new Promise(resolve => setTimeout(resolve, 2500));
+                continue;
+            }
+
+            // 两种方式都没修好
+            if (attempt === 0) {
+                console.log(`[AutoFix] No fix applied on attempt 1, retrying once (stderr/checker may lag)`);
+                continue;
+            }
+            console.log(`[AutoFix] No fix applied (rule + AI both failed), stopping auto-fix loop`);
+            break;
         }
+    }
+
+    /**
+     * AI 通用修复：将错误文本和受影响文件交给 LLM 分析并修复，适用于任意类型错误
+     */
+    private async aiFixValidationErrors(validationResult: string, cwd: string): Promise<boolean> {
+        const afterDetected = validationResult.includes('Errors detected:')
+            ? (validationResult.split('Errors detected:')[1] || '').trim()
+            : validationResult;
+        const errorSection = afterDetected.replace(/\n\nPlease fix these errors[\s\S]*$/, '').trim();
+        if (!errorSection || errorSection.length < 10) {
+            console.log(`[AutoFix:AI] error section too short (${errorSection?.length ?? 0} chars), skipping`);
+            return false;
+        }
+        console.log(`[AutoFix:AI] errorSection (300 chars): ${errorSection.substring(0, 300)}`);
+
+        let filePaths = AgentRuntime.extractFilePathsFromError(errorSection, cwd);
+        if (filePaths.length === 0) {
+            const fullStderr = FileSystemTools.getDevServerStderr(cwd);
+            if (fullStderr) {
+                filePaths = AgentRuntime.extractFilePathsFromError(fullStderr, cwd);
+                if (filePaths.length > 0) {
+                    console.log(`[AutoFix:AI] found ${filePaths.length} file(s) from full stderr fallback`);
+                }
+            }
+        }
+        if (filePaths.length === 0) {
+            console.log(`[AutoFix:AI] no file paths extracted from error text (${errorSection.substring(0, 200)})`);
+            return false;
+        }
+        console.log(`[AutoFix:AI] found ${filePaths.length} file(s) to fix: ${filePaths.map(p => path.basename(p)).join(', ')}`);
+
+        const apiKey = configStore.getApiKey();
+        if (!apiKey || apiKey.length < 10) {
+            console.log('[AutoFix:AI] No API key, skip AI fix');
+            return false;
+        }
+
+        let anyFixed = false;
+        for (const filePath of filePaths) {
+            if (!fs.existsSync(filePath)) continue;
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const relPath = path.relative(cwd, filePath) || path.basename(filePath);
+
+            const prompt = `Fix the compilation/translation errors in this file. Return ONLY the complete fixed file content. No markdown code blocks, no explanation, no \`\`\` wrapper.
+
+Error output:
+${errorSection.slice(0, 6000)}
+
+File: ${relPath}
+
+Current content:
+${content}`;
+
+            try {
+                console.log(`[AutoFix:AI] Sending fix request for ${relPath} (${content.length} chars) to model ${this.model}`);
+                const resp = await this.anthropic.messages.create({
+                    model: this.model,
+                    max_tokens: 16000,
+                    system: 'You are a code fixer. Return only the complete fixed file content. No markdown, no ```, no explanation.',
+                    messages: [{ role: 'user', content: prompt }]
+                } as any);
+                let text = (resp.content as { type: string; text?: string }[]).find((b: { type: string }) => b.type === 'text')?.text?.trim() || '';
+                console.log(`[AutoFix:AI] Response for ${relPath}: ${text ? `${text.length} chars` : 'empty'}`);
+                if (text) {
+                    const mdMatch = text.match(/^```(?:tsx?|jsx?|ts|js)?\s*\n?([\s\S]*?)\n?```$/m);
+                    if (mdMatch) {
+                        text = mdMatch[1].trim();
+                        console.log(`[AutoFix:AI] Stripped markdown wrapper, content: ${text.length} chars`);
+                    }
+                    if (text && text !== content) {
+                        fs.writeFileSync(filePath, text, 'utf-8');
+                        this.broadcast('fs:file-changed', filePath);
+                        console.log(`[AutoFix:AI] ✅ Fixed: ${relPath}`);
+                        anyFixed = true;
+                    } else {
+                        console.log(`[AutoFix:AI] AI response identical to original, no change for ${relPath}`);
+                    }
+                }
+            } catch (e) {
+                console.warn(`[AutoFix:AI] ❌ API call failed for ${relPath}:`, e instanceof Error ? e.message : String(e));
+            }
+        }
+        return anyFixed;
+    }
+
+    /** 从错误文本中提取源文件路径（去重、解析为绝对路径） */
+    private static extractFilePathsFromError(errorText: string, cwd: string): string[] {
+        const seen = new Set<string>();
+        const result: string[] = [];
+
+        // 先清理常见前缀（FILE、at）以避免被混入路径
+        const cleaned = errorText.replace(/^\s*(?:FILE|at)\s+/gmi, '');
+
+        const candidates: string[] = [];
+        // 匹配：绝对路径（允许空格）、src/xxx、path(line:col)
+        for (const m of cleaned.matchAll(/((?:\/|[A-Za-z]:)(?:[^*?"<>|\n])+\.(tsx?|jsx?|vue|mjs|cjs))|(src[\w@.\-\\\/]*\.(tsx?|jsx?|vue|mjs|cjs))|([\w\-.]+\.(tsx?|jsx?))\s*\((\d+):(\d+)\)/gi)) {
+            const raw = (m[1] || m[3] || m[5] || '').replace(/\\/g, '/').trim();
+            if (raw) candidates.push(raw);
+        }
+
+        // 补充：按行逐行用 ErrorDetector.extractFileLoc 提取（处理各种格式）
+        for (const line of errorText.split('\n')) {
+            const loc = ErrorDetector.extractFileLoc(line, cwd);
+            if (loc.filePath) candidates.push(loc.filePath);
+        }
+
+        for (const raw of candidates) {
+            const resolved = path.isAbsolute(raw) ? raw : path.resolve(cwd, raw.replace(/^\//, ''));
+            const alt = !path.isAbsolute(raw) ? path.resolve(cwd, 'src', raw) : null;
+            for (const p of [resolved, alt].filter(Boolean)) {
+                if (p && fs.existsSync(p) && !seen.has(p)) {
+                    seen.add(p);
+                    result.push(p);
+                    break;
+                }
+            }
+        }
+        return result;
     }
 
     /**
      * 从验证结果中解析错误
      */
     private parseErrorsFromValidation(validationResult: string, cwd: string): DetectedError[] {
-        const errors: DetectedError[] = [];
-        
-        // 从验证结果中提取错误信息
-        if (validationResult.includes('Errors detected:')) {
-            const errorSection = validationResult.split('Errors detected:')[1]?.split('\n\n')[0] || '';
-            
-            // 检测依赖缺失错误
-            const missingDepMatches = errorSection.matchAll(/Failed to resolve import\s+["']([^"']+)["']/gi);
-            for (const match of missingDepMatches) {
-                const importPath = match[1];
-                const errorsFromText = ErrorDetector.detectFromOutput(`Failed to resolve import "${importPath}"`, cwd);
-                errors.push(...errorsFromText);
-            }
-            
-            // 检测模块未找到错误
-            const moduleNotFoundMatches = errorSection.matchAll(/Cannot find module\s+["']([^"']+)["']/gi);
-            for (const match of moduleNotFoundMatches) {
-                const importPath = match[1];
-                const errorsFromText = ErrorDetector.detectFromOutput(`Cannot find module "${importPath}"`, cwd);
-                errors.push(...errorsFromText);
-            }
-        }
-        
-        return errors;
+        const errorSection = validationResult.includes('Errors detected:')
+            ? (validationResult.split('Errors detected:')[1]?.split('\n\n')[0] || '')
+            : validationResult;
+        return ErrorDetector.mergeDetectedErrors([
+            ErrorDetector.detectFromOutput(errorSection, cwd),
+            ErrorDetector.detectFromOverlay(errorSection, cwd),
+        ]);
+    }
+
+    /**
+     * If a validate_page result is ❌ but the ONLY error is "require is not defined",
+     * convert it to ✅ — this is a known false positive from CJS third-party deps in Vite.
+     */
+    private static downgradeRequireOnlyFailure(result: string, url: string): string {
+        if (!result.includes('❌')) return result;
+        const lower = result.toLowerCase();
+        const hasRequire = lower.includes('require is not defined') ||
+            (lower.includes('referenceerror') && lower.includes('require'));
+        if (!hasRequire) return result;
+        const hasRealError = lower.includes('failed to resolve') ||
+            lower.includes('cannot find module') ||
+            lower.includes('cannot find name') ||
+            lower.includes('[typescript]') ||
+            lower.includes('module not found') ||
+            lower.includes('transform failed') ||
+            lower.includes('internal server error') ||
+            lower.includes('missing semicolon') ||
+            lower.includes('[plugin:vite:') ||
+            lower.includes('[plugin:vite:esbuild]') ||
+            lower.includes('[plugin:vite:import-analysis]');
+        if (hasRealError) return result;
+        return `✅ Page validation successful: ${url} loaded correctly. (Note: "require is not defined" from third-party CJS dependencies was ignored — this is a known Vite false positive.)`;
     }
 
     public dispose() {

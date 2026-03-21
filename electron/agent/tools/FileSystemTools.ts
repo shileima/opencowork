@@ -16,6 +16,45 @@ import { resolveShellForCommand } from '../../utils/ShellResolver';
 
 const execAsync = promisify(exec);
 
+/**
+ * 二次防护：拦截会误杀 OpenCowork 客户端自身 Vite(HMR) 的危险命令。
+ * 即使上游提示词/运行时拦截失效，这里也不会执行。
+ */
+function getBlockedHostAppDevKillMessage(rawCommand: string): string | null {
+    const cmd = rawCommand.trim();
+    if (!cmd) return null;
+    const lower = cmd.toLowerCase();
+
+    const hasKillIntent =
+        /\bpkill\b/i.test(cmd) ||
+        /\bkillall\b/i.test(cmd) ||
+        /\bxargs\s+kill\b/i.test(cmd) ||
+        /\bfuser\s+[^\n]*-k/i.test(cmd) ||
+        /\btaskkill\b/i.test(cmd) ||
+        /\b(kill-port|killport)\b/i.test(cmd) ||
+        /\bnpx\s+kill-port\b/i.test(lower) ||
+        /\bkill\s+-\d+/i.test(cmd) ||
+        /\bkill\s+\$\(/i.test(cmd) ||
+        (/\blsof\b/i.test(cmd) && /\bxargs\b/i.test(cmd));
+
+    const targetsPort5173 =
+        /:\s*5173\b/i.test(cmd) ||
+        /-i\s*:?\s*5173\b/i.test(cmd) ||
+        /\b5173\s*\/tcp\b/i.test(cmd) ||
+        (/\b5173\b/.test(cmd) && /\b(kill-port|killport)\b/i.test(cmd));
+
+    if (hasKillIntent && targetsPort5173) {
+        return '❌ 已拒绝执行：该命令会终止 OpenCowork 客户端自身开发服务(5173)，导致整个客户端重载。请改用 kill_project_dev_server 仅关闭项目服务(3000)。';
+    }
+    if (/\bpkill\b/i.test(cmd) && /\bvite\b/i.test(lower)) {
+        return '❌ 已拒绝执行：pkill vite 会误杀 OpenCowork 客户端进程，导致整应用重载。请改用 kill_project_dev_server。';
+    }
+    if (/\bkillall\b/i.test(lower) && /\bnode\b/i.test(lower)) {
+        return '❌ 已拒绝执行：killall node 会影响 OpenCowork 客户端进程。请改用 kill_project_dev_server。';
+    }
+    return null;
+}
+
 /** 轮询直到端口可连接或超时，确保 dev 服务真正在监听后再打开浏览器，避免 ERR_CONNECTION_REFUSED */
 function isPortOpen(host: string, port: number, timeoutMs = 800): Promise<boolean> {
     return new Promise((resolve) => {
@@ -142,7 +181,8 @@ export const OpenBrowserPreviewSchema = {
     input_schema: {
         type: "object" as const,
         properties: {
-            url: { type: "string", description: "The URL to open in the browser preview tab (e.g., 'http://localhost:3000'). Will auto-add http:// if missing." }
+            url: { type: "string", description: "The URL to open in the browser preview tab (e.g., 'http://localhost:3000'). Will auto-add http:// if missing." },
+            cwd: { type: "string", description: "Project root (same as run_command cwd). Required for auto-fix to find dev server output." }
         },
         required: ["url"]
     }
@@ -174,7 +214,36 @@ export const KillProjectDevServerSchema = {
     }
 };
 
+/** 开发服务器 stderr 缓存（按 cwd），用于 validate_page 兜底检测 */
+const DEV_SERVER_STDERR_MAX = 80 * 1024;
+const devServerStderrByCwd = new Map<string, string>();
+
 export class FileSystemTools {
+    /**
+     * 从完整 stderr/stdout 中提取关键错误段落（保留真实错误行+少量堆栈，去掉冗长的 node_modules 堆栈）
+     */
+    static extractRelevantErrors(fullOutput: string, maxLen: number = 8000): string {
+        if (fullOutput.length <= maxLen) return fullOutput;
+
+        const errorPatterns = /(?:^|\n).*(?:Internal server error|\bERROR\s*\(|\[ERROR\]|Failed to resolve import|Cannot find (?:module|name)|Transform failed|\[plugin:vite:|pre-transform error|Unterminated|Missing semicolon|Unexpected token|SyntaxError|'\}' expected|\[TypeScript\]|\[ESLint\]|Module not found|Parsing error|failed to parse source).*$/gmi;
+        const chunks: string[] = [];
+        let match;
+        while ((match = errorPatterns.exec(fullOutput)) !== null) {
+            const start = Math.max(0, match.index - 200);
+            let end = Math.min(fullOutput.length, match.index + match[0].length + 600);
+            const nextError = fullOutput.indexOf('\n[', match.index + match[0].length);
+            if (nextError > 0 && nextError < end) end = nextError;
+            chunks.push(fullOutput.substring(start, end));
+        }
+        if (chunks.length === 0) return fullOutput.slice(-maxLen);
+        const result = [...new Set(chunks)].join('\n---\n');
+        return result.length > maxLen ? result.slice(0, maxLen) : result;
+    }
+    /** 获取指定 cwd 下 dev server 的 stderr，供 autoFixErrors 预检 */
+    static getDevServerStderr(cwd: string): string {
+        const norm = path.resolve(cwd);
+        return devServerStderrByCwd.get(norm) || devServerStderrByCwd.get(cwd) || '';
+    }
     // 跟踪所有启动的子进程
     private static childProcesses: Set<import('child_process').ChildProcess> = new Set();
     private static activePorts: Set<number> = new Set();
@@ -342,7 +411,7 @@ export class FileSystemTools {
                     
                     const consoleErrors: string[] = [];
                     const pageErrors: string[] = [];
-                    const networkErrors: string[] = [];
+                    const networkErrors: Array<{ url: string; status: number; statusText: string }> = [];
                     const overlayErrors: string[] = [];
                     
                     // 监听控制台错误（只记录真正的错误，忽略警告）
@@ -416,15 +485,19 @@ export class FileSystemTools {
                     // 监听网络错误（失败的 HTTP 请求）
                     page.on('response', (response: any) => {
                         const status = response.status();
-                        const url = response.url();
+                        const responseUrl = response.url();
                         // 只记录关键错误（4xx, 5xx），忽略重定向等
                         if (status >= 400 && status < 600) {
                             // 过滤掉一些非关键资源
-                            const lowerUrl = url.toLowerCase();
+                            const lowerUrl = responseUrl.toLowerCase();
                             if (!lowerUrl.includes('favicon') && 
                                 !lowerUrl.includes('sourcemap') &&
                                 !lowerUrl.includes('.map')) {
-                                networkErrors.push(`Failed to load ${url}: ${status} ${response.statusText()}`);
+                                networkErrors.push({
+                                    url: responseUrl,
+                                    status,
+                                    statusText: response.statusText(),
+                                });
                             }
                         }
                     });
@@ -432,8 +505,8 @@ export class FileSystemTools {
                     try {
                         await page.goto(url, { waitUntil: 'networkidle', timeout });
                         
-                        // 等待一下，确保错误覆盖层已经渲染（如果有的话）
-                        await page.waitForTimeout(2000);
+                        // 等待错误覆盖层渲染（Vite 原生约 2s，vite-plugin-checker/TypeScript 需 4-5s）
+                        await page.waitForTimeout(4500);
                         
                         // 首先检查页面是否正常加载（检查关键指标）
                         // 使用 try-catch 完全隔离 page.evaluate 的错误，不报告为页面错误
@@ -453,34 +526,53 @@ export class FileSystemTools {
                                                        document.querySelector('#app') ||
                                                        document.querySelector('[id="app"]'));
                                     
-                                    // 检查是否有 Vite 错误覆盖层（更严格的检查）
-                                    const viteErrorOverlay = document.querySelector('[data-vite-error-overlay]') || 
-                                                            document.querySelector('.vite-error-overlay');
-                                    
+                                    // Vite 错误覆盖层：旧版、vite-error-overlay、vite-plugin-checker (TypeScript/ESLint)
+                                    const viteLegacy = document.querySelector('[data-vite-error-overlay]') ||
+                                        document.querySelector('.vite-error-overlay') ||
+                                        document.querySelector('#vite-error-overlay');
+                                    const viteCustom = document.querySelector('vite-error-overlay');
+                                    const checkerOverlay = document.querySelector('vite-plugin-checker-error-overlay');
+                                    let overlayPlain = '';
+                                    if (viteLegacy) {
+                                        const style = window.getComputedStyle(viteLegacy);
+                                        const isVisible = style.display !== 'none' &&
+                                            style.visibility !== 'hidden' &&
+                                            style.opacity !== '0' &&
+                                            parseInt(style.zIndex || '0', 10) >= 0;
+                                        if (isVisible) {
+                                            overlayPlain = viteLegacy.textContent || '';
+                                        }
+                                    }
+                                    if (!overlayPlain.trim() && viteCustom) {
+                                        const sr = viteCustom.shadowRoot;
+                                        overlayPlain = sr ? (sr.textContent || '') : (viteCustom.textContent || '');
+                                    }
+                                    if (!overlayPlain.trim() && checkerOverlay) {
+                                        const sr = checkerOverlay.shadowRoot;
+                                        overlayPlain = sr ? (sr.textContent || '') : (checkerOverlay.textContent || '');
+                                    }
+                                    const bodyText = (document.body && (document.body.innerText || document.body.textContent)) || '';
+                                    const combinedText = [overlayPlain, bodyText].filter(Boolean).join('\n');
+                                    const looksLikeViteFailure = /\bERROR\s*\(|\[ERROR\]|\[plugin:vite:[^\]]+\]|\[TypeScript\]|\[ESLint\]|Cannot find name|vite-error-overlay|vite-plugin-checker|pre-transform error|transform failed|internal server error|missing semicolon|syntaxerror|unexpected token|unterminated|string literal|parsing error|failed to parse source|Cannot find module|Module not found|Failed to resolve import/i.test(combinedText);
+
                                     let hasVisibleError = false;
                                     let errorText: string | null = null;
-                                    
-                                    if (viteErrorOverlay) {
-                                        const style = window.getComputedStyle(viteErrorOverlay);
-                                        const isVisible = style.display !== 'none' && 
-                                                         style.visibility !== 'hidden' && 
-                                                         style.opacity !== '0' &&
-                                                         parseInt(style.zIndex || '0', 10) >= 0;
-                                        if (isVisible) {
-                                            const overlayText = viteErrorOverlay.textContent || '';
-                                            if (overlayText.trim().length > 0) {
-                                                // 检查错误文本，如果是 "require is not defined" 且页面已经正常加载，可能是误报
-                                                const overlayTextLower = overlayText.toLowerCase();
-                                                const isRequireError = overlayTextLower.includes('require is not defined') ||
-                                                                       (overlayTextLower.includes('referenceerror') && overlayTextLower.includes('require'));
-                                                
-                                                // 如果页面已经正常加载（有内容、有标题、有根元素），且错误是 require 相关，可能是误报
-                                                // 只有在页面没有正常加载时，才认为这是真正的错误
-                                                if (!isRequireError || !(hasBodyContent && hasTitle && hasRoot)) {
-                                                    hasVisibleError = true;
-                                                    errorText = overlayText.substring(0, 500);
-                                                }
-                                            }
+
+                                    if (overlayPlain.trim().length > 0 || looksLikeViteFailure) {
+                                        const combined = [overlayPlain.trim(), bodyText.trim()].filter(Boolean).join('\n');
+                                        const overlayTextLower = combined.toLowerCase();
+                                        const isOnlyRequireError = (
+                                            overlayTextLower.includes('require is not defined') ||
+                                            (overlayTextLower.includes('referenceerror') && overlayTextLower.includes('require'))
+                                        ) && !overlayTextLower.includes('failed to resolve') &&
+                                          !overlayTextLower.includes('cannot find module') &&
+                                          !overlayTextLower.includes('cannot find name') &&
+                                          !overlayTextLower.includes('[typescript]') &&
+                                          !overlayTextLower.includes('transform failed') &&
+                                          !overlayTextLower.includes('[plugin:vite:');
+                                        if (!isOnlyRequireError) {
+                                            hasVisibleError = true;
+                                            errorText = combined.substring(0, 12000);
                                         }
                                     }
                                     
@@ -508,24 +600,25 @@ export class FileSystemTools {
                             };
                         }
                         
-                        // 如果页面正常加载（有内容、有标题、有根元素、没有错误覆盖层），直接返回成功
-                        // 优先级：页面加载成功 > 错误检测
-                        // 即使有一些错误信息，只要页面正常加载，就认为成功
-                        if (pageStatus.hasContent && !pageStatus.hasError) {
-                            await browser.close();
-                            return `✅ Page validation successful: ${url} loaded correctly. Page has content and no error overlay detected.`;
-                        }
-                        
-                        // 如果检测到可见的错误覆盖层，提取详细错误信息
-                        // 但先过滤掉 "require is not defined" 错误（可能是误报）
                         if (pageStatus.hasError && pageStatus.errorText) {
-                            const errorTextLower = pageStatus.errorText.toLowerCase();
-                            // 如果错误覆盖层中包含 "require is not defined"，但页面已经正常加载（有内容），可能是误报
-                            // 只有在页面没有正常加载时，才记录这个错误
-                            if (!pageStatus.hasContent || 
-                                (!errorTextLower.includes('require is not defined') && 
-                                 !(errorTextLower.includes('referenceerror') && errorTextLower.includes('require')))) {
-                                overlayErrors.push(pageStatus.errorText);
+                            overlayErrors.push(pageStatus.errorText);
+                        } else if (pageStatus.hasContent && !pageStatus.hasError) {
+                            // TypeScript checker 可能延迟出现，再等 2.5s 做二次检测
+                            await page.waitForTimeout(2500);
+                            try {
+                                const retryStatus = await page.evaluate(() => {
+                                    const checkerOverlay = document.querySelector('vite-plugin-checker-error-overlay');
+                                    const bodyText = (document.body && (document.body.innerText || document.body.textContent)) || '';
+                                    const overlayPlain = checkerOverlay ? (checkerOverlay.shadowRoot?.textContent || checkerOverlay.textContent || '') : '';
+                                    const combined = [overlayPlain, bodyText].filter(Boolean).join('\n');
+                                    const hasErr = /\[TypeScript\]|\[ESLint\]|Cannot find name/i.test(combined);
+                                    return hasErr ? combined.substring(0, 12000) : null;
+                                });
+                                if (retryStatus) {
+                                    overlayErrors.push(retryStatus);
+                                }
+                            } catch {
+                                /* ignore */
                             }
                         }
                         
@@ -552,7 +645,7 @@ export class FileSystemTools {
                             const allErrors = [
                                 ...consoleErrors.map((e: string) => `Console Error: ${e}`),
                                 ...pageErrors.map((e: string) => `Page Error: ${e}`),
-                                ...networkErrors.map((e: string) => `Network Error: ${e}`),
+                                ...networkErrors.map((e) => `Network Error: Failed to load ${e.url}: ${e.status} ${e.statusText}`),
                                 ...overlayErrors.map((e: string) => `Vite Error Overlay: ${e}`)
                             ].join('\n');
                             
@@ -567,6 +660,10 @@ export class FileSystemTools {
                                         fixHint += `- Missing dependency: ${error.packageName} (will be installed automatically)\n`;
                                     } else if (error.type === 'css_error' && error.importPath) {
                                         fixHint += `- CSS/Resource file not found: ${error.importPath} (will be fixed automatically)\n`;
+                                    } else if (error.type === 'cannot_find_name' && error.variableName) {
+                                        fixHint += `- Cannot find name: ${error.variableName} (will try to uncomment import automatically)\n`;
+                                    } else if (error.type === 'syntax_error' && /return\s+outside\s+of\s+function/i.test(error.message)) {
+                                        fixHint += `- 'return' outside of function (will add missing { after function declaration)\n`;
                                     } else if (error.type === 'import_error' && error.importPath) {
                                         fixHint += `- Import error: ${error.importPath} (may require manual fix)\n`;
                                     }
@@ -574,10 +671,10 @@ export class FileSystemTools {
                                 fixHint += '\nThese errors will be automatically fixed.';
                             }
                             
-                            return `❌ Page validation failed: ${url}\n\nErrors detected:\n${allErrors}${fixHint}\n\nPlease fix these errors and restart the dev server.`;
+                            return `❌ Page validation failed: ${url}\n\nErrors detected:\n${allErrors}${fixHint}\n\nPlease fix these errors. Vite HMR will auto-update; do NOT restart the dev server.`;
                         }
                         
-                        // 如果页面正常加载，但有一些非关键错误，检查是否是关键错误
+                        // 如果没有 overlay，再检查控制台/运行时/网络中的关键错误
                         if (consoleErrors.length > 0 || pageErrors.length > 0 || networkErrors.length > 0) {
                             // 过滤出关键错误（影响页面功能的错误）
                             const criticalErrors: string[] = [];
@@ -617,8 +714,15 @@ export class FileSystemTools {
                                 }
                             }
                             
-                            // 网络错误通常是关键的
-                            criticalErrors.push(...networkErrors.map((e: string) => `Network Error: ${e}`));
+                            // 网络错误：仅把“脚本/源码请求失败”或 5xx 视为关键错误，避免偶发资源噪音
+                            for (const e of networkErrors) {
+                                const lowerUrl = e.url.toLowerCase();
+                                const looksLikeSourceAsset =
+                                    /\/src\/|@id\/|\.tsx?(\?|$)|\.jsx?(\?|$)|\.css(\?|$)|\.vue(\?|$)|\.svelte(\?|$)/i.test(lowerUrl);
+                                if (e.status >= 500 || looksLikeSourceAsset) {
+                                    criticalErrors.push(`Network Error: Failed to load ${e.url}: ${e.status} ${e.statusText}`);
+                                }
+                            }
                             
                             // 只有关键错误才报告
                             // 在上面的循环中已经过滤掉了 require 错误，这里不需要再次过滤
@@ -651,12 +755,23 @@ export class FileSystemTools {
                                     fixHint = `\n\n⚠️ IMPORTANT: Missing dependency detected. Install it using: pnpm add ${packageName}\n`;
                                 }
                                 
-                                return `❌ Page validation failed: ${url}\n\nErrors detected:\n${allErrors}${fixHint}\nPlease fix these errors and restart the dev server.`;
+                                return `❌ Page validation failed: ${url}\n\nErrors detected:\n${allErrors}${fixHint}\nPlease fix these errors. Vite HMR will auto-update; do NOT restart the dev server.`;
                             }
                         }
 
-                        // 如果页面正常加载且没有关键错误，返回成功
-                        return `✅ Page validation successful: ${url} loaded correctly with no errors detected.`;
+                        // 兜底：检查 dev server 输出（stdout+stderr，Playwright 可能漏检 overlay）
+                        const cwdNorm = path.resolve(cwd);
+                        const stderr = devServerStderrByCwd.get(cwdNorm) || devServerStderrByCwd.get(cwd) || '';
+                        if (ErrorDetector.hasErrorSignal(stderr)) {
+                            const errText = FileSystemTools.extractRelevantErrors(stderr);
+                            return `❌ Page validation failed: ${url}\n\nErrors detected:\n${errText}\n\nPlease fix these errors. Vite HMR will auto-update; do NOT restart the dev server.`;
+                        }
+
+                        // 成功标准：有基本页面内容，且无 overlay/关键错误
+                        if (pageStatus.hasContent) {
+                            return `✅ Page validation successful: ${url} loaded correctly with no critical errors detected.`;
+                        }
+                        return `❌ Page validation failed: ${url}\n\nError: Page shell did not render correctly.\n\nPlease fix these errors. Vite HMR will auto-update; do NOT restart the dev server.`;
                     } catch (error: unknown) {
                         await browser.close();
                         const errorMsg = error instanceof Error ? error.message : String(error);
@@ -669,7 +784,6 @@ export class FileSystemTools {
             }
 
             // 回退方案：使用 HTTP 请求检查（但不够准确）
-            const http = require('http');
             return new Promise((resolve) => {
                 const urlObj = new URL(url);
                 const req = http.get({
@@ -681,23 +795,25 @@ export class FileSystemTools {
                     let data = '';
                     res.on('data', (chunk: string) => { data += chunk; });
                     res.on('end', () => {
-                        // 检查响应中是否包含错误信息（HTTP 回退方案，只检测明显的错误）
-                        // 不检测 require 错误，因为 HTTP 方案不够准确
-                        const hasError = data.includes('Failed to resolve import') || 
-                                        data.includes('[plugin:vite:import-analysis]') ||
-                                        data.includes('Cannot find module') ||
-                                        data.includes('Module not found') ||
-                                        res.statusCode !== 200;
+                        const hasError = ErrorDetector.hasErrorSignal(data) || res.statusCode !== 200;
                         
                         if (!hasError) {
-                            resolve(`✅ Page validation successful: ${url} loaded correctly (status: ${res.statusCode})\n\nNote: HTTP validation may not detect all errors. For accurate validation, use Playwright.`);
+                            const cwdNorm = path.resolve(cwd);
+                            const stderr = devServerStderrByCwd.get(cwdNorm) || devServerStderrByCwd.get(cwd) || '';
+                            if (ErrorDetector.hasErrorSignal(stderr)) {
+                                const errText = FileSystemTools.extractRelevantErrors(stderr);
+                                resolve(`❌ Page validation failed: ${url}\n\nErrors detected:\n${errText}\n\nPlease fix these errors. Vite HMR will auto-update; do NOT restart the dev server.`);
+                            } else {
+                                resolve(`⚠️ Page validation inconclusive: ${url} returned HTTP ${res.statusCode} with no obvious server-side error text.\n\nBrowser-level validation is required to reliably detect Vite overlay/runtime errors.`);
+                            }
                         } else {
                             // 尝试提取错误信息（HTTP 回退方案不够准确，只检测明显的错误）
                             const errorPatterns = [
                                 /Failed to resolve import\s+["']([^"']+)["']/gi,
-                                /\[plugin:vite:import-analysis\][^\n]+/gi,
+                                /\[plugin:vite:[^\]]+\][^\n]*/gi,
                                 /Cannot find module\s+["']([^"']+)["']/gi,
-                                /Module not found\s+["']([^"']+)["']/gi
+                                /Module not found\s+["']([^"']+)["']/gi,
+                                /(missing semicolon|syntaxerror|unexpected token|transform failed|failed to parse source)[^\n]*/gi
                             ];
                             
                             const foundErrors: string[] = [];
@@ -725,7 +841,7 @@ export class FileSystemTools {
                                 fixHint = `\n\n⚠️ IMPORTANT: Missing dependency detected. Install it using: pnpm add ${packageName}\n`;
                             }
                             
-                            resolve(`❌ Page validation failed: ${url}\n\nErrors detected:\n${errorMsg}${fixHint}\nPlease fix these errors and restart the dev server.`);
+                            resolve(`❌ Page validation failed: ${url}\n\nErrors detected:\n${errorMsg}${fixHint}\nPlease fix these errors. Vite HMR will auto-update; do NOT restart the dev server.`);
                         }
                     });
                 });
@@ -785,6 +901,10 @@ export class FileSystemTools {
 
         // 如果命令包含 'node' 或 'npm'，替换为项目需要的版本路径
         let command = args.command;
+        const blockedMessage = getBlockedHostAppDevKillMessage(command);
+        if (blockedMessage) {
+            return blockedMessage;
+        }
         const nodePath = projectNodePath || getBuiltinNodePath();
         const npmPath = projectNpmPath || getBuiltinNpmPath();
         
@@ -925,13 +1045,18 @@ export class FileSystemTools {
                 const parsedPort = this.parseDevServerPort(command, workingDir);
                 // Vite 默认 5173，需通过 CLI 指定端口；CRA/Next 等认 PORT 环境变量
                 let runCommand = command;
-                if (parsedPort === 5173 && !/--port\s+\d+|\b5173\b/.test(command)) {
+                // 强制把显式 5173 改为 3000，避免与 OpenCowork 客户端开发端口冲突
+                runCommand = runCommand
+                    .replace(/(^|\s)PORT=5173(\s|$)/g, '$1PORT=3000$2')
+                    .replace(/(^|\s)VITE_PORT=5173(\s|$)/g, '$1VITE_PORT=3000$2')
+                    .replace(/(--port\s+|--port=|-p\s+)5173\b/g, '$13000');
+                if (parsedPort === 5173 && !/--port\s+\d+|--port=\d+|-p\s+\d+|\b5173\b/.test(runCommand)) {
                     const isRunScript = /(?:npm|pnpm|yarn)\s+(?:run\s+)?(dev|start)\b/i.test(command);
                     // --host 127.0.0.1 显式绑定 IPv4，确保 127.0.0.1 可访问；localhost 解析时通常会尝试 127.0.0.1 故也可用
                     const portHostArg = ` --port ${PROJECT_DEV_PORT} --host 127.0.0.1`;
                     runCommand = isRunScript
-                        ? command.trimEnd() + ' --' + portHostArg
-                        : command.trimEnd() + portHostArg;
+                        ? runCommand.trimEnd() + ' --' + portHostArg
+                        : runCommand.trimEnd() + portHostArg;
                 }
                 await this.killProcessOnPort(PROJECT_DEV_PORT);
                 
@@ -941,6 +1066,8 @@ export class FileSystemTools {
                 console.log(`[FileSystemTools] Environment PATH: ${env.PATH}`);
                 console.log(`[FileSystemTools] Node.js bin directory: ${nodePath && nodePath !== 'node' ? path.dirname(nodePath) : 'system'}`);
                 
+                const workingDirNorm = path.resolve(workingDir);
+                devServerStderrByCwd.delete(workingDirNorm);
                 const child = spawn(runCommand, [], {
                     cwd: workingDir,
                     env: env,
@@ -964,13 +1091,18 @@ export class FileSystemTools {
                 let stderrBuffer = '';
                 const detectedErrors: DetectedError[] = [];
                 
-                // 监听输出并检测错误
+                // 监听输出并检测错误（TypeScript/vite-plugin-checker 等常输出到 stdout，需合并）
+                const appendToOutputCache = (output: string) => {
+                    let buf = devServerStderrByCwd.get(workingDirNorm) || '';
+                    buf += output;
+                    if (buf.length > DEV_SERVER_STDERR_MAX) buf = buf.slice(-DEV_SERVER_STDERR_MAX);
+                    devServerStderrByCwd.set(workingDirNorm, buf);
+                };
                 child.stdout?.on('data', (data) => {
                     const output = data.toString();
                     stdoutBuffer += output;
                     console.log(`[DevServer] stdout: ${output.substring(0, 200)}`);
-                    
-                    // 实时检测错误
+                    appendToOutputCache(output);
                     const errors = ErrorDetector.detectFromOutput(output, workingDir);
                     detectedErrors.push(...errors);
                 });
@@ -979,8 +1111,7 @@ export class FileSystemTools {
                     const output = data.toString();
                     stderrBuffer += output;
                     console.error(`[DevServer] stderr: ${output.substring(0, 200)}`);
-                    
-                    // 实时检测错误
+                    appendToOutputCache(output);
                     const errors = ErrorDetector.detectFromOutput(output, workingDir);
                     detectedErrors.push(...errors);
                 });
@@ -1011,7 +1142,7 @@ export class FileSystemTools {
                 const uniqueErrors = this.deduplicateErrors([...detectedErrors, ...allErrors]);
                 
                 const url = `http://localhost:${PROJECT_DEV_PORT}`;
-                let result = `[Dev server started in background]\n\nCommand: ${runCommand}\nWorking directory: ${workingDir}\nNode.js: ${nodePath}\nnpm: ${npmPath || 'builtin'}\n\nPreview URL: ${url}\n\nThe development server is running on port ${PROJECT_DEV_PORT}. Use open_browser_preview to display it in the built-in browser.`;
+                let result = `[Dev server started in background]\n\nCommand: ${runCommand}\nWorking directory: ${workingDir}\nNode.js: ${nodePath}\nnpm: ${npmPath || 'builtin'}\n\nPreview URL: ${url}\n\nThe development server is running on port ${PROJECT_DEV_PORT}. Use open_browser_preview with url=${url} and cwd="${workingDir}" for auto-fix to work.`;
                 
                 // 如果有错误，添加到结果中
                 if (uniqueErrors.length > 0) {

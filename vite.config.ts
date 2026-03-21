@@ -17,6 +17,9 @@ function copyPlaywrightWrapper() {
   }
 }
 
+const hotRestart = process.env.ELECTRON_HOT_RESTART === '1'
+let electronStarted = false
+
 // https://vitejs.dev/config/
 export default defineConfig({
   server: {
@@ -40,8 +43,10 @@ export default defineConfig({
         // Shortcut of `build.lib.entry`.
         entry: 'electron/main.ts',
         onstart(args) {
-          // 主进程重新编译后自动重启 Electron，避免需要手动重启
-          args.startup()
+          if (!electronStarted || hotRestart) {
+            args.startup()
+            electronStarted = true
+          }
         },
         vite: {
           build: {
