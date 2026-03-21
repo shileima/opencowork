@@ -100,12 +100,12 @@ function getRendererDistPath(): string {
     return RENDERER_DIST
   }
 
-  // 兼容性保护：热更新版本的 major.minor 超过主程序版本 → 前端功能超出主进程能力，回退内置
-  // 例如：主程序 1.0.26，热更新 1.1.x → 1.1.x 包含主程序未支持的 IPC handler
-  const [hotMajor, hotMinor] = hotUpdateVersion.split('.').map(Number)
-  const [appMajor, appMinor] = appVersion.split('.').map(Number)
-  if (hotMajor > appMajor || (hotMajor === appMajor && hotMinor > appMinor)) {
-    console.warn(`[Main] Hot-update version (${hotUpdateVersion}) has higher minor/major than app (${appVersion}), falling back to built-in dist to avoid IPC incompatibility`)
+  // 兼容性保护（加强）：
+  // 只要热更新版本高于主程序版本（包含 patch），都回退到内置前端。
+  // 原先仅拦截 major/minor 超前，无法覆盖 "1.0.27 前端 + 1.0.26 主进程" 这类 patch 级不兼容。
+  // 例如本次 webview 升级：前端依赖主进程开启 webviewTag，若主进程未更新会导致内置预览失效。
+  if (compareVersionsForDist(hotUpdateVersion, appVersion) > 0) {
+    console.warn(`[Main] Hot-update version (${hotUpdateVersion}) is newer than app (${appVersion}), falling back to built-in dist to avoid renderer/main incompatibility`)
     return RENDERER_DIST
   }
 

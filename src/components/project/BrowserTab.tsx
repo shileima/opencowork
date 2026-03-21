@@ -42,6 +42,8 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     const [loadError, setLoadError] = useState<string | null>(null);
     const [showDevTools, setShowDevTools] = useState(false);
     const [devToolsKey, setDevToolsKey] = useState(0);
+    const [iframeRefreshKey, setIframeRefreshKey] = useState(0);
+    const [webviewSupported, setWebviewSupported] = useState(true);
 
     const webviewRef = useRef<WebviewElement | null>(null);
     const devtoolsRef = useRef<WebviewElement | null>(null);
@@ -62,6 +64,13 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
 
     const handleRefresh = useCallback(() => {
         setLoadError(null);
+        if (!webviewSupported) {
+            if (currentUrl) {
+                setIsLoading(true);
+                setIframeRefreshKey((k) => k + 1);
+            }
+            return;
+        }
         if (currentUrl && webviewRef.current && webviewReady.current) {
             setIsLoading(true);
             try {
@@ -70,7 +79,7 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                 setCurrentUrl((u) => u);
             }
         }
-    }, [currentUrl]);
+    }, [currentUrl, webviewSupported]);
 
     useEffect(() => {
         const fullUrl = initialUrl ? ensureProtocol(initialUrl) : '';
@@ -83,10 +92,15 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     }, [initialUrl]);
 
     useEffect(() => {
-        if (refreshTrigger > 0 && refreshTrigger !== prevRefreshTrigger.current && currentUrl && webviewRef.current) {
+        if (refreshTrigger > 0 && refreshTrigger !== prevRefreshTrigger.current && currentUrl) {
             prevRefreshTrigger.current = refreshTrigger;
             setIsLoading(true);
             setLoadError(null);
+            if (!webviewSupported) {
+                setIframeRefreshKey((k) => k + 1);
+                return;
+            }
+            if (!webviewRef.current) return;
             if (webviewReady.current) {
                 try {
                     webviewRef.current.reload();
@@ -97,21 +111,22 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                 pendingRefreshRef.current = true;
             }
         }
-    }, [refreshTrigger, currentUrl]);
+    }, [refreshTrigger, currentUrl, webviewSupported]);
 
     // Navigate webview when currentUrl changes
     useEffect(() => {
         const wv = webviewRef.current;
         const targetUrl = toLoadableUrl(currentUrl);
-        if (!wv || !targetUrl || targetUrl === lastNavigatedUrl.current) return;
+        if (!webviewSupported || !wv || !targetUrl || targetUrl === lastNavigatedUrl.current) return;
         lastNavigatedUrl.current = targetUrl;
         if (webviewReady.current) {
             wv.loadURL(targetUrl).catch(() => {});
         }
-    }, [currentUrl]);
+    }, [currentUrl, webviewSupported]);
 
     // Webview event listeners
     useEffect(() => {
+        if (!webviewSupported) return;
         const wv = webviewRef.current;
         if (!wv) return;
 
@@ -157,7 +172,7 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
             wv.removeEventListener('did-fail-load', onFailLoad as EventListener);
             wv.removeEventListener('did-navigate', onDidNavigate as EventListener);
         };
-    }, [currentUrl]);
+    }, [currentUrl, webviewSupported]);
 
     // Load timeout
     useEffect(() => {
@@ -193,6 +208,7 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     }, [showDevTools, devToolsKey]);
 
     const toggleDevTools = useCallback(async () => {
+        if (!webviewSupported) return;
         if (showDevTools) {
             const wv = webviewRef.current;
             if (wv) {
@@ -205,7 +221,7 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
             setDevToolsKey(prev => prev + 1);
             setShowDevTools(true);
         }
-    }, [showDevTools]);
+    }, [showDevTools, webviewSupported]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter') handleNavigate();
@@ -222,7 +238,14 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
     }, [currentUrl]);
 
     const setWebviewRef = useCallback((node: HTMLElement | null) => {
-        webviewRef.current = node as WebviewElement | null;
+        if (!node) {
+            webviewRef.current = null;
+            return;
+        }
+        const wv = node as WebviewElement;
+        const supported = typeof wv.getWebContentsId === 'function' && typeof wv.loadURL === 'function';
+        setWebviewSupported(supported);
+        webviewRef.current = supported ? wv : null;
         webviewReady.current = false;
     }, []);
 
@@ -355,15 +378,33 @@ export function BrowserTab({ initialUrl = DEFAULT_URL, refreshTrigger = 0 }: Bro
                                     </div>
                                 </div>
                             ) : null}
-                            <webview
-                                ref={setWebviewRef}
-                                src={toLoadableUrl(currentUrl)}
-                                style={{ width: '100%', height: '100%', display: loadError ? 'none' : 'flex' }}
-                            />
+                            {webviewSupported ? (
+                                <webview
+                                    ref={setWebviewRef}
+                                    src={toLoadableUrl(currentUrl)}
+                                    style={{ width: '100%', height: '100%', display: loadError ? 'none' : 'flex' }}
+                                />
+                            ) : (
+                                <iframe
+                                    key={iframeRefreshKey}
+                                    src={toLoadableUrl(currentUrl)}
+                                    style={{ width: '100%', height: '100%', border: 0, display: loadError ? 'none' : 'flex' }}
+                                    onLoad={() => {
+                                        setIsLoading(false);
+                                        setLoadError(null);
+                                    }}
+                                    onError={() => {
+                                        setIsLoading(false);
+                                        setLoadError(`无法连接到 ${currentUrl}。请确保开发服务器正在运行。`);
+                                    }}
+                                    sandbox="allow-same-origin allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+                                    title="Browser Preview"
+                                />
+                            )}
                         </div>
 
                         {/* DevTools panel */}
-                        {showDevTools && (
+                        {showDevTools && webviewSupported && (
                             <div className="h-[45%] min-h-[120px] border-t-2 border-stone-300 dark:border-zinc-600 bg-white dark:bg-zinc-900">
                                 <webview
                                     key={devToolsKey}
