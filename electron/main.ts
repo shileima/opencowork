@@ -2124,16 +2124,18 @@ ipcMain.handle('project:create-new', async (event, name: string) => {
   if (!name || typeof name !== 'string') return { success: false, error: 'Invalid project name' };
   const sanitized = name.trim().replace(/[/\\:*?"<>|]/g, '-').replace(/-+/g, '-') || 'project';
 
-  // 模板路径：优先热更新目录，再回退到内置
+  // 模板路径：
+  // - 开发环境：优先使用仓库内模板，避免本地热更新缓存覆盖最新代码
+  // - 打包环境：优先热更新目录，再回退到内置
   const hotUpdateTemplatesDir = directoryManager.getHotUpdateTemplatesDir()
   const hotUpdateReactVite = path.join(hotUpdateTemplatesDir, 'react-vite')
   let templateDir: string
-  if (fs.existsSync(hotUpdateReactVite)) {
-    templateDir = hotUpdateReactVite
-  } else if (app.isPackaged) {
-    templateDir = path.join(process.resourcesPath, 'templates', 'react-vite');
-  } else {
+  if (!app.isPackaged) {
     templateDir = path.join(app.getAppPath(), 'resources', 'templates', 'react-vite');
+  } else if (fs.existsSync(hotUpdateReactVite)) {
+    templateDir = hotUpdateReactVite
+  } else {
+    templateDir = path.join(process.resourcesPath, 'templates', 'react-vite');
   }
 
   if (!fs.existsSync(templateDir)) {
