@@ -46,7 +46,7 @@ export class ErrorAnalyzer {
       // 匹配 import 语句中的文件
       /from\s+['"]([^'"]+)['"]/g,
       // 匹配文件路径
-      /['"]([^'"]*\.(ts|tsx|js|jsx|json|css)['"]/g
+      /['"]([^'"]*\.(ts|tsx|js|jsx|json|css))['"]/g
     ];
 
     for (const pattern of filePatterns) {

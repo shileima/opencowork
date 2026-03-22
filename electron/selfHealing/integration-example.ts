@@ -4,7 +4,7 @@
  */
 
 import { SelfHealingCoordinator } from './SelfHealingCoordinator';
-import { HealingOptions, HealingPhase } from './types';
+import { HealingOptions } from './types';
 import { AgentRuntime } from '../agent/AgentRuntime';
 
 /**
@@ -121,7 +121,7 @@ export async function deployWithHealing(
  */
 export async function previewWithHealing(
   projectPath: string,
-  sender: Electron.WebContents,
+  _sender: Electron.WebContents,
   agentRuntime: AgentRuntime
 ): Promise<{ success: boolean; port?: number; error?: string }> {
   const coordinator = new SelfHealingCoordinator();
@@ -191,7 +191,7 @@ export async function previewWithHealing(
 
 // ===== 辅助函数 (需要实现) =====
 
-async function runBuild(projectPath: string): Promise<{
+async function runBuild(_projectPath: string): Promise<{
   exitCode: number;
   output: string;
 }> {
@@ -199,7 +199,7 @@ async function runBuild(projectPath: string): Promise<{
   return { exitCode: 0, output: '' };
 }
 
-async function runUpload(projectPath: string): Promise<{
+async function runUpload(_projectPath: string): Promise<{
   exitCode: number;
   output: string;
 }> {
@@ -207,7 +207,7 @@ async function runUpload(projectPath: string): Promise<{
   return { exitCode: 0, output: '' };
 }
 
-async function startDevServer(projectPath: string): Promise<{
+async function startDevServer(_projectPath: string): Promise<{
   exitCode: number;
   output: string;
 }> {

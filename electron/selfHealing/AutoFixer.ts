@@ -108,7 +108,7 @@ export class AutoFixer {
             error,
             context.fileContent,
             10 // 上下10行
-          );
+          ) ?? undefined;
         }
       } catch (err) {
         console.error('[AutoFixer] Failed to read file:', err);
@@ -340,7 +340,7 @@ ${snippet}
    * 安装依赖
    */
   async installDependencies(
-    projectPath: string,
+    _projectPath: string,
     dependencies: string[]
   ): Promise<boolean> {
     if (dependencies.length === 0) {
