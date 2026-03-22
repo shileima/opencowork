@@ -513,7 +513,14 @@ export function ProjectView({
         };
 
         console.log('[Preview:Debug] Sending preview message, taskId:', result.task.id);
-        onSendMessage('请严格按以下顺序执行：1. 先在项目目录运行 pnpm install 安装依赖（必须执行，不可跳过）；2. pnpm install 完成后，运行 pnpm dev 启动本地开发服务；3. 服务成功启动后，调用 open_browser_preview 打开内置浏览器预览（必须传入 cwd 为项目根路径，与 run_command 一致，否则自动修复无法获取错误输出）；4. 若 open_browser_preview 返回后仍有 Vite 红屏或 esbuild 构建错误（如 Failed to resolve → pnpm add；.ts 里写 JSX → 改为 .tsx 并修正 import；Cannot find name → 补全 import），则自动修复代码，修复后 Vite 会热更新，无需重启开发服务器。注意："require is not defined" 是第三方 CJS 依赖的已知误报，只要页面能正常渲染就直接忽略，不要尝试修复。');
+        onSendMessage(`部署：
+            1. 先在项目目录运行 pnpm install 安装依赖；
+            2. 检查当前项目状态并修复错误；
+            3. pnpm install 完成后，运行 pnpm dev 启动本地开发服务；
+            4. 服务成功启动后，调用 open_browser_preview 打开内置浏览器预览；
+            5. 若 open_browser_preview 返回后仍有 Vite 红屏或 esbuild 构建错误，则自动修复代码，修复后 Vite 会热更新。
+            全程不要重启开发服务器。
+            `);
     }, [currentProject, isProcessing, t, onSendMessage]);
 
     handlePreviewRef.current = handlePreview;
