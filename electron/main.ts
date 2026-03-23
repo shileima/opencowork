@@ -19,6 +19,7 @@ import { ssoStore } from './config/SsoStore'
 
 import { getBuiltinNodePath, getBuiltinPnpmPath, getSystemNpxPath } from './utils/NodePath'
 import { resolveDeployEnv } from './utils/DeployEnvResolver'
+import { runProjectQualityCheck } from './utils/ProjectQualityCheck'
 import { resolveShellPath, validateShellPath, getShellCandidates, resolveShellForCommand } from './utils/ShellResolver'
 import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
@@ -111,6 +112,27 @@ function getRendererDistPath(): string {
 
   console.log('[Main] Using hot-update dist directory')
   return hotUpdateDistDir
+}
+
+/**
+ * 生成 renderer 加载指纹，用于生产环境 loadFile 的 query 参数。
+ * 目标：当整包更新或热更新内容变化时，强制 Electron 重新拉取入口页面，避免命中旧缓存。
+ */
+function getRendererLoadVersionToken(): string {
+  const appVersion = app.getVersion()
+  const hotUpdateVersion = directoryManager.getHotUpdateVersion() || 'builtin'
+  const distPath = getRendererDistPath()
+  const indexPath = path.join(distPath, 'index.html')
+
+  let indexFingerprint = 'missing'
+  try {
+    const stat = fs.statSync(indexPath)
+    indexFingerprint = `${Math.floor(stat.mtimeMs)}-${stat.size}`
+  } catch (error) {
+    console.warn('[Main] Failed to stat renderer index.html for cache token:', error)
+  }
+
+  return `${appVersion}-${hotUpdateVersion}-${indexFingerprint}`
 }
 
 // Helper to get icon path for both dev and prod
@@ -413,7 +435,7 @@ app.whenReady().then(() => {
 
   // Log version information on startup
   const appVersion = app.getVersion()
-  const hotUpdateVersion = resourceUpdater ? directoryManager.getHotUpdateVersion() : null
+  const hotUpdateVersion = directoryManager.getHotUpdateVersion()
   const effectiveVersion = resourceUpdater?.getCurrentVersion() || appVersion
   console.log(`[Main] App started - appVersion: ${appVersion}, hotUpdateVersion: ${hotUpdateVersion}, effectiveVersion: ${effectiveVersion}`)
 
@@ -2220,6 +2242,15 @@ ipcMain.handle('project:create-new', async (event, name: string) => {
 
 ipcMain.handle('project:get-current', () => {
   return projectStore.getCurrentProject();
+});
+
+ipcMain.handle('project:quality-check', async (event, projectPath: string) => {
+  try {
+    return await runProjectQualityCheck(String(projectPath || ''), event.sender);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, summary: msg, log: msg };
+  }
 });
 
 // Code 模式：切换到代码视图时，确保主工作目录为 ~/.qa-cowork（不发送 project:switched 事件）
@@ -4739,9 +4770,11 @@ function createMainWindow() {
   } else {
     const distPath = getRendererDistPath()
     const indexPath = path.join(distPath, 'index.html');
+    const rendererToken = getRendererLoadVersionToken();
     console.log('[Browser:Diag] 生产模式: 加载文件:', indexPath);
     console.log('[Browser:Diag] distPath:', distPath);
     console.log('[Browser:Diag] index.html 存在:', fs.existsSync(indexPath));
+    console.log('[Browser:Diag] renderer cache token:', rendererToken);
     if (!fs.existsSync(indexPath)) {
       console.error('[Browser:Diag] ❌ index.html 不存在! 这是页面无法加载的原因!');
       // 列出 distPath 下的文件
@@ -4753,7 +4786,9 @@ function createMainWindow() {
         console.log('[Browser:Diag] resourcesPath 内容:', fs.readdirSync(process.resourcesPath).join(', '));
       }
     }
-    mainWin.loadFile(indexPath)
+    mainWin.loadFile(indexPath, {
+      query: { v: rendererToken }
+    })
   }
 }
 
@@ -4782,7 +4817,10 @@ function createFloatingBallWindow() {
     floatingBallWin.loadURL(`${VITE_DEV_SERVER_URL}#/floating-ball`)
   } else {
     const distPath = getRendererDistPath()
-    floatingBallWin.loadFile(path.join(distPath, 'index.html'), { hash: 'floating-ball' })
+    floatingBallWin.loadFile(path.join(distPath, 'index.html'), {
+      hash: 'floating-ball',
+      query: { v: getRendererLoadVersionToken() }
+    })
   }
 
   floatingBallWin.on('closed', () => {
@@ -4908,6 +4946,7 @@ function createTerminalWindow(cwd: string, windowId: string, instanceId?: string
     const distPath = getRendererDistPath()
     win.loadFile(path.join(distPath, 'index.html'), {
       hash: `terminal-window?cwd=${encodeURIComponent(cwd)}&windowId=${encodeURIComponent(windowId)}${instanceIdParam}`,
+      query: { v: getRendererLoadVersionToken() }
     })
   }
 

@@ -101,7 +101,7 @@ export function FloatingInput({ onSendMessage, onAbort, onContentChange, isProce
     };
 
     return (
-        <div className="p-2 shrink-0 z-50 bg-white dark:bg-zinc-950 relative">
+        <div className="p-2 shrink-0 z-50 bg-white dark:bg-zinc-950 relative min-w-0">
             {/* Image Preview */}
             {images.length > 0 && (
                 <div className="flex gap-2 mb-2 overflow-x-auto pb-1">
@@ -119,8 +119,8 @@ export function FloatingInput({ onSendMessage, onAbort, onContentChange, isProce
                 </div>
             )}
 
-            <form onSubmit={handleSubmit} className="flex flex-col gap-1">
-                <div className="flex flex-col bg-[#FAF9F7] dark:bg-zinc-900/50 border border-stone-200 dark:border-zinc-800 rounded-[20px] px-3 pt-2 pb-1 shadow-sm transition-all hover:shadow-md focus-within:ring-4 focus-within:ring-orange-50/50 focus-within:border-orange-200">
+            <form onSubmit={handleSubmit} className="flex flex-col gap-1 min-w-0 w-full">
+                <div className="flex flex-col min-w-0 w-full bg-[#FAF9F7] dark:bg-zinc-900/50 border border-stone-200 dark:border-zinc-800 rounded-[20px] px-3 pt-2 pb-1 shadow-sm transition-all hover:shadow-md focus-within:ring-4 focus-within:ring-orange-50/50 focus-within:border-orange-200">
                     <textarea
                         ref={inputRef}
                         value={input}
@@ -129,7 +129,7 @@ export function FloatingInput({ onSendMessage, onAbort, onContentChange, isProce
                         onPaste={handlePaste}
                         placeholder={t('describeTaskPlaceholderFloating')}
                         rows={1}
-                        className="w-full bg-transparent text-stone-800 dark:text-zinc-100 placeholder:text-stone-400 dark:placeholder:text-zinc-500 text-sm focus:outline-none resize-none overflow-y-auto min-h-[24px] max-h-[72px] leading-6 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0"
+                        className="w-full min-w-0 box-border bg-transparent text-stone-800 dark:text-zinc-100 placeholder:text-stone-400 dark:placeholder:text-zinc-500 text-sm focus:outline-none resize-none overflow-y-auto overflow-x-hidden min-h-[24px] max-h-[72px] leading-6 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0 [overflow-wrap:anywhere]"
                         style={{
                             scrollbarWidth: 'none',
                             msOverflowStyle: 'none',

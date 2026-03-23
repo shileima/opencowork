@@ -343,6 +343,42 @@ export const translations = {
         terminalOpenInNewWindow: 'Open in New Window',
         agent: 'Agent',
         agentComingSoon: 'Coming soon...',
+        codeQualityCheck: 'Build check',
+        codeQualityCheckHint:
+            'Runs only `pnpm run build` (or npm/yarn equivalent). Logs appear in the chat. After a failure the assistant is asked to fix and the app re-runs build until success or the round limit.',
+        codeQualityLogTitle: 'Build verification',
+        codeQualityStarting: 'Starting build…',
+        codeQualityChatOutcomeSuccess: 'Build finished successfully.',
+        codeQualityChatOutcomeFail: 'Build failed.',
+        codeQualityFailWhyNoAutoFix:
+            'This check **does not run ESLint**. Failures come from the **production build** (e.g. Vite/tsc errors in the log). The assistant will be asked to fix them; the app will **re-run the same build** after each fix until it passes or the round limit is reached.',
+        codeQualityAutoFixPromptIntro:
+            '[Build fix — no ESLint] Focus **only** on errors that make **`pnpm run build`** / **`npm run build`** / **`yarn build`** fail (same script as this check). **Do not** spend time on ESLint-only issues unless the build explicitly fails on them. After each code change, **run the project’s build command again in the project root** and repeat **edit → build** until the build exits 0. Apply real file edits; do not stop at suggestions.',
+        codeQualityFixRound: 'Round {a}/{m}',
+        codeQualityFixRoundHeader: 'Round {a}: assistant fix for build errors',
+        codeQualityPostFixVerify: 'Re-running build after fix (round {a}/{m})…',
+        codeQualityRebuildSuccessAfterRounds: 'Build passed after **{a}** fix round(s).',
+        codeQualityMaxRoundsReached:
+            'Automatic build-fix rounds stopped after **{m}** attempts; build still failing. Continue manually in the chat or fix locally.',
+        codeQualityAutoFixTriggered: 'Check failed — a fix request was sent to the assistant',
+        codeQualityAutoFixSentHint:
+            'A **user message** with this run’s log was sent to the assistant automatically. Wait for it to edit files (see the latest message in the chat).',
+        codeQualityAutoFixSkippedBusy:
+            'The assistant is already running, so **no auto fix request was sent**. Wait for it to finish, then click code quality again or describe the error in the input.',
+        codeQualityAutoFixSending: 'Sending auto-fix request to the assistant…',
+        codeQualityAutoFixQueuedHint:
+            'The assistant is busy (e.g. preview / retry). **A fix request is queued** and will be sent automatically when the current run finishes.',
+        codeQualityAutoFixQueuedToast: 'Assistant busy — auto-fix queued until the current task ends',
+        codeQualityAutoFixSentAfterQueue: 'Queued auto-fix request has been sent.',
+        codeQualityAutoFixQueueTimeout: 'Waited too long for the assistant to become idle; please send a fix request manually in the input.',
+        codeQualityAutoFixSendFailed: 'Could not send the auto-fix request (not a busy error). Try again or describe the error below.',
+        codeQualityAutoFixSendFailedToast: 'Failed to send auto-fix request',
+        codeQualityRunning: 'Running production build…',
+        codeQualitySuccess: 'Build passed — see chat for details',
+        codeQualityFailed: 'Build failed — see chat for the full log',
+        codeQualityFailedToast: 'Build still failing — see chat for the full log',
+        codeQualityNoHandler:
+            'Main process is outdated: quit the app fully and reopen, or update to a build that includes code quality checks.',
         fileExplorer: 'File Explorer',
         newFile: 'New File',
         newFolder: 'New Folder',
@@ -766,6 +802,42 @@ export const translations = {
         terminalOpenInNewWindow: '在新窗口中打开',
         agent: '智能体',
         agentComingSoon: '功能开发中...',
+        codeQualityCheck: '构建检查',
+        codeQualityCheckHint:
+            '仅执行 `pnpm run build`（或 npm/yarn 的 build 脚本）。输出在左侧对话；失败后会自动请助手修复并由应用反复重新构建直至成功或达到轮次上限。',
+        codeQualityLogTitle: '构建验证',
+        codeQualityStarting: '正在启动构建…',
+        codeQualityChatOutcomeSuccess: '构建已通过。',
+        codeQualityChatOutcomeFail: '构建未通过。',
+        codeQualityFailWhyNoAutoFix:
+            '本检查**不运行 ESLint**，只跑与线上一致的 **生产构建**。失败原因见上方构建日志（如 Vite/tsc 报错）。将自动请求助手按日志改代码；每轮修改后应用会**再次执行同一构建命令**，直至成功或达到自动轮次上限。',
+        codeQualityAutoFixPromptIntro:
+            '【构建修复 — 不要跑 ESLint】**只处理**导致 **`pnpm run build`** / **`npm run build`** / **`yarn build`** 失败的问题（与本检查使用的命令一致）。**不要**把精力花在仅 ESLint 的问题上，除非构建本身因它们失败。每次改代码后请在项目根目录**再次执行构建命令**，循环 **修改 → 构建** 直到退出码为 0。必须实际改文件并保存，不要只给建议。',
+        codeQualityFixRound: '第 {a}/{m} 轮',
+        codeQualityFixRoundHeader: '第 {a} 轮：修复构建错误',
+        codeQualityPostFixVerify: '第 {a} 轮修复后重新执行构建（共最多 {m} 轮自动尝试）…',
+        codeQualityRebuildSuccessAfterRounds: '已在 **{a}** 轮修复后通过构建。',
+        codeQualityMaxRoundsReached:
+            '已连续自动尝试 **{m}** 轮「修复 + 重新构建」，构建仍未通过。请在对话中继续排查或本地修改。',
+        codeQualityAutoFixTriggered: '检查未通过，已向助手发送自动修复请求',
+        codeQualityAutoFixSentHint:
+            '已根据本次日志 **自动发送一条用户消息** 给助手，请稍候其在对话中回复并改代码（见对话末尾最新消息）。',
+        codeQualityAutoFixSkippedBusy:
+            '当前助手正在处理其他请求，**未自动发送修复消息**。请等待当前回复结束后再点一次「代码质量」，或在输入框手动描述问题。',
+        codeQualityAutoFixSending: '正在向助手发送自动修复请求…',
+        codeQualityAutoFixQueuedHint:
+            '当前助手正忙（例如预览、自动重试）。**已排队**：将在当前任务结束后**自动发送**包含本日志的修复请求，无需再点。',
+        codeQualityAutoFixQueuedToast: '助手正忙 — 已排队，将在当前任务结束后自动发起修复',
+        codeQualityAutoFixSentAfterQueue: '排队中的自动修复请求已发送。',
+        codeQualityAutoFixQueueTimeout: '等待助手空闲超时，请在输入框手动发送修复请求。',
+        codeQualityAutoFixSendFailed: '自动修复请求发送失败（非「正忙」原因）。请重试或在下方手动描述错误。',
+        codeQualityAutoFixSendFailedToast: '自动修复请求发送失败',
+        codeQualityRunning: '正在执行生产构建…',
+        codeQualitySuccess: '构建已通过 — 详情见左侧对话',
+        codeQualityFailed: '构建未通过 — 完整日志在左侧对话中',
+        codeQualityFailedToast: '构建仍未通过 — 完整日志在左侧对话中',
+        codeQualityNoHandler:
+            '主进程未加载代码质量检查（常见于未重启的 Electron）。请完全退出应用后重新打开，或更新到包含该功能的版本。',
         fileExplorer: '资源管理器',
         newFile: '新建文件',
         newFolder: '新建文件夹',

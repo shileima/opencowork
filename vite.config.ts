@@ -17,9 +17,6 @@ function copyPlaywrightWrapper() {
   }
 }
 
-const hotRestart = process.env.ELECTRON_HOT_RESTART === '1'
-let electronStarted = false
-
 // https://vitejs.dev/config/
 export default defineConfig({
   server: {
@@ -43,10 +40,10 @@ export default defineConfig({
         // Shortcut of `build.lib.entry`.
         entry: 'electron/main.ts',
         onstart(args) {
-          if (!electronStarted || hotRestart) {
-            args.startup()
-            electronStarted = true
-          }
+          // 每次主进程 / preload 的 watch 构建完成都重启 Electron。
+          // 若仅在首次 startup，主进程新增 ipcMain.handle 后旧进程不会加载新代码，会出现
+          // "No handler registered for '…'"（例如 project:quality-check）。
+          args.startup()
         },
         vite: {
           build: {

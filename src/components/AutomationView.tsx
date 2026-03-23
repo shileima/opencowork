@@ -34,7 +34,7 @@ export interface RPAExecutionRun {
 
 interface AutomationViewProps {
     history: Anthropic.MessageParam[];
-    onSendMessage: (message: string | { content: string, images: string[] }) => void;
+    onSendMessage: (message: string | { content: string; images: string[] }) => void | Promise<{ ok: true } | { ok: false; busy?: boolean }>;
     onAbort: () => void;
     isProcessing: boolean;
     isTaskPanelHidden: boolean;

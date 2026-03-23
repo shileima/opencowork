@@ -11,9 +11,11 @@ import { useI18n } from '../i18n/I18nContext';
 import { useToast } from './Toast';
 import type { Project, ProjectTask } from '../../electron/config/ProjectStore';
 
+export type SendMessageResult = { ok: true } | { ok: false; busy?: boolean };
+
 interface ProjectViewProps {
     history: Anthropic.MessageParam[];
-    onSendMessage: (message: string | { content: string, images: string[] }) => void;
+    onSendMessage: (message: string | { content: string; images: string[] }) => void | Promise<SendMessageResult>;
     onAbort: () => void;
     isProcessing: boolean;
     isDeploying?: boolean;
@@ -59,6 +61,16 @@ const deriveTaskTitleFromMessage = (messageText: string, maxLen = 28): string =>
         .trim() || firstSentence;
     return trimmed.slice(0, maxLen).trim() || text.slice(0, maxLen).trim();
 };
+
+/** 自动发给助手的日志不宜过长，保留末尾（通常含 TS/构建报错） */
+const MAX_QUALITY_LOG_CHARS_FOR_AI = 28000;
+/** 构建失败后：助手修复 → 再跑构建，最多轮次（含首轮失败后的每一轮「发消息 + 再构建」） */
+const MAX_BUILD_FIX_ROUNDS = 10;
+function truncateQualityLogForAiPrompt(raw: string, maxChars: number): string {
+    const s = raw || '';
+    if (s.length <= maxChars) return s;
+    return `【已截断：仅保留末尾 ${maxChars} 字符，完整输出见对话中上一条「代码质量检查」代码块】\n\n${s.slice(-maxChars)}`;
+}
 
 export function ProjectView({
     history,
@@ -485,7 +497,6 @@ export function ProjectView({
         }
     };
 
-    const handlePreviewRef = useRef<() => Promise<void>>();
     const handlePreview = useCallback(async () => {
         console.log('[Preview:Debug] handlePreview called, currentProject:', currentProject?.id, 'isProcessing:', isProcessing);
         if (!currentProject || isProcessing) return;
@@ -523,19 +534,17 @@ export function ProjectView({
             `);
     }, [currentProject, isProcessing, t, onSendMessage]);
 
-    handlePreviewRef.current = handlePreview;
-
     useEffect(() => {
         if (onRegisterPreviewHandler) {
             onRegisterPreviewHandler(() => {
-                handlePreviewRef.current?.();
+                void handlePreview();
             });
         }
-    }, [onRegisterPreviewHandler]);
+    }, [onRegisterPreviewHandler, handlePreview]);
 
     // ─── 部署逻辑 ────────────────────────────────────────────────────────────────
     const deployLogRef = useRef<string>('');
-    const deployHandlerRef = useRef<() => Promise<void>>();
+    const qualityLogRef = useRef<string>('');
 
     const stripAnsi = (text: string): string =>
         text
@@ -547,6 +556,11 @@ export function ProjectView({
         return `**🚀 ${t('deployLogTitle')}**\n\n\`\`\`deploy-log\n${clean}\n\`\`\``;
     };
 
+    const buildQualityLogMd = useCallback((rawLog: string): string => {
+        const clean = stripAnsi(rawLog).trimEnd();
+        return `**🔍 ${t('codeQualityLogTitle')}**\n\n\`\`\`quality-log\n${clean || '…'}\n\`\`\``;
+    }, [t]);
+
     /** 把部署日志同步到 Agent history，并触发 session:save 持久化 */
     const saveDeployHistory = useCallback((messages: Anthropic.MessageParam[]) => {
         if (messages.length > 0) {
@@ -555,6 +569,203 @@ export function ProjectView({
             );
         }
     }, []);
+
+    /** 构建验证：仅跑 pnpm/npm/yarn build；失败后自动多轮「助手修复 → 再构建」直至成功或达上限 */
+    const handleCodeQualityCheck = useCallback(async () => {
+        if (!currentProject?.path?.trim()) {
+            showToast(t('noProjectSelected'), 'error');
+            return;
+        }
+        const projectPath = currentProject.path.trim();
+        showToast(t('codeQualityRunning'), 'info');
+
+        const normalizeSendResult = (x: unknown): SendMessageResult => {
+            if (x && typeof x === 'object' && 'ok' in x) return x as SendMessageResult;
+            return { ok: true };
+        };
+
+        const scheduleQueuedQualityAutoFix = (payload: string) => {
+            let finished = false;
+            const doneUnsub = window.ipcRenderer.on('agent:done', () => {
+                if (finished) return;
+                finished = true;
+                window.clearTimeout(toid);
+                doneUnsub();
+                void (async () => {
+                    const r2 = normalizeSendResult(await onSendMessage(payload));
+                    if (r2.ok) {
+                        await window.ipcRenderer
+                            .invoke('agent:append-assistant', `**→** ${t('codeQualityAutoFixSentAfterQueue')}`)
+                            .catch(() => {});
+                        const m = (await window.ipcRenderer.invoke('agent:get-history')) as Anthropic.MessageParam[];
+                        saveDeployHistory(m);
+                        showToast(t('codeQualityAutoFixTriggered'), 'info');
+                    } else {
+                        showToast(t('codeQualityAutoFixSendFailedToast'), 'error');
+                    }
+                })();
+            });
+            const toid = window.setTimeout(() => {
+                if (finished) return;
+                finished = true;
+                doneUnsub();
+                showToast(t('codeQualityAutoFixQueueTimeout'), 'error');
+            }, 10 * 60 * 1000) as unknown as number;
+        };
+
+        /** 流式把 project:quality:log 写入当前最后一条助手消息（先 append 占位或沿用已有） */
+        const streamBuildCheck = async (opts: { preambleText?: string } = {}): Promise<{
+            success: boolean;
+            summary: string;
+            log: string;
+        }> => {
+            qualityLogRef.current = '';
+            let rafId: number | null = null;
+            const flushLogToChat = () => {
+                window.ipcRenderer.invoke('agent:update-last-assistant', buildQualityLogMd(qualityLogRef.current)).catch(() => {});
+            };
+            const scheduleFlush = () => {
+                if (rafId !== null) return;
+                rafId = requestAnimationFrame(() => {
+                    rafId = null;
+                    flushLogToChat();
+                });
+            };
+            if (opts.preambleText) {
+                await window.ipcRenderer
+                    .invoke('agent:append-assistant', buildQualityLogMd(opts.preambleText))
+                    .catch(() => {});
+            }
+            const unsub = window.ipcRenderer.on('project:quality:log', (_event, ...args) => {
+                const chunk = args[0];
+                if (typeof chunk === 'string') {
+                    qualityLogRef.current += chunk;
+                    scheduleFlush();
+                }
+            });
+            try {
+                const r = (await window.ipcRenderer.invoke('project:quality-check', projectPath)) as {
+                    success: boolean;
+                    summary: string;
+                    log: string;
+                };
+                if (rafId !== null) {
+                    cancelAnimationFrame(rafId);
+                    rafId = null;
+                }
+                qualityLogRef.current = r.log || qualityLogRef.current;
+                await window.ipcRenderer.invoke('agent:update-last-assistant', buildQualityLogMd(qualityLogRef.current)).catch(() => {});
+                return r;
+            } finally {
+                unsub();
+            }
+        };
+
+        try {
+            await window.ipcRenderer
+                .invoke('agent:append-assistant', buildQualityLogMd(t('codeQualityStarting')))
+                .catch(() => {});
+
+            let buildResult = await streamBuildCheck();
+
+            if (buildResult.success) {
+                const outcome = `**✅ ${t('codeQualityChatOutcomeSuccess')}**`;
+                await window.ipcRenderer.invoke('agent:append-assistant', outcome).catch(() => {});
+                const msgsOk = (await window.ipcRenderer.invoke('agent:get-history')) as Anthropic.MessageParam[];
+                saveDeployHistory(msgsOk);
+                showToast(t('codeQualitySuccess'), 'success');
+                return;
+            }
+
+            let partBase = '';
+            for (let attempt = 1; attempt <= MAX_BUILD_FIX_ROUNDS; attempt++) {
+                const logForAi = truncateQualityLogForAiPrompt(buildResult.log, MAX_QUALITY_LOG_CHARS_FOR_AI);
+                const roundTag = t('codeQualityFixRound')
+                    .replace(/\{a\}/g, String(attempt))
+                    .replace(/\{m\}/g, String(MAX_BUILD_FIX_ROUNDS));
+                const userPayload = `${t('codeQualityAutoFixPromptIntro')}\n\n**${roundTag}**\n\n\`\`\`build-log\n${logForAi}\n\`\`\``;
+
+                if (attempt === 1) {
+                    partBase = `**❌ ${t('codeQualityChatOutcomeFail')}**\n\n${buildResult.summary}\n\n${t('codeQualityFailWhyNoAutoFix')}`;
+                    await window.ipcRenderer
+                        .invoke('agent:append-assistant', `${partBase}\n\n**→** ${t('codeQualityAutoFixSending')}`)
+                        .catch(() => {});
+                } else {
+                    const hdr = t('codeQualityFixRoundHeader').replace(/\{a\}/g, String(attempt));
+                    await window.ipcRenderer
+                        .invoke('agent:append-assistant', `**🔧 ${hdr}**\n\n**→** ${t('codeQualityAutoFixSending')}`)
+                        .catch(() => {});
+                }
+                let msgsMid = (await window.ipcRenderer.invoke('agent:get-history')) as Anthropic.MessageParam[];
+                saveDeployHistory(msgsMid);
+
+                const sendRes = normalizeSendResult(await onSendMessage(userPayload));
+                let arrow: string;
+                if (sendRes.ok) {
+                    arrow = t('codeQualityAutoFixSentHint');
+                    showToast(t('codeQualityAutoFixTriggered'), 'info');
+                } else if (sendRes.busy) {
+                    arrow = t('codeQualityAutoFixQueuedHint');
+                    showToast(t('codeQualityAutoFixQueuedToast'), 'info');
+                    scheduleQueuedQualityAutoFix(userPayload);
+                } else {
+                    arrow = t('codeQualityAutoFixSendFailed');
+                    showToast(t('codeQualityAutoFixSendFailedToast'), 'error');
+                }
+
+                if (attempt === 1) {
+                    await window.ipcRenderer.invoke('agent:update-last-assistant', `${partBase}\n\n**→** ${arrow}`).catch(() => {});
+                } else {
+                    const hdr = t('codeQualityFixRoundHeader').replace(/\{a\}/g, String(attempt));
+                    await window.ipcRenderer
+                        .invoke('agent:update-last-assistant', `**🔧 ${hdr}**\n\n**→** ${arrow}`)
+                        .catch(() => {});
+                }
+                msgsMid = (await window.ipcRenderer.invoke('agent:get-history')) as Anthropic.MessageParam[];
+                saveDeployHistory(msgsMid);
+
+                if (!sendRes.ok) {
+                    break;
+                }
+
+                const verifyPreamble = t('codeQualityPostFixVerify')
+                    .replace(/\{a\}/g, String(attempt))
+                    .replace(/\{m\}/g, String(MAX_BUILD_FIX_ROUNDS));
+                buildResult = await streamBuildCheck({ preambleText: verifyPreamble });
+                msgsMid = (await window.ipcRenderer.invoke('agent:get-history')) as Anthropic.MessageParam[];
+                saveDeployHistory(msgsMid);
+
+                if (buildResult.success) {
+                    await window.ipcRenderer
+                        .invoke(
+                            'agent:append-assistant',
+                            `**✅ ${t('codeQualityChatOutcomeSuccess')}**\n\n${t('codeQualityRebuildSuccessAfterRounds').replace(/\{a\}/g, String(attempt))}`
+                        )
+                        .catch(() => {});
+                    saveDeployHistory((await window.ipcRenderer.invoke('agent:get-history')) as Anthropic.MessageParam[]);
+                    showToast(t('codeQualitySuccess'), 'success');
+                    return;
+                }
+
+                if (attempt === MAX_BUILD_FIX_ROUNDS) {
+                    const maxMsg = t('codeQualityMaxRoundsReached').replace(/\{m\}/g, String(MAX_BUILD_FIX_ROUNDS));
+                    await window.ipcRenderer.invoke('agent:append-assistant', `**❌** ${maxMsg}`).catch(() => {});
+                    saveDeployHistory((await window.ipcRenderer.invoke('agent:get-history')) as Anthropic.MessageParam[]);
+                    showToast(t('codeQualityFailedToast'), 'error');
+                    return;
+                }
+            }
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            const userMsg = /no handler registered/i.test(msg) ? t('codeQualityNoHandler') : msg;
+            await window.ipcRenderer
+                .invoke('agent:append-assistant', `**❌ ${t('codeQualityCheck')}**\n\n${userMsg}`)
+                .catch(() => {});
+            const msgs = (await window.ipcRenderer.invoke('agent:get-history').catch(() => [])) as Anthropic.MessageParam[];
+            saveDeployHistory(msgs);
+            showToast(userMsg, 'error');
+        }
+    }, [currentProject, t, showToast, buildQualityLogMd, saveDeployHistory, onSendMessage]);
 
     const handleDeploy = useCallback(async () => {
         if (!currentProject || isProcessing) return;
@@ -586,15 +797,13 @@ export function ProjectView({
         }
     }, [currentProject, isProcessing, t, onDeployStatusChange]);
 
-    deployHandlerRef.current = handleDeploy;
-
     useEffect(() => {
         if (onRegisterDeployHandler) {
             onRegisterDeployHandler(() => {
-                deployHandlerRef.current?.();
+                void handleDeploy();
             });
         }
-    }, [onRegisterDeployHandler]);
+    }, [onRegisterDeployHandler, handleDeploy]);
 
     // 监听部署事件，把日志实时更新到 history 并保存 session
     useEffect(() => {
@@ -835,6 +1044,7 @@ export function ProjectView({
                                             onFileChange={handleFileChange}
                                             onFileSave={handleFileSave}
                                             onRef={setMultiTabEditorRef}
+                                            onCodeQualityCheck={handleCodeQualityCheck}
                                             pendingOpenFile={pendingOpenFile}
                                             onConsumePendingOpenFile={() => setPendingOpenFile(null)}
                                             onBrowserTabClose={() => {

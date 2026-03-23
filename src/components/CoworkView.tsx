@@ -26,7 +26,7 @@ interface SessionSummary {
 
 interface CoworkViewProps {
     history: Anthropic.MessageParam[];
-    onSendMessage: (message: string | { content: string, images: string[] }) => void;
+    onSendMessage: (message: string | { content: string; images: string[] }) => void | Promise<{ ok: true } | { ok: false; busy?: boolean }>;
     onAbort: () => void;
     isProcessing: boolean;
     onOpenSettings: () => void;
@@ -841,7 +841,7 @@ const MessageItem = memo(function MessageItem({ message, expandedBlocks, toggleB
                     </div>
                 )}
                 {text && (
-                    <div className="group inline-block">
+                    <div className="group inline-block max-w-full min-w-0">
                         <div className="user-bubble">
                             {text}
                         </div>

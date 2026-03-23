@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Shell, HatGlasses, Globe } from 'lucide-react';
+import { X, Shell, HatGlasses, Globe, Bug, Loader2 } from 'lucide-react';
 import { MonacoEditor, disposeMonacoModel } from './MonacoEditor';
 import { getFileIconConfig } from './fileIcons';
 import { TerminalPanel } from './TerminalPanel';
@@ -57,11 +57,14 @@ interface MultiTabEditorProps {
     pendingOpenFile?: { filePath: string; content: string } | null;
     onConsumePendingOpenFile?: () => void;
     onBrowserTabClose?: () => void;
+    /** 代码质量检查（由 ProjectView 注入，便于把日志写入左侧对话） */
+    onCodeQualityCheck?: () => void | Promise<void>;
 }
 
-export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFileSave, onRef, pendingOpenFile, onConsumePendingOpenFile, onBrowserTabClose }: MultiTabEditorProps) {
+export function MultiTabEditor({ projectPath, agentContent: _agentContent, onFileChange, onFileSave, onRef, pendingOpenFile, onConsumePendingOpenFile, onBrowserTabClose, onCodeQualityCheck }: MultiTabEditorProps) {
     const { t } = useI18n();
     const [tabs, setTabs] = useState<Tab[]>([]);
+    const [qualityCheckBusy, setQualityCheckBusy] = useState(false);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [browserRefreshTrigger, setBrowserRefreshTrigger] = useState(0);
     const tabsRef = useRef<Tab[]>([]);
@@ -124,27 +127,14 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
         setActiveTabId(newTab.id);
     };
 
-    /** 智能体只保留一个：已有则定位激活并更新内容，否则新建 */
-    const openAgentTab = () => {
-        const existingAgentTab = tabsRef.current.find(tab => tab.type === 'agent') as AgentTab | undefined;
-        if (existingAgentTab) {
-            setActiveTabId(existingAgentTab.id);
-            setTabs(prev =>
-                prev.map(tab =>
-                    tab.id === existingAgentTab.id && tab.type === 'agent'
-                        ? { ...tab, content: agentContent ?? tab.content }
-                        : tab
-                )
-            );
-            return;
+    const handleCodeQualityButton = async () => {
+        if (!onCodeQualityCheck || qualityCheckBusy) return;
+        setQualityCheckBusy(true);
+        try {
+            await onCodeQualityCheck();
+        } finally {
+            setQualityCheckBusy(false);
         }
-        const newTab: AgentTab = {
-            id: `agent-${Date.now()}`,
-            type: 'agent',
-            content: agentContent || ''
-        };
-        setTabs(prev => [...prev, newTab]);
-        setActiveTabId(newTab.id);
     };
 
     /** 打开或切换到浏览器 tab。已有浏览器 tab 时仅切换并可选更新 URL，不关闭其他 tab。
@@ -417,13 +407,17 @@ export function MultiTabEditor({ projectPath, agentContent, onFileChange, onFile
                     </button>
                     <button
                         type="button"
-                        disabled
-                        onClick={openAgentTab}
-                        className="p-1.5 text-stone-300 dark:text-zinc-600 cursor-not-allowed opacity-60 rounded transition-colors"
-                        title={t('agentComingSoon')}
-                        aria-label={t('agentComingSoon')}
+                        onClick={() => void handleCodeQualityButton()}
+                        disabled={!onCodeQualityCheck || qualityCheckBusy}
+                        className={`p-1.5 rounded transition-colors ${
+                            qualityCheckBusy
+                                ? 'text-orange-500 cursor-wait'
+                                : 'text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300'
+                        }`}
+                        title={t('codeQualityCheckHint')}
+                        aria-label={t('codeQualityCheck')}
                     >
-                        <HatGlasses size={16} />
+                        {qualityCheckBusy ? <Loader2 size={16} className="animate-spin" /> : <Bug size={16} />}
                     </button>
                     <button
                         type="button"

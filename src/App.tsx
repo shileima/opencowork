@@ -609,7 +609,10 @@ ${err}
     };
   }, []);
 
-  const handleSendMessage = async (msg: string | { content: string, images: string[] }) => {
+  /** 供代码质量自动修复等逻辑判断：主进程是否因「助手正忙」拒绝发送 */
+  const handleSendMessage = async (
+    msg: string | { content: string; images: string[] }
+  ): Promise<{ ok: true } | { ok: false; busy?: boolean }> => {
     console.log('[Preview:Debug] handleSendMessage called, activeView:', activeView, 'msg type:', typeof msg);
     setIsProcessing(true);
     try {
@@ -621,16 +624,23 @@ ${err}
       if (result && 'ok' in result && result.ok === false) {
         console.error('[App] agent:send-message API error:', result.status, result.error);
         setIsProcessing(false);
-      } else if (result?.error) {
+        return { ok: false };
+      }
+      if (result?.error) {
         console.error(result.error);
         if (result.error === 'Agent not initialized') {
           window.alert('AI 引擎尚未就绪，请稍候几秒后重试。\n\n如果问题持续，请检查 Settings 中的 API Key 是否已配置。');
         }
         setIsProcessing(false);
+        return { ok: false };
       }
+      return { ok: true };
     } catch (err) {
       console.error('[Preview:Debug] agent:send-message threw:', err);
       setIsProcessing(false);
+      const em = err instanceof Error ? err.message : String(err);
+      const busy = /already processing|Task .+ is already processing/i.test(em);
+      return { ok: false, busy };
     }
   };
 

@@ -131,7 +131,7 @@ export function FloatingChat({
                                 <div key={idx} className="opacity-100 transition-opacity duration-150">
                                     {msg.role === 'user' ? (
                                         <div className="relative group inline-block max-w-[90%]">
-                                            <div className="bg-stone-200/80 dark:bg-secondary text-stone-800 dark:text-foreground rounded-2xl px-5 py-4 text-sm leading-relaxed shadow-sm">
+                                            <div className="bg-stone-200/80 dark:bg-secondary text-stone-800 dark:text-foreground rounded-2xl px-5 py-4 text-sm leading-relaxed shadow-sm whitespace-pre-wrap break-words">
                                                 {msg.content}
                                             </div>
                                             {msg.content && msg.content.trim().length > 0 && (

@@ -180,8 +180,8 @@ export function ChatInput({
     };
 
     return (
-        <div className="border-t border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 pt-3 pb-1 shadow-lg shadow-stone-200/50 dark:shadow-black/20">
-            <div className="max-w-xl mx-auto">
+        <div className="border-t border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 pt-3 pb-1 shadow-lg shadow-stone-200/50 dark:shadow-black/20 min-w-0">
+            <div className="max-w-xl mx-auto w-full min-w-0">
                 {/* Image Preview Area */}
                 {images.length > 0 && (
                     <div className="flex gap-2 mb-2 overflow-x-auto pb-1">
@@ -199,8 +199,8 @@ export function ChatInput({
                     </div>
                 )}
 
-                <form onSubmit={handleSubmit}>
-                    <div className="flex flex-col bg-[#FAF9F7] dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-[20px] px-3 pt-2 pb-1 shadow-sm transition-all hover:shadow-md focus-within:ring-4 focus-within:ring-orange-50/50 focus-within:border-orange-200 dark:focus-within:border-orange-500/30">
+                <form onSubmit={handleSubmit} className="min-w-0 w-full">
+                    <div className="flex flex-col min-w-0 w-full bg-[#FAF9F7] dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-[20px] px-3 pt-2 pb-1 shadow-sm transition-all hover:shadow-md focus-within:ring-4 focus-within:ring-orange-50/50 focus-within:border-orange-200 dark:focus-within:border-orange-500/30">
 
                         <textarea
                             ref={inputRef}
@@ -210,7 +210,7 @@ export function ChatInput({
                             onPaste={handlePaste}
                             placeholder={mode === 'chat' ? t('inputMessage') : mode === 'automation' ? t('describeTaskPlaceholder') : workingDir ? t('describeTaskPlaceholder') : t('selectWorkingDirFirst')}
                             rows={1}
-                            className="w-full bg-transparent text-stone-800 dark:text-zinc-100 placeholder:text-stone-400 dark:placeholder:text-zinc-500 text-xs focus:outline-none resize-none overflow-y-auto min-h-[22px] max-h-[120px] leading-5 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0"
+                            className="w-full min-w-0 box-border bg-transparent text-stone-800 dark:text-zinc-100 placeholder:text-stone-400 dark:placeholder:text-zinc-500 text-xs focus:outline-none resize-none overflow-y-auto overflow-x-hidden min-h-[22px] max-h-[120px] leading-5 pt-0.5 pb-0 transition-[height] duration-200 ease-out mb-0 [overflow-wrap:anywhere]"
                             style={{
                                 scrollbarWidth: 'none',
                                 msOverflowStyle: 'none',

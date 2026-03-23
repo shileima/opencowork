@@ -51,7 +51,7 @@ export function ChatPanel({
     const relevantHistory = history.filter(m => (m.role as string) !== 'system');
 
     return (
-        <div className="flex flex-col h-full bg-white dark:bg-zinc-900">
+        <div className="flex flex-col h-full min-w-0 bg-white dark:bg-zinc-900">
             {/* Chat Messages - 聊天区域文字小 2 号 */}
             <div className="flex-1 overflow-y-auto px-4 py-6 text-xs" ref={scrollRef}>
                 <div className="max-w-2xl mx-auto space-y-5">
@@ -93,10 +93,10 @@ export function ChatPanel({
                                 }
 
                                 return (
-                                    <div key={idx} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                                        <div className={` ${isUser ? '' : 'w-full'}`}>
+                                    <div key={idx} className={`flex ${isUser ? 'justify-end' : 'justify-start'} min-w-0`}>
+                                        <div className={isUser ? 'max-w-full min-w-0' : 'w-full'}>
                                             {isUser ? (
-                                                <div className="relative group inline-block">
+                                                <div className="relative group inline-block max-w-full">
                                                     <div className="user-bubble">
                                                         {decodeDisplayText(content)}
                                                     </div>
@@ -164,7 +164,7 @@ export function ChatPanel({
             </div>
 
             {/* Chat Input */}
-            <div className="border-t border-stone-200 dark:border-zinc-800 shrink-0">
+            <div className="border-t border-stone-200 dark:border-zinc-800 shrink-0 min-w-0">
                 <ChatInput
                     onSendMessage={onSendMessage}
                     onAbort={onAbort}
