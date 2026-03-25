@@ -524,7 +524,7 @@ export function ProjectView({
         };
 
         console.log('[Preview:Debug] Sending preview message, taskId:', result.task.id);
-        onSendMessage(`部署：
+        onSendMessage(`预览：
             1. 先在项目目录运行 pnpm install 安装依赖；
             2. 检查当前项目状态并修复错误；
             3. pnpm install 完成后，运行 pnpm dev 启动本地开发服务；
