@@ -10,6 +10,7 @@ import { SkillEditor } from './SkillEditor';
 import { MCPSettings } from './MCPSettings';
 import { useTheme } from '../theme/ThemeContext';
 import { useI18n } from '../i18n/I18nContext';
+import { useToast } from './Toast';
 
 interface SettingsViewProps {
     onClose: () => void;
@@ -212,6 +213,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         percentage?: number;
     } | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const { showToast } = useToast();
 
     useEffect(() => {
         // Fetch app info
@@ -254,7 +256,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
             setActiveTab('about');
         });
         const removeNotAvailable = window.ipcRenderer?.on('app:update-not-available', () => {
-            setUpdateInfo(prev => prev ? prev : { hasUpdate: false, latestVersion: '', releaseUrl: '' });
+            setUpdateInfo({ hasUpdate: false, latestVersion: '', releaseUrl: '' });
         });
         const removeProgress = window.ipcRenderer?.on('app:update-download-progress', (_e: any, progress: any) => {
             setDownloadProgress(progress);
@@ -268,6 +270,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
             console.error('[SettingsView] App update error:', err);
             setDownloadingUpdate(false);
             setDownloadProgress(null);
+            const msg = typeof err?.message === 'string' ? err.message : '应用更新失败';
+            showToast(msg, 'error');
         });
         return () => {
             removeAvailable?.();
@@ -276,7 +280,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
             removeDownloaded?.();
             removeError?.();
         };
-    }, []);
+    }, [showToast]);
 
     const handleCheckUpdate = async () => {
         setCheckingUpdate(true);
@@ -291,6 +295,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                     latestVersion: result.latestVersion,
                     releaseUrl: result.releaseUrl
                 });
+            } else if (result && !result.success) {
+                showToast(result.error || '检查更新失败', 'error');
             }
         } catch (error) {
             console.error('Check update failed', error);
@@ -304,8 +310,13 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         setDownloadProgress(null);
         try {
             await window.ipcRenderer?.invoke('app:download-update');
-        } catch (error) {
+        } catch (error: unknown) {
             console.error('Download update failed', error);
+            const msg =
+                error instanceof Error
+                    ? error.message
+                    : '下载失败。macOS 未签名应用常无法使用自动更新，请到 GitHub Releases 手动下载 DMG 安装。';
+            showToast(msg, 'error');
             setDownloadingUpdate(false);
         }
     };
@@ -1752,14 +1763,14 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                     <p className="text-sm font-mono text-stone-500 dark:text-zinc-500">
                                         v{appInfo?.version || '1.0.0'}
                                     </p>
+                                    {appInfo?.appVersion != null && (
+                                        <p className="text-xs text-stone-400 dark:text-zinc-500">
+                                            安装包（整包）版本: v{appInfo.appVersion}
+                                        </p>
+                                    )}
                                     {appInfo?.hotUpdateVersion && appInfo.hotUpdateVersion !== appInfo.appVersion && (
                                         <p className="text-xs text-green-600 dark:text-green-400">
                                             资源版本: v{appInfo.hotUpdateVersion} (热更新)
-                                        </p>
-                                    )}
-                                    {!appInfo?.hotUpdateVersion && (
-                                        <p className="text-xs text-stone-400 dark:text-zinc-500">
-                                            应用版本: v{appInfo?.appVersion || '1.0.0'}
                                         </p>
                                     )}
                                 </div>

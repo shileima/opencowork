@@ -26,6 +26,7 @@ import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { setPlaywrightManager } from './utils/PlaywrightEnsure'
 import { ensureAgentBrowserCanFindChromium, getPlaywrightEnvVars } from './utils/PlaywrightPath'
+import { compareAppSemver } from './utils/appSemverCompare'
 import { registerContextSwitchHandler, registerRpaContextSwitchHandler } from './contextSwitchCoordinator'
 import Anthropic from '@anthropic-ai/sdk'
 
@@ -1308,6 +1309,11 @@ autoUpdater.autoDownload = false
 autoUpdater.autoInstallOnAppQuit = false
 
 autoUpdater.on('update-available', (info) => {
+  const current = app.getVersion()
+  if (compareAppSemver(info.version, current) <= 0) {
+    console.log(`[autoUpdater] Ignoring update-available (remote ${info.version} <= local ${current})`)
+    return
+  }
   const win = mainWin || floatingBallWin
   win?.webContents.send('app:update-available', {
     version: info.version,
@@ -1350,7 +1356,7 @@ ipcMain.handle('app:check-update', async () => {
       return { success: true, hasUpdate: false, currentVersion }
     }
     const latestVersion = result.updateInfo.version
-    const hasUpdate = compareVersions(latestVersion, currentVersion) > 0
+    const hasUpdate = compareAppSemver(latestVersion, currentVersion) > 0
     return {
       success: true,
       hasUpdate,
@@ -1364,14 +1370,9 @@ ipcMain.handle('app:check-update', async () => {
   }
 })
 
+/** 失败时抛出，以便渲染进程 invoke catch 并结束「下载中」状态 */
 ipcMain.handle('app:download-update', async () => {
-  try {
-    await autoUpdater.downloadUpdate()
-    return { success: true }
-  } catch (error: any) {
-    console.error('[autoUpdater] Download update failed:', error)
-    return { success: false, error: error.message }
-  }
+  await autoUpdater.downloadUpdate()
 })
 
 ipcMain.handle('app:install-update', () => {
@@ -1531,20 +1532,6 @@ ipcMain.handle('playwright:uninstall', async () => {
     return { success: false, error: errorMessage }
   }
 })
-
-// Helper for version comparison
-function compareVersions(v1: string, v2: string) {
-  const parts1 = v1.split('.').map(Number);
-  const parts2 = v2.split('.').map(Number);
-
-  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-    const p1 = parts1[i] || 0;
-    const p2 = parts2[i] || 0;
-    if (p1 > p2) return 1;
-    if (p1 < p2) return -1;
-  }
-  return 0;
-}
 
 // Shortcut update handler
 ipcMain.handle('shortcut:update', (_, newShortcut: string) => {
