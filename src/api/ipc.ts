@@ -121,7 +121,7 @@ export const rpaProjectApi = {
    * 获取当前 RPA 项目
    */
   getCurrent(): Promise<RPAProject | null> {
-    return invoke<RPAProject | null>('rpa:project:get-current');
+    return invoke<RPAProject | null>('rpa:get-current-project');
   },
 
   /**

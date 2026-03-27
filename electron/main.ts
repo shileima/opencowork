@@ -25,7 +25,7 @@ import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { setPlaywrightManager } from './utils/PlaywrightEnsure'
-import { ensureAgentBrowserCanFindChromium } from './utils/PlaywrightPath'
+import { ensureAgentBrowserCanFindChromium, getPlaywrightEnvVars } from './utils/PlaywrightPath'
 import { registerContextSwitchHandler, registerRpaContextSwitchHandler } from './contextSwitchCoordinator'
 import Anthropic from '@anthropic-ai/sdk'
 
@@ -2824,14 +2824,26 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
     const ext = path.extname(scriptPath).toLowerCase();
     const scriptDir = path.dirname(scriptPath);
     const nodePath = getBuiltinNodePath();
-    // 优先使用脚本目录的 node_modules，其次使用 agent-browser 的 playwright（~/.qa-cowork/skills/agent-browser/node_modules）
+    const playwrightEnv = getPlaywrightEnvVars();
     const agentBrowserModules = path.join(os.homedir(), '.qa-cowork', 'skills', 'agent-browser', 'node_modules');
     const localModules = path.join(scriptDir, 'node_modules');
-    const nodePathParts = [localModules];
-    if (fs.existsSync(agentBrowserModules)) {
-      nodePathParts.push(agentBrowserModules);
+    /** 与 FileSystemTools 一致：内置 resources/playwright + 用户 agent-browser + 项目本地 node_modules */
+    const nodePathSegments: string[] = [];
+    if (fs.existsSync(localModules)) nodePathSegments.push(localModules);
+    if (playwrightEnv.NODE_PATH) {
+      for (const seg of playwrightEnv.NODE_PATH.split(path.delimiter)) {
+        if (seg) nodePathSegments.push(seg);
+      }
     }
-    const nodePathEnv = nodePathParts.join(path.delimiter);
+    if (fs.existsSync(agentBrowserModules)) nodePathSegments.push(agentBrowserModules);
+    const seenNodePath = new Set<string>();
+    const nodePathEnv = nodePathSegments
+      .filter((s) => {
+        if (!s || seenNodePath.has(s)) return false;
+        seenNodePath.add(s);
+        return true;
+      })
+      .join(path.delimiter);
 
     if (ext === '.js') {
       let content = fs.readFileSync(scriptPath, 'utf-8');
@@ -2846,7 +2858,7 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
         : scriptPath;
       const child = cpSpawn(nodePath, [path.basename(scriptToRun)], {
         cwd: scriptDir,
-        env: { ...process.env, NODE_PATH: nodePathEnv },
+        env: { ...process.env, ...playwrightEnv, NODE_PATH: nodePathEnv },
         stdio: ['ignore', 'pipe', 'pipe']
       });
       if (useTmp) {

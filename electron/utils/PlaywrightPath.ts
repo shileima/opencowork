@@ -31,9 +31,41 @@ export function getBuiltinPlaywrightPath(): string | null {
   if (fs.existsSync(appPkg)) {
     return appDir;
   }
+  // 打包：electron-builder.json5 将包拷到 Resources/playwright/package/playwright/
+  if (app.isPackaged) {
+    const packagedRoot = path.join(process.resourcesPath, 'playwright', 'package');
+    const flatPkg = path.join(packagedRoot, 'playwright', 'package.json');
+    if (fs.existsSync(flatPkg)) {
+      return packagedRoot;
+    }
+  }
   const userPkg = path.join(AGENT_BROWSER_SKILL_DIR, 'node_modules', 'playwright', 'package.json');
   if (fs.existsSync(userPkg)) {
     return AGENT_BROWSER_SKILL_DIR;
+  }
+  // 开发：未执行 prepare:playwright 时可用仓库根目录的 devDependency
+  if (!app.isPackaged) {
+    const rootPkg = path.join(app.getAppPath(), 'node_modules', 'playwright', 'package.json');
+    if (fs.existsSync(rootPkg)) {
+      return app.getAppPath();
+    }
+  }
+  return null;
+}
+
+/**
+ * 内置 Playwright 包根目录（该目录内含 package.json），用于 PLAYWRIGHT_REAL_PATH 等
+ */
+export function getBuiltinPlaywrightModuleDir(): string | null {
+  const root = getBuiltinPlaywrightPath();
+  if (!root) return null;
+  const viaNodeModules = path.join(root, 'node_modules', 'playwright', 'package.json');
+  if (fs.existsSync(viaNodeModules)) {
+    return path.join(root, 'node_modules', 'playwright');
+  }
+  const viaFlat = path.join(root, 'playwright', 'package.json');
+  if (fs.existsSync(viaFlat)) {
+    return path.join(root, 'playwright');
   }
   return null;
 }
@@ -153,14 +185,15 @@ export function getPlaywrightEnvVars(): Record<string, string> {
 
   const playwrightPath = getBuiltinPlaywrightPath();
   const browsersPath = getBuiltinPlaywrightBrowsersPath();
+  const playwrightModuleDir = getBuiltinPlaywrightModuleDir();
 
-  if (playwrightPath) {
-    // NODE_PATH 指向安装根目录，让 require('playwright') 找到 node_modules/playwright
+  if (playwrightPath && playwrightModuleDir) {
+    // NODE_PATH 为 playwright 的父目录：…/node_modules 或打包时的 …/package
+    const nodePathSegment = path.dirname(playwrightModuleDir);
     const existingNodePath = process.env.NODE_PATH || '';
-    const nodeModulesPath = path.join(playwrightPath, 'node_modules');
     env.NODE_PATH = existingNodePath
-      ? `${nodeModulesPath}${path.delimiter}${existingNodePath}`
-      : nodeModulesPath;
+      ? `${nodePathSegment}${path.delimiter}${existingNodePath}`
+      : nodePathSegment;
 
     env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1';
   }

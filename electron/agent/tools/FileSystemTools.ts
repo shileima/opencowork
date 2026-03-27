@@ -8,7 +8,7 @@ import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { getBuiltinNodePath, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars } from '../../utils/NodePath';
 import { getCommonPackageManagerPaths } from '../../utils/PathUtils';
-import { getPlaywrightEnvVars, getBuiltinPlaywrightPath } from '../../utils/PlaywrightPath';
+import { getPlaywrightEnvVars, getBuiltinPlaywrightModuleDir } from '../../utils/PlaywrightPath';
 import { ensurePlaywrightForAutomation } from '../../utils/PlaywrightEnsure';
 import { nodeVersionManager } from '../../utils/NodeVersionManager';
 import { ErrorDetector, DetectedError } from './ErrorDetector';
@@ -1011,15 +1011,12 @@ export class FileSystemTools {
             const isAutomationScript = this.isAutomationScriptCommand(command, workingDir);
             if (isAutomationScript) {
                 const wrapperRoot = this.getPlaywrightMaximizeWrapperRoot();
-                const builtinPlaywright = getBuiltinPlaywrightPath();
-                if (fsSync.existsSync(wrapperRoot) && builtinPlaywright) {
-                    const realPlaywrightDir = path.join(builtinPlaywright, 'node_modules', 'playwright');
-                    if (fsSync.existsSync(realPlaywrightDir)) {
-                        const delim = process.platform === 'win32' ? ';' : ':';
-                        env.NODE_PATH = `${wrapperRoot}${delim}${env.NODE_PATH || ''}`;
-                        env.PLAYWRIGHT_REAL_PATH = realPlaywrightDir;
-                        console.log('[FileSystemTools] Injected Playwright maximize wrapper for automation script');
-                    }
+                const realPlaywrightDir = getBuiltinPlaywrightModuleDir();
+                if (fsSync.existsSync(wrapperRoot) && realPlaywrightDir) {
+                    const delim = process.platform === 'win32' ? ';' : ':';
+                    env.NODE_PATH = `${wrapperRoot}${delim}${env.NODE_PATH || ''}`;
+                    env.PLAYWRIGHT_REAL_PATH = realPlaywrightDir;
+                    console.log('[FileSystemTools] Injected Playwright maximize wrapper for automation script');
                 }
             }
 
