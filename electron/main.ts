@@ -25,7 +25,7 @@ import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { setPlaywrightManager } from './utils/PlaywrightEnsure'
-import { ensureAgentBrowserCanFindChromium, getPlaywrightEnvVars } from './utils/PlaywrightPath'
+import { ensureAgentBrowserCanFindChromium, getPlaywrightEnvVars, getPlaywrightNodePathSegmentForRpa } from './utils/PlaywrightPath'
 import { compareAppSemver } from './utils/appSemverCompare'
 import { registerContextSwitchHandler, registerRpaContextSwitchHandler } from './contextSwitchCoordinator'
 import Anthropic from '@anthropic-ai/sdk'
@@ -2817,6 +2817,8 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
     /** 与 FileSystemTools 一致：内置 resources/playwright + 用户 agent-browser + 项目本地 node_modules */
     const nodePathSegments: string[] = [];
     if (fs.existsSync(localModules)) nodePathSegments.push(localModules);
+    const rpaPwSeg = getPlaywrightNodePathSegmentForRpa();
+    if (rpaPwSeg) nodePathSegments.push(rpaPwSeg);
     if (playwrightEnv.NODE_PATH) {
       for (const seg of playwrightEnv.NODE_PATH.split(path.delimiter)) {
         if (seg) nodePathSegments.push(seg);
@@ -2843,9 +2845,13 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
             return tmpFile;
           })()
         : scriptPath;
+      const rpaChildEnv: NodeJS.ProcessEnv = { ...process.env, ...playwrightEnv };
+      if (nodePathEnv) {
+        rpaChildEnv.NODE_PATH = nodePathEnv;
+      }
       const child = cpSpawn(nodePath, [path.basename(scriptToRun)], {
         cwd: scriptDir,
-        env: { ...process.env, ...playwrightEnv, NODE_PATH: nodePathEnv },
+        env: rpaChildEnv,
         stdio: ['ignore', 'pipe', 'pipe']
       });
       if (useTmp) {

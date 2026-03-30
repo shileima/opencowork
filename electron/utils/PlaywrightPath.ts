@@ -31,9 +31,13 @@ export function getBuiltinPlaywrightPath(): string | null {
   if (fs.existsSync(appPkg)) {
     return appDir;
   }
-  // 打包：electron-builder.json5 将包拷到 Resources/playwright/package/playwright/
+  // 打包：extraResources → Resources/playwright/package/（优先 node_modules 布局，含 playwright-core）
   if (app.isPackaged) {
     const packagedRoot = path.join(process.resourcesPath, 'playwright', 'package');
+    const nmPkg = path.join(packagedRoot, 'node_modules', 'playwright', 'package.json');
+    if (fs.existsSync(nmPkg)) {
+      return packagedRoot;
+    }
     const flatPkg = path.join(packagedRoot, 'playwright', 'package.json');
     if (fs.existsSync(flatPkg)) {
       return packagedRoot;
@@ -66,6 +70,39 @@ export function getBuiltinPlaywrightModuleDir(): string | null {
   const viaFlat = path.join(root, 'playwright', 'package.json');
   if (fs.existsSync(viaFlat)) {
     return path.join(root, 'playwright');
+  }
+  return null;
+}
+
+/**
+ * RPA 子进程 require('playwright') 所需的 NODE_PATH 段（即 playwright 包所在目录的父目录）。
+ * 当 getBuiltinPlaywrightPath 因环境差异未命中时，直接探测 extraResources 常见布局（electron-builder.json5）。
+ */
+export function getPlaywrightNodePathSegmentForRpa(): string | null {
+  const fromModule = getBuiltinPlaywrightModuleDir();
+  if (fromModule) {
+    return path.dirname(fromModule);
+  }
+  if (!app.isPackaged) {
+    return null;
+  }
+  const base = process.resourcesPath;
+  const pkgNm = path.join(base, 'playwright', 'package', 'node_modules');
+  if (fs.existsSync(path.join(pkgNm, 'playwright', 'package.json'))) {
+    return pkgNm;
+  }
+  const candidates: string[] = [
+    path.join(base, 'playwright', 'package'),
+    path.join(base, 'playwright'),
+  ];
+  for (const root of candidates) {
+    if (fs.existsSync(path.join(root, 'playwright', 'package.json'))) {
+      return root;
+    }
+    const nmPlay = path.join(root, 'node_modules', 'playwright', 'package.json');
+    if (fs.existsSync(nmPlay)) {
+      return path.join(root, 'node_modules');
+    }
   }
   return null;
 }

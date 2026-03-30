@@ -108,8 +108,8 @@ jobs:
       -
         name: Prepare Playwright package
         run: |
-          node -e "require('fs').mkdirSync('resources/playwright/package', { recursive: true })"
-          node -e "const {cpSync}=require('fs'); cpSync('node_modules/playwright','resources/playwright/package/playwright',{recursive:true})"
+          node -e "require('fs').mkdirSync('resources/playwright/package/node_modules',{recursive:true})"
+          node -e "const {cpSync}=require('fs'); const f=require('fs'); f.cpSync('node_modules/playwright','resources/playwright/package/node_modules/playwright',{recursive:true}); f.cpSync('node_modules/playwright-core','resources/playwright/package/node_modules/playwright-core',{recursive:true})"
 
       -
         name: Download Chromium and pack as tar.gz

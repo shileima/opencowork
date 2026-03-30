@@ -20,6 +20,63 @@ const projectRoot = path.resolve(__dirname, '..');
 const playwrightRoot = path.join(projectRoot, 'resources', 'playwright');
 const browsersPath = path.join(playwrightRoot, 'browsers');
 
+/**
+ * electron-builder extraResources 使用 resources/playwright/package/ 整目录打包。
+ * pnpm 将 playwright-core 提升到根 node_modules，仅复制 playwright 会导致运行时 require('playwright-core') 失败。
+ * 布局：package/node_modules/playwright + package/node_modules/playwright-core（与标准 node_modules 一致）。
+ */
+function syncPlaywrightPackageForElectronBuilder() {
+  const pkgRoot = path.join(playwrightRoot, 'package');
+  const nm = path.join(pkgRoot, 'node_modules');
+  /** @type {string[]} */
+  const names = ['playwright', 'playwright-core'];
+  if (process.platform === 'darwin') {
+    names.push('fsevents');
+  }
+
+  let copied = 0;
+  for (const name of names) {
+    const dest = path.join(nm, name);
+    const srcCandidates = [
+      path.join(playwrightRoot, 'node_modules', name),
+      path.join(projectRoot, 'node_modules', name),
+    ];
+    let src = null;
+    for (const c of srcCandidates) {
+      if (fs.existsSync(path.join(c, 'package.json'))) {
+        src = c;
+        break;
+      }
+    }
+    if (!src) {
+      if (name === 'fsevents') continue;
+      console.warn(`⚠️  未找到 ${name}，无法写入 package/node_modules/${name}（请先 pnpm install）`);
+      continue;
+    }
+    try {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.rmSync(dest, { recursive: true, force: true });
+      fs.cpSync(src, dest, { recursive: true });
+      console.log(`✅ 已复制 ${name} → resources/playwright/package/node_modules/${name}`);
+      copied++;
+    } catch (err) {
+      console.warn(`⚠️  复制 ${name} 失败:`, err?.message || err);
+    }
+  }
+
+  if (copied > 0) {
+    const legacyFlat = path.join(pkgRoot, 'playwright');
+    if (fs.existsSync(legacyFlat)) {
+      try {
+        fs.rmSync(legacyFlat, { recursive: true, force: true });
+        console.log('⏭️  已移除旧版扁平目录 resources/playwright/package/playwright');
+      } catch (e) {
+        console.warn('⚠️  移除旧扁平目录失败:', e?.message || e);
+      }
+    }
+  }
+}
+
 console.log('📦 准备 Playwright（内置 Node 同目录，避免「找不到 playwright」）...');
 console.log(`Playwright 根目录: ${playwrightRoot}`);
 console.log(`浏览器目录: ${browsersPath}`);
@@ -53,6 +110,8 @@ if (!fs.existsSync(nodeModulesPlaywright)) {
     console.warn('⚠️  npm install 失败，将仅准备浏览器:', err?.message || err);
   }
 }
+
+syncPlaywrightPackageForElectronBuilder();
 
 // 快速检测：浏览器已存在则直接跳过，避免每次 build/postinstall 都重复安装
 if (fs.existsSync(browsersPath)) {

@@ -248,11 +248,15 @@ console.log('\n🌐 Checking Playwright...');
 const playwrightPackagePath = path.join(__dirname, '../resources/playwright/package');
 
 if (fs.existsSync(playwrightPackagePath)) {
-    const pkgJsonPath = path.join(playwrightPackagePath, 'playwright', 'package.json');
-    if (fs.existsSync(pkgJsonPath)) {
-        console.log('✅ Playwright package found (browsers will be downloaded at first run)');
+    const nmPlaywright = path.join(playwrightPackagePath, 'node_modules', 'playwright', 'package.json');
+    const flatPlaywright = path.join(playwrightPackagePath, 'playwright', 'package.json');
+    const nmCore = path.join(playwrightPackagePath, 'node_modules', 'playwright-core', 'package.json');
+    if (fs.existsSync(nmPlaywright) && fs.existsSync(nmCore)) {
+        console.log('✅ Playwright + playwright-core 已在 package/node_modules（供 electron-builder 打包）');
+    } else if (fs.existsSync(flatPlaywright)) {
+        console.warn('⚠️  仅为旧版扁平 layout（package/playwright），缺少 playwright-core 时运行时会失败；请运行: npm run prepare:playwright');
     } else {
-        console.warn('⚠️  Playwright package directory exists but playwright/package.json not found');
+        console.warn('⚠️  resources/playwright/package 下未找到 node_modules/playwright 或 playwright');
     }
 } else {
     console.warn('⚠️  Playwright package not found - run: npm run prepare:playwright');

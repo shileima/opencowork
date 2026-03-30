@@ -87,7 +87,13 @@
     "entitlements": "build/entitlements.mac.plist",
     "entitlementsInherit": "build/entitlements.mac.plist",
     "icon": "resources/icons/icon.icns",
-    "category": "public.app-category.productivity"
+    "category": "public.app-category.productivity",
+    // osx-sign 会把 locale.pak 当作二进制并逐文件 codesign，部分环境会报
+    // "A timestamp was expected but was not found" 或 SIGSEGV；跳过这些资源文件
+    // @see https://github.com/electron-userland/electron-builder/issues/6796
+    "signIgnore": [
+      "\\.lproj/locale\\.pak$"
+    ]
   },
   "dmg": {
     "icon": "resources/icons/icon.icns",
