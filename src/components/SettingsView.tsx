@@ -1821,7 +1821,7 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                             onClick={handleInstallUpdate}
                                                             className="px-4 py-2 text-sm font-medium rounded-lg bg-green-500 hover:bg-green-600 text-white transition-colors"
                                                         >
-                                                            立即重启安装
+                                                            {window.electron?.platform === 'darwin' ? '打开安装包（拖入应用程序完成更新）' : '立即重启安装'}
                                                         </button>
                                                     ) : downloadingUpdate ? (
                                                         <div className="flex flex-col items-center gap-1 w-full">

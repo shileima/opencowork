@@ -1308,6 +1308,11 @@ ipcMain.handle('sso:logout', () => {
 autoUpdater.autoDownload = false
 autoUpdater.autoInstallOnAppQuit = false
 
+// macOS: Squirrel.Mac requires code signing that CI builds lack.
+// We bypass Squirrel by downloading the DMG directly and opening it.
+let macPendingDmgUrl: string | null = null
+let macDownloadedDmgPath: string | null = null
+
 autoUpdater.on('update-available', (info) => {
   const current = app.getVersion()
   if (compareAppSemver(info.version, current) <= 0) {
@@ -1357,6 +1362,14 @@ ipcMain.handle('app:check-update', async () => {
     }
     const latestVersion = result.updateInfo.version
     const hasUpdate = compareAppSemver(latestVersion, currentVersion) > 0
+
+    // macOS: store DMG URL for direct download (bypasses Squirrel.Mac signing check)
+    if (process.platform === 'darwin' && hasUpdate) {
+      const dmgFile = result.updateInfo.files?.find((f: any) => f.url.endsWith('.dmg'))
+      if (dmgFile) {
+        macPendingDmgUrl = `https://github.com/shileima/opencowork/releases/download/v${latestVersion}/${dmgFile.url}`
+      }
+    }
     return {
       success: true,
       hasUpdate,
@@ -1372,12 +1385,81 @@ ipcMain.handle('app:check-update', async () => {
 
 /** 失败时抛出，以便渲染进程 invoke catch 并结束「下载中」状态 */
 ipcMain.handle('app:download-update', async () => {
+  if (process.platform === 'darwin' && macPendingDmgUrl) {
+    // macOS: download DMG directly to bypass Squirrel.Mac code-signing check
+    await downloadMacDmg(macPendingDmgUrl)
+    return
+  }
   await autoUpdater.downloadUpdate()
 })
 
 ipcMain.handle('app:install-update', () => {
+  if (process.platform === 'darwin' && macDownloadedDmgPath) {
+    // macOS: open the DMG so the user can drag-install (Squirrel not involved)
+    shell.openPath(macDownloadedDmgPath)
+    return
+  }
   autoUpdater.quitAndInstall(false, true)
 })
+
+/**
+ * Download the DMG file directly, emitting the same progress/downloaded events
+ * that electron-updater would emit, so the existing UI works unchanged.
+ */
+function downloadMacDmg(dmgUrl: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const win = mainWin || floatingBallWin
+    const downloadsPath = app.getPath('downloads')
+    const filename = dmgUrl.split('/').pop() ?? 'QACowork-update.dmg'
+    const destPath = path.join(downloadsPath, filename)
+    macDownloadedDmgPath = destPath
+
+    const file = require('fs').createWriteStream(destPath)
+    let redirectUrl = dmgUrl
+
+    const doRequest = (url: string) => {
+      const protocol = url.startsWith('https') ? require('https') : require('http')
+      protocol.get(url, (res: any) => {
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          file.close()
+          doRequest(res.headers.location)
+          return
+        }
+        const total = parseInt(res.headers['content-length'] || '0', 10)
+        let transferred = 0
+        const startTime = Date.now()
+
+        res.on('data', (chunk: Buffer) => {
+          transferred += chunk.length
+          file.write(chunk)
+          const elapsed = (Date.now() - startTime) / 1000 || 1
+          win?.webContents.send('app:update-download-progress', {
+            percent: total ? Math.round((transferred / total) * 100) : 0,
+            transferred,
+            total,
+            bytesPerSecond: Math.round(transferred / elapsed),
+          })
+        })
+
+        res.on('end', () => {
+          file.end()
+          win?.webContents.send('app:update-downloaded', { version: filename })
+          resolve()
+        })
+
+        res.on('error', (err: Error) => {
+          file.destroy()
+          reject(err)
+        })
+      }).on('error', (err: Error) => {
+        file.destroy()
+        reject(err)
+      })
+    }
+
+    doRequest(redirectUrl)
+  })
+}
 
 // 检查资源更新
 ipcMain.handle('resource:check-update', async () => {
