@@ -107,21 +107,10 @@ jobs:
         run: node scripts/prepare-pnpm.mjs
 
       -
-        name: Prepare Playwright package
-        run: |
-          mkdir -p resources/playwright/package/node_modules
-          rm -rf resources/playwright/package/node_modules/playwright resources/playwright/package/node_modules/playwright-core
-          node -e "const {cpSync}=require('fs'); cpSync('node_modules/playwright','resources/playwright/package/node_modules/playwright',{recursive:true,dereference:true}); cpSync('node_modules/playwright-core','resources/playwright/package/node_modules/playwright-core',{recursive:true,dereference:true})"
-
-      -
-        name: Download Chromium and pack as tar.gz
+        name: Prepare Playwright (install packages + download Chromium + pack tar.gz)
         env:
-          # 直接安装到项目目录，省去 cp 步骤，避免符号链接问题
           PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/resources/playwright/browsers
-        run: |
-          node -e "require('fs').mkdirSync('resources/playwright/browsers', { recursive: true })"
-          npx playwright install chromium
-          node scripts/pack-chromium.mjs
+        run: node scripts/prepare-playwright.mjs
 
       -
         name: Install Linux dependencies (electron-builder)
