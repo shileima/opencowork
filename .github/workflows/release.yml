@@ -60,6 +60,7 @@ jobs:
       contents: write
 
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -108,8 +109,9 @@ jobs:
       -
         name: Prepare Playwright package
         run: |
-          node -e "require('fs').mkdirSync('resources/playwright/package/node_modules',{recursive:true})"
-          node -e "const {cpSync}=require('fs'); const f=require('fs'); f.cpSync('node_modules/playwright','resources/playwright/package/node_modules/playwright',{recursive:true}); f.cpSync('node_modules/playwright-core','resources/playwright/package/node_modules/playwright-core',{recursive:true})"
+          mkdir -p resources/playwright/package/node_modules
+          rm -rf resources/playwright/package/node_modules/playwright resources/playwright/package/node_modules/playwright-core
+          node -e "const {cpSync}=require('fs'); cpSync('node_modules/playwright','resources/playwright/package/node_modules/playwright',{recursive:true,dereference:true}); cpSync('node_modules/playwright-core','resources/playwright/package/node_modules/playwright-core',{recursive:true,dereference:true})"
 
       -
         name: Download Chromium and pack as tar.gz
