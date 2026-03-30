@@ -527,10 +527,10 @@ export function ProjectView({
         onSendMessage(`预览：
             1. 先在项目目录运行 pnpm install 安装依赖；
             2. 检查当前项目状态并修复错误；
-            3. pnpm install 完成后，运行 pnpm dev 启动本地开发服务；
-            4. 服务成功启动后，调用 open_browser_preview 打开内置浏览器预览；
-            5. 若 open_browser_preview 返回后仍有 Vite 红屏或 esbuild 构建错误，则自动修复代码，修复后 Vite 会热更新。
-            全程不要重启开发服务器。
+            3. 安装依赖完成后，运行 pnpm dev 启动本地开发服务；
+            4. 服务成功启动后，打开内置浏览器预览；
+            5. 监测错误并自动修复代码;
+            6. 全程不要重启开发服务器。
             `);
     }, [currentProject, isProcessing, t, onSendMessage]);
 

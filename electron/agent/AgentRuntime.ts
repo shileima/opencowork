@@ -44,7 +44,7 @@ async function compressImageForAI(base64Data: string, mediaType: string): Promis
 
 // Safe commands that can be auto-approved in standard/trust modes
 const SAFE_COMMANDS = [
-    'python', 'python3', 'node', 'npm', 'pip', 'pip3', 'git', 'ls', 'cat', 'head', 'tail',
+    'python', 'python3', 'node', 'npm', 'pnpm', 'yarn', 'pip', 'pip3', 'git', 'ls', 'cat', 'head', 'tail',
     'grep', 'find', 'echo', 'pwd', 'cd', 'ls -la', 'ls -l', 'ls -a', 'tree', 'wc', 'sort',
     'uniq', 'diff', 'patch', 'tar', 'unzip', 'zip', 'gzip', 'gunzip', 'bunzip2',
     'curl', 'wget', 'ping', 'traceroute', 'netstat', 'ps', 'top', 'htop',
@@ -502,6 +502,7 @@ export class AgentRuntime {
 
             let effectiveTaskIdForDone = taskId;
             let skipBrowserRefreshForApiError = false;
+            let hadError = false;
             try {
                 const result = await this.processMessageWithContext(input, taskId, projectId, isFloatingBall, restoreRef);
                 if (result?.effectiveTaskId) {
@@ -509,6 +510,7 @@ export class AgentRuntime {
                 }
             } catch (error) {
                 // 即使出错也要确保状态恢复和任务清理
+                hadError = true;
                 console.error(`[AgentRuntime] Task ${taskId} error:`, error);
                 const st = (error as { status?: number })?.status;
                 if (typeof st === 'number' && [400, 401, 403, 404, 408, 409, 413, 422, 429, 500, 502, 503, 504].includes(st)) {
@@ -516,13 +518,17 @@ export class AgentRuntime {
                 }
                 throw error; // 重新抛出，让外层处理
             } finally {
-                // 先广播本任务的历史，再恢复全局 history，否则 notifyUpdate() 会发出已恢复的空历史导致聊天区被清空
-                if (taskHistory.length > 0) {
-                    this.broadcast('agent:history-update', taskHistory.slice());
+                // 上下文切换后 this.history 指向第二轮会话的最新内容，优先使用它；
+                // 无上下文切换时 this.history === taskHistory（同一数组引用），行为不变。
+                // 若 this.history 为空则回退到 taskHistory，再回退到 restoreRef.originalHistory。
+                const historyToReport = this.history.length > 0 ? this.history
+                    : taskHistory.length > 0 ? taskHistory
+                    : restoreRef.originalHistory;
+                if (historyToReport.length > 0) {
+                    this.broadcast('agent:history-update', historyToReport.slice());
                 }
                 // 确保状态恢复和任务清理（无论成功还是失败）
-                // 用 taskHistory（包含完整历史）更新全局 history，保证下次发消息时能继续累积
-                this.history = taskHistory.length > 0 ? taskHistory : restoreRef.originalHistory;
+                this.history = historyToReport.length > 0 ? historyToReport : restoreRef.originalHistory;
                 this.isProcessing = originalIsProcessing;
                 this.abortController = originalAbortController;
                 this.activeTasks.delete(taskId);
@@ -530,6 +536,7 @@ export class AgentRuntime {
                     timestamp: Date.now(),
                     taskId: effectiveTaskIdForDone,
                     projectId,
+                    hadError,
                     skipBrowserRefresh: this.runUsedKillProjectDevServer || skipBrowserRefreshForApiError,
                     artifacts: [...this.artifacts]
                 });
@@ -1543,17 +1550,14 @@ Remember: Plan internally, execute visibly. Focus on results, not process.`;
                                     let approved = false;
 
                                     if (trustLevel === 'trust') {
-                                        // Trust mode: auto-approve safe commands
+                                        // Trust mode: auto-approve all commands
                                         approved = true;
-                                    } else if (trustLevel === 'standard') {
-                                        // Standard mode: auto-approve safe commands
+                                    } else if (trustLevel === 'standard' || trustLevel === 'strict') {
+                                        // Standard/Strict mode: auto-approve safe commands, confirm unsafe ones
                                         approved = isSafe;
                                         if (!approved) {
                                             approved = await this.requestConfirmation(toolUse.name, `Execute command: ${args.command}`, args);
                                         }
-                                    } else {
-                                        // Strict mode: always confirm
-                                        approved = await this.requestConfirmation(toolUse.name, `Execute command: ${args.command}`, args);
                                     }
 
                                     if (approved) {

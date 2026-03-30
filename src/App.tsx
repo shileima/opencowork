@@ -557,9 +557,10 @@ ${err}
 
     // Only reset isProcessing when processing is truly done; 项目/自动化视图：将当前任务标记为完成
     const removeDoneListener = window.ipcRenderer.on('agent:done', (_event, ...args) => {
-      const payload = args[0] as { taskId?: string; projectId?: string } | undefined;
+      const payload = args[0] as { taskId?: string; projectId?: string; hadError?: boolean } | undefined;
       const view = activeViewRef.current;
-      if (payload?.taskId) {
+      // 有错误时任务状态已由 agent:error 处理器设为 failed，此处不覆盖为 completed
+      if (payload?.taskId && !payload?.hadError) {
         const projectId = payload.projectId;
         if (projectId) {
           if (view === 'automation') {

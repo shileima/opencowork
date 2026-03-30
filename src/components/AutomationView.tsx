@@ -3,7 +3,7 @@ import { RPATaskListPanel } from './project/RPATaskListPanel';
 import { ChatPanel } from './project/ChatPanel';
 import { ResizableSplitPane } from './project/ResizableSplitPane';
 import { MonacoEditor } from './project/MonacoEditor';
-import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, X } from 'lucide-react';
+import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, X, Zap } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import { useI18n } from '../i18n/I18nContext';
 import type { TranslationKey } from '../i18n/translations';
@@ -69,7 +69,249 @@ function formatScriptSize(bytes: number): string {
     return m >= 10 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;
 }
 
-/** 从 stdout 文本中解析截图路径：SCREENSHOT: path 或 含 .png/.jpg 的绝对/相对路径 */
+// ─── 模板脚本定义 ──────────────────────────────────────────────────────────────
+
+interface ScriptTemplate {
+    id: string;
+    icon: string;
+    title: string;
+    description: string;
+    fileName: string;
+    code: string;
+}
+
+const SCRIPT_TEMPLATES: ScriptTemplate[] = [
+    {
+        id: 'github-trending',
+        icon: '🐙',
+        title: 'GitHub 趋势',
+        description: '打开 github.com/trending，抓取今日趋势前 10 仓库名称与中文简介，输出到聊天（每次执行重新打开页面）',
+        fileName: 'github_trending_v1.js',
+        code: `const { chromium } = require('playwright');
+
+function sleep(ms) {
+  return new Promise(function (r) { setTimeout(r, ms); });
+}
+
+async function translateToZh(text) {
+  if (!text || !String(text).trim()) return '（暂无简介）';
+  var q = String(text).slice(0, 450);
+  try {
+    var url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=' + encodeURIComponent(q);
+    var res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OpenCowork/1.0)' } });
+    if (!res.ok) return text;
+    var data = await res.json();
+    var parts = data[0];
+    if (!Array.isArray(parts)) return text;
+    var out = parts.map(function (x) { return x[0]; }).join('');
+    return out || text;
+  } catch (e) {
+    return text;
+  }
+}
+
+(async () => {
+  var browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+  var context = await browser.newContext({ viewport: null });
+  var page = await context.newPage();
+
+  var TRENDING_URL = 'https://github.com/trending?since=daily&_cb=' + Date.now();
+
+  try {
+    console.log('步骤1: 打开 GitHub Trending（带缓存穿透参数，每次执行拉取最新榜单）...');
+    await page.goto(TRENDING_URL, { waitUntil: 'domcontentloaded' });
+    await sleep(1200);
+    await page.waitForSelector('article.Box-row', { timeout: 30000 });
+
+    var raw = await page.$$eval('article.Box-row', function (articles) {
+      return articles.slice(0, 10).map(function (article) {
+        var link = article.querySelector('h2 a');
+        var name = link ? link.textContent.replace(/\\s+/g, ' ').trim() : '';
+        var descEl = article.querySelector('p.color-fg-muted') || article.querySelector('p.col-9') || article.querySelector('h2 + p');
+        var desc = descEl ? descEl.textContent.replace(/\\s+/g, ' ').trim() : '';
+        return { name: name, desc: desc };
+      });
+    });
+
+    console.log('');
+    console.log('📊 GitHub 今日趋势 TOP 10（仓库名 + 中文简介）');
+    console.log('');
+
+    for (var i = 0; i < raw.length; i++) {
+      if (!raw[i].name) continue;
+      console.log('  ' + (i + 1) + '. ' + raw[i].name);
+      var zh = await translateToZh(raw[i].desc || 'No description on GitHub.');
+      console.log('     中文简介：' + zh);
+      console.log('');
+      await sleep(350);
+    }
+
+    console.log('✅ 抓取完成（stdout 已同步到聊天区）');
+  } catch (err) {
+    console.error('出错:', err);
+  } finally {
+    await sleep(1500);
+    await browser.close();
+    console.log('✅ 浏览器已关闭');
+  }
+})();
+`,
+    },
+    {
+        id: 'bilibili-most-played',
+        icon: '📺',
+        title: 'B站最多播放',
+        description: '搜索关键词，按播放量排序，打开播放量最高的视频',
+        fileName: 'bilibili_most_played_v1.js',
+        code: `const { chromium } = require('playwright');
+
+(async () => {
+  const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+  const context = await browser.newContext({ viewport: null });
+  const page = await context.newPage();
+
+  try {
+    console.log('步骤1: 打开bilibili网站...');
+    await page.goto('https://www.bilibili.com', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+
+    console.log('步骤2: 输入搜索关键词...');
+    const searchInput = await page.waitForSelector('.nav-search-input', { timeout: 10000 });
+    await searchInput.click();
+    await searchInput.fill('claude更新');
+    await page.waitForTimeout(500);
+
+    console.log('步骤3: 点击搜索（将在新标签页打开结果）...');
+    const newPagePromise = context.waitForEvent('page');
+    const searchBtn = await page.waitForSelector('.nav-search-btn', { timeout: 5000 });
+    await searchBtn.click();
+
+    // ⚠️ 切换到新标签页
+    const searchResultPage = await newPagePromise;
+    await searchResultPage.waitForLoadState('domcontentloaded');
+    await searchResultPage.waitForTimeout(2000);
+    console.log('已切换到新标签页:', searchResultPage.url());
+
+    console.log('步骤4: 点击"最多播放"标签...');
+    const playCountTab = await searchResultPage.waitForSelector('text=最多播放', { timeout: 10000 });
+    await playCountTab.click();
+    await searchResultPage.waitForTimeout(2000);
+
+    console.log('步骤5: 获取视频列表，找播放量最高的视频...');
+    await searchResultPage.waitForSelector('.video-list-item, .bili-video-card', { timeout: 10000 });
+    await searchResultPage.waitForTimeout(2000);
+
+    const videoItems = await searchResultPage.$$('.video-list-item, .bili-video-card');
+    console.log(\`找到 \${videoItems.length} 个视频\`);
+
+    let maxViews = 0, maxViewsIndex = 0, maxViewsTitle = '';
+    for (let i = 0; i < Math.min(videoItems.length, 20); i++) {
+      const item = videoItems[i];
+      const titleElem = await item.$('a[title]');
+      const title = titleElem ? await titleElem.getAttribute('title') : '';
+      const viewsElem = await item.$('.bili-video-card__stats--item:first-child .bili-video-card__stats--text');
+      const viewsText = viewsElem ? await viewsElem.textContent() : '0';
+      const views = parseViews(viewsText || '0');
+      console.log(\`视频 \${i + 1}: \${title} — \${viewsText}\`);
+      if (views > maxViews) { maxViews = views; maxViewsIndex = i; maxViewsTitle = title || ''; }
+    }
+
+    console.log(\`\\n步骤6: 点击播放量最高的视频: \${maxViewsTitle} (播放: \${maxViews})\`);
+    const targetVideo = videoItems[maxViewsIndex];
+    const videoLink = await targetVideo.$('a');
+    if (videoLink) {
+      await videoLink.click();
+      await searchResultPage.waitForTimeout(3000);
+    }
+    console.log('\\n✅ 任务完成！');
+  } catch (err) {
+    console.error('执行出错:', err);
+  } finally {
+    await page.waitForTimeout(2000);
+    await browser.close();
+    console.log('✅ 浏览器已关闭');
+  }
+})();
+
+function parseViews(text) {
+  text = text.trim().toLowerCase().replace(/\\s+/g, '');
+  if (text.includes('亿')) return parseFloat(text) * 100000000;
+  if (text.includes('万')) return parseFloat(text) * 10000;
+  return parseFloat(text.replace(/[^0-9.]/g, '')) || 0;
+}
+`,
+    },
+    {
+        id: 'baidu-hot-search',
+        icon: '🔥',
+        title: '百度热搜榜',
+        description: '抓取百度实时热搜榜前10名，输出到控制台',
+        fileName: 'baidu_hot_search_v1.js',
+        code: `const { chromium } = require('playwright');
+
+(async () => {
+  const browser = await chromium.launch({ headless: false });
+  const page = await browser.newPage();
+
+  try {
+    console.log('正在打开百度热搜...');
+    await page.goto('https://top.baidu.com/board?tab=realtime', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+
+    const items = await page.$$('.c-single-text-ellipsis');
+    console.log(\`\\n🔥 百度实时热搜 TOP \${Math.min(items.length, 10)}\\n\`);
+    for (let i = 0; i < Math.min(items.length, 10); i++) {
+      const text = await items[i].textContent();
+      console.log(\`  \${i + 1}. \${text?.trim()}\`);
+    }
+    console.log('\\n✅ 抓取完成');
+  } catch (err) {
+    console.error('出错:', err);
+  } finally {
+    await page.waitForTimeout(2000);
+    await browser.close();
+    console.log('✅ 浏览器已关闭');
+  }
+})();
+`,
+    },
+    {
+        id: 'weibo-hot',
+        icon: '🌐',
+        title: '微博热搜榜',
+        description: '打开微博热搜，抓取当前热搜前10条并输出',
+        fileName: 'weibo_hot_v1.js',
+        code: `const { chromium } = require('playwright');
+
+(async () => {
+  const browser = await chromium.launch({ headless: false });
+  const page = await browser.newPage();
+
+  try {
+    console.log('正在打开微博热搜...');
+    await page.goto('https://s.weibo.com/top/summary', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+
+    const rows = await page.$$('td.td-02 a');
+    console.log(\`\\n🌐 微博热搜 TOP \${Math.min(rows.length, 10)}\\n\`);
+    for (let i = 0; i < Math.min(rows.length, 10); i++) {
+      const text = await rows[i].textContent();
+      console.log(\`  \${i + 1}. \${text?.trim()}\`);
+    }
+    console.log('\\n✅ 抓取完成');
+  } catch (err) {
+    console.error('出错:', err);
+  } finally {
+    await page.waitForTimeout(2000);
+    await browser.close();
+    console.log('✅ 浏览器已关闭');
+  }
+})();
+`,
+    },
+];
+
+// ──────────────────────────────────────────────────────────────────────────────
 function parseScreenshotPathsFromStdout(stdout: string, projectPath?: string): string[] {
     const paths: string[] = [];
     const seen = new Set<string>();
@@ -647,6 +889,8 @@ export function AutomationView({
     useEffect(() => {
         if (!currentProject) return;
         const removeDone = window.ipcRenderer.on('agent:done', async (_: unknown, ...args: unknown[]) => {
+            // 清除流式文本，确保任务完成后底部状态正确收敛
+            setStreamingText('');
             const payload = args[0] as { artifacts?: { path: string; name: string; type: string }[]; taskId?: string };
             const artifacts = payload?.artifacts;
             let scriptPath: string | null = null;
@@ -822,6 +1066,36 @@ export function AutomationView({
             return next;
         });
     }, [activeScriptTabId]);
+
+    /** 使用模板：写文件到项目目录 → 打开 tab → 立即执行 */
+    const handleUseTemplate = useCallback(async (tpl: ScriptTemplate) => {
+        if (!currentProject) return;
+        const filePath = `${currentProject.path}/${tpl.fileName}`;
+        const wr = await window.ipcRenderer.invoke('fs:write-file', filePath, tpl.code) as { success: boolean; error?: string };
+        if (!wr.success) { showToast(wr.error || '写入失败'); return; }
+        openEditorTab(filePath, tpl.code);
+        // 立即触发执行
+        const runId = crypto.randomUUID();
+        currentExecutionRunIdRef.current = runId;
+        setIsExecuting(true);
+        try {
+            const createResult = await window.ipcRenderer.invoke('rpa:task:create', currentProject.id, tpl.title) as { success: boolean; task?: RPATask; error?: string };
+            if (!createResult.success || !createResult.task) { showToast(createResult.error || '创建任务失败'); return; }
+            const newTask = createResult.task;
+            await window.ipcRenderer.invoke('rpa:task:switch', currentProject.id, newTask.id);
+            setCurrentTaskId(newTask.id);
+            await window.ipcRenderer.invoke('rpa:task:update', currentProject.id, newTask.id, { scriptFileName: tpl.fileName });
+            await window.ipcRenderer.invoke('agent:inject-history', [{ role: 'assistant', content: `开始执行 ${tpl.fileName}...\n\n` }]);
+            lastExecutionRunIdForChatRef.current = runId;
+            lastExecutionTaskForRunRef.current = { runId, projectId: currentProject.id, taskId: newTask.id };
+            await window.ipcRenderer.invoke('rpa:execute-script', filePath, runId);
+        } catch (e) {
+            showToast((e as Error).message || '执行失败');
+        } finally {
+            currentExecutionRunIdRef.current = null;
+            setIsExecuting(false);
+        }
+    }, [currentProject, openEditorTab, showToast]);
 
     const handleExecute = async () => {
         if (!currentProject) return;
@@ -1132,10 +1406,44 @@ export function AutomationView({
                                                 onSave={handleScriptSave}
                                             />
                                         ) : (
-                                            <div className="h-full flex items-center justify-center text-stone-400 dark:text-zinc-500 text-sm">
-                                                {t('noTabsOpen') || '没有打开的标签页'}
-                                                <br />
-                                                <span className="text-xs mt-1">{t('openFileHint') || '切换项目后将自动打开最新脚本 (xxx_vN.js)'}</span>
+                                            <div className="h-full overflow-y-auto bg-[#1e1e1e] flex flex-col">
+                                                <div className="p-5">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <Zap size={14} className="text-orange-400" />
+                                                        <span className="text-xs font-medium text-stone-300">快速开始 — 点击模板立即执行</span>
+                                                    </div>
+                                                    <p className="text-xs text-stone-500 mb-4">选择一个示例脚本，将自动复制到当前项目并开始运行</p>
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        {SCRIPT_TEMPLATES.map((tpl) => (
+                                                            <button
+                                                                key={tpl.id}
+                                                                type="button"
+                                                                disabled={!currentProject || isExecuting}
+                                                                onClick={() => handleUseTemplate(tpl)}
+                                                                className={`group text-left rounded-lg border p-3.5 transition-all ${
+                                                                    !currentProject || isExecuting
+                                                                        ? 'border-stone-700 opacity-40 cursor-not-allowed'
+                                                                        : 'border-stone-700 hover:border-orange-500/60 hover:bg-stone-800/60 cursor-pointer'
+                                                                }`}
+                                                            >
+                                                                <div className="flex items-start gap-2.5">
+                                                                    <span className="text-xl leading-none mt-0.5 shrink-0">{tpl.icon}</span>
+                                                                    <div className="min-w-0">
+                                                                        <div className="flex items-center gap-1.5 mb-1">
+                                                                            <span className="text-xs font-semibold text-stone-200 group-hover:text-orange-300 transition-colors truncate">{tpl.title}</span>
+                                                                            <Play size={10} className="shrink-0 text-stone-500 group-hover:text-orange-400 transition-colors" />
+                                                                        </div>
+                                                                        <p className="text-[11px] text-stone-500 leading-snug line-clamp-2">{tpl.description}</p>
+                                                                        <p className="text-[10px] text-stone-600 mt-1.5 font-mono truncate">{tpl.fileName}</p>
+                                                                    </div>
+                                                                </div>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                    {!currentProject && (
+                                                        <p className="text-xs text-stone-600 text-center mt-4">请先创建或选择一个自动化项目</p>
+                                                    )}
+                                                </div>
                                             </div>
                                         )}
                                     </div>
