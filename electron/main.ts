@@ -22,6 +22,7 @@ import { resolveDeployEnv } from './utils/DeployEnvResolver'
 import { runProjectQualityCheck } from './utils/ProjectQualityCheck'
 import { resolveShellPath, validateShellPath, getShellCandidates, resolveShellForCommand } from './utils/ShellResolver'
 import https from 'node:https'
+import http from 'node:http'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { setPlaywrightManager } from './utils/PlaywrightEnsure'
@@ -1428,11 +1429,10 @@ function downloadMacDmg(dmgUrl: string): Promise<void> {
     const destPath = path.join(downloadsPath, filename)
     macDownloadedDmgPath = destPath
 
-    const file = require('fs').createWriteStream(destPath)
-    let redirectUrl = dmgUrl
+    const file = fs.createWriteStream(destPath)
 
     const doRequest = (url: string) => {
-      const protocol = url.startsWith('https') ? require('https') : require('http')
+      const protocol = url.startsWith('https') ? https : http
       protocol.get(url, (res: any) => {
         if (res.statusCode === 301 || res.statusCode === 302) {
           file.close()
@@ -1471,7 +1471,7 @@ function downloadMacDmg(dmgUrl: string): Promise<void> {
       })
     }
 
-    doRequest(redirectUrl)
+    doRequest(dmgUrl)
   })
 }
 
