@@ -225,6 +225,7 @@ jobs:
           tag_name: ${{ needs.create-release.outputs.tag_name }}
           files: |
             release/*/*.dmg
+            release/*/*.zip
             release/*/*.exe
             release/*/*.AppImage
             release/*/*.deb
