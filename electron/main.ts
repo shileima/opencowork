@@ -1385,18 +1385,32 @@ ipcMain.handle('app:check-update', async () => {
 
 /** 失败时抛出，以便渲染进程 invoke catch 并结束「下载中」状态 */
 ipcMain.handle('app:download-update', async () => {
-  if (process.platform === 'darwin' && macPendingDmgUrl) {
-    // macOS: download DMG directly to bypass Squirrel.Mac code-signing check
-    await downloadMacDmg(macPendingDmgUrl)
-    return
+  if (process.platform === 'darwin') {
+    if (macPendingDmgUrl) {
+      // macOS: download DMG directly to bypass Squirrel.Mac code-signing check
+      await downloadMacDmg(macPendingDmgUrl)
+      return
+    }
+    // Fallback: no DMG URL cached, open releases page in browser
+    const latestVersion = autoUpdater.currentVersion?.version
+    const url = latestVersion
+      ? `https://github.com/shileima/opencowork/releases/tag/v${latestVersion}`
+      : 'https://github.com/shileima/opencowork/releases'
+    shell.openExternal(url)
+    throw new Error('请在浏览器中下载最新版 DMG 安装包')
   }
   await autoUpdater.downloadUpdate()
 })
 
 ipcMain.handle('app:install-update', () => {
-  if (process.platform === 'darwin' && macDownloadedDmgPath) {
-    // macOS: open the DMG so the user can drag-install (Squirrel not involved)
-    shell.openPath(macDownloadedDmgPath)
+  if (process.platform === 'darwin') {
+    if (macDownloadedDmgPath) {
+      // macOS: open the DMG so the user can drag-install (Squirrel not involved)
+      shell.openPath(macDownloadedDmgPath)
+      return
+    }
+    // Safety net: never call Squirrel on macOS, open releases page instead
+    shell.openExternal('https://github.com/shileima/opencowork/releases')
     return
   }
   autoUpdater.quitAndInstall(false, true)
