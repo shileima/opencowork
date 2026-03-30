@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, screen, dialog, globalShortcut, Tray, Menu, nativeImage, webContents } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, screen, dialog, globalShortcut, Tray, Menu, nativeImage, webContents, net } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -22,7 +22,6 @@ import { resolveDeployEnv } from './utils/DeployEnvResolver'
 import { runProjectQualityCheck } from './utils/ProjectQualityCheck'
 import { resolveShellPath, validateShellPath, getShellCandidates, resolveShellForCommand } from './utils/ShellResolver'
 import https from 'node:https'
-import http from 'node:http'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { setPlaywrightManager } from './utils/PlaywrightEnsure'
@@ -1430,48 +1429,46 @@ function downloadMacDmg(dmgUrl: string): Promise<void> {
     macDownloadedDmgPath = destPath
 
     const file = fs.createWriteStream(destPath)
+    let transferred = 0
+    const startTime = Date.now()
 
-    const doRequest = (url: string) => {
-      const protocol = url.startsWith('https') ? https : http
-      protocol.get(url, (res: any) => {
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          file.close()
-          doRequest(res.headers.location)
-          return
-        }
-        const total = parseInt(res.headers['content-length'] || '0', 10)
-        let transferred = 0
-        const startTime = Date.now()
+    // Use electron.net which handles redirects (GitHub releases 302) automatically
+    const request = net.request({ url: dmgUrl, redirect: 'follow' })
 
-        res.on('data', (chunk: Buffer) => {
-          transferred += chunk.length
-          file.write(chunk)
-          const elapsed = (Date.now() - startTime) / 1000 || 1
-          win?.webContents.send('app:update-download-progress', {
-            percent: total ? Math.round((transferred / total) * 100) : 0,
-            transferred,
-            total,
-            bytesPerSecond: Math.round(transferred / elapsed),
-          })
+    request.on('response', (response) => {
+      const total = parseInt(response.headers['content-length'] as string || '0', 10)
+
+      response.on('data', (chunk: Buffer) => {
+        transferred += chunk.length
+        file.write(chunk)
+        const elapsed = (Date.now() - startTime) / 1000 || 1
+        win?.webContents.send('app:update-download-progress', {
+          percent: total ? Math.round((transferred / total) * 100) : 0,
+          transferred,
+          total,
+          bytesPerSecond: Math.round(transferred / elapsed),
         })
+      })
 
-        res.on('end', () => {
-          file.end()
+      response.on('end', () => {
+        file.end(() => {
           win?.webContents.send('app:update-downloaded', { version: filename })
           resolve()
         })
+      })
 
-        res.on('error', (err: Error) => {
-          file.destroy()
-          reject(err)
-        })
-      }).on('error', (err: Error) => {
+      response.on('error', (err: Error) => {
         file.destroy()
         reject(err)
       })
-    }
+    })
 
-    doRequest(dmgUrl)
+    request.on('error', (err: Error) => {
+      file.destroy()
+      reject(err)
+    })
+
+    request.end()
   })
 }
 
