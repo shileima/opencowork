@@ -321,8 +321,19 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         }
     };
 
-    const handleInstallUpdate = () => {
-        window.ipcRenderer?.invoke('app:install-update');
+    const handleInstallUpdate = async () => {
+        try {
+            const result = (await window.ipcRenderer?.invoke('app:install-update')) as
+                | { ok: true; willQuit?: boolean; openedDmg?: boolean }
+                | { ok: false; error?: string; cancelled?: boolean }
+                | undefined;
+            if (result && !result.ok) {
+                if ('cancelled' in result && result.cancelled) return;
+                showToast(result.error || '安装更新失败', 'error');
+            }
+        } catch (err: unknown) {
+            showToast(err instanceof Error ? err.message : '安装更新失败', 'error');
+        }
     };
 
     // 检查资源更新
@@ -1821,7 +1832,9 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                                             onClick={handleInstallUpdate}
                                                             className="px-4 py-2 text-sm font-medium rounded-lg bg-green-500 hover:bg-green-600 text-white transition-colors"
                                                         >
-                                                            {window.ipcRenderer?.platform === 'darwin' ? '打开安装包（拖入应用程序完成更新）' : '立即重启安装'}
+                                                            {window.ipcRenderer?.platform === 'darwin'
+                                                                ? '覆盖安装并重启（整包更新）'
+                                                                : '立即重启安装'}
                                                         </button>
                                                     ) : downloadingUpdate ? (
                                                         <div className="flex flex-col items-center gap-1 w-full">

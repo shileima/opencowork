@@ -23,6 +23,7 @@ import { runProjectQualityCheck } from './utils/ProjectQualityCheck'
 import { resolveShellPath, validateShellPath, getShellCandidates, resolveShellForCommand } from './utils/ShellResolver'
 import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
+import { prepareMacDmgInstallFromPath, spawnMacReplaceScript } from './updater/macDmgReplaceInstall'
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { setPlaywrightManager } from './utils/PlaywrightEnsure'
 import { ensureAgentBrowserCanFindChromium, getPlaywrightEnvVars, getPlaywrightNodePathSegmentForRpa } from './utils/PlaywrightPath'
@@ -1402,18 +1403,53 @@ ipcMain.handle('app:download-update', async () => {
   await autoUpdater.downloadUpdate()
 })
 
-ipcMain.handle('app:install-update', () => {
+ipcMain.handle('app:install-update', async (event) => {
   if (process.platform === 'darwin') {
-    if (macDownloadedDmgPath) {
-      // macOS: open the DMG so the user can drag-install (Squirrel not involved)
-      shell.openPath(macDownloadedDmgPath)
-      return
+    if (!macDownloadedDmgPath || !fs.existsSync(macDownloadedDmgPath)) {
+      shell.openExternal('https://github.com/shileima/opencowork/releases')
+      return { ok: false, error: '没有已下载的安装包，请先下载。' }
     }
-    // Safety net: never call Squirrel on macOS, open releases page instead
-    shell.openExternal('https://github.com/shileima/opencowork/releases')
-    return
+    // 开发模式：仍打开 DMG，避免误用临时目录覆盖
+    if (!app.isPackaged) {
+      await shell.openPath(macDownloadedDmgPath)
+      return { ok: true, openedDmg: true as const }
+    }
+
+    const parentWin = BrowserWindow.fromWebContents(event.sender) ?? mainWin ?? floatingBallWin
+    const confirmOpts = {
+      type: 'info' as const,
+      title: '整包更新',
+      message:
+        '应用将自动退出，并在后台用新版本覆盖当前安装，随后重新打开。\n\n请勿在更新过程中强制结束「bash」相关后台任务。',
+      buttons: ['取消', '继续更新'],
+      defaultId: 1,
+      cancelId: 0,
+    }
+    const { response } = parentWin
+      ? await dialog.showMessageBox(parentWin, confirmOpts)
+      : await dialog.showMessageBox(confirmOpts)
+    if (response === 0) {
+      return { ok: false, cancelled: true as const }
+    }
+
+    const prep = prepareMacDmgInstallFromPath(macDownloadedDmgPath)
+    if (!prep.ok) {
+      return { ok: false, error: prep.error }
+    }
+
+    spawnMacReplaceScript({
+      oldPid: process.pid,
+      stagingAppPath: prep.stagingAppPath,
+      targetAppPath: prep.targetAppPath,
+    })
+
+    setImmediate(() => {
+      app.quit()
+    })
+    return { ok: true, willQuit: true as const }
   }
   autoUpdater.quitAndInstall(false, true)
+  return { ok: true }
 })
 
 /**
