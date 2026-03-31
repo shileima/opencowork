@@ -6,6 +6,7 @@ import { ConfirmDialog, useConfirmations } from './components/ConfirmDialog';
 import { FloatingBallPage } from './components/FloatingBallPage';
 import { ProjectView } from './components/ProjectView';
 import { AutomationView } from './components/AutomationView';
+import { UpdateNotification } from './components/project/UpdateNotification';
 import { TerminalWindow } from './pages/TerminalWindow';
 import { SplashScreen } from './components/SplashScreen';
 import { SsoLoginView } from './components/SsoLoginView';
@@ -40,6 +41,11 @@ function App() {
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
   const [deployStatus, setDeployStatus] = useState<'idle' | 'deploying' | 'success' | 'error'>('idle');
   const [agentInitFailed, setAgentInitFailed] = useState<string | null>(null);
+  const [resourceUpdateBanner, setResourceUpdateBanner] = useState<{
+    currentVersion: string;
+    latestVersion: string;
+    updateSize?: number;
+  } | null>(null);
   const previewHandlerRef = useRef<(() => void) | null>(null);
   const deployHandlerRef = useRef<(() => void) | null>(null);
   const projectDropdownRef = useRef<HTMLDivElement>(null);
@@ -610,6 +616,28 @@ ${err}
     };
   }, []);
 
+  useEffect(() => {
+    if (isFloatingBall || isTerminalWindow) return;
+    const remove = window.ipcRenderer.on('resource:update-available', (_event, ...args) => {
+      const u = args[0] as { currentVersion: string; latestVersion: string; updateSize?: number };
+      setResourceUpdateBanner({
+        currentVersion: u.currentVersion,
+        latestVersion: u.latestVersion,
+        updateSize: u.updateSize,
+      });
+    });
+    return () => {
+      remove();
+    };
+  }, [isFloatingBall, isTerminalWindow]);
+
+  useEffect(() => {
+    if (isFloatingBall || isTerminalWindow || !isAppReady) return;
+    void window.ipcRenderer.invoke('resource:check-update').catch((err: unknown) => {
+      console.error('[App] Initial resource update check failed:', err);
+    });
+  }, [isFloatingBall, isTerminalWindow, isAppReady]);
+
   /** 供代码质量自动修复等逻辑判断：主进程是否因「助手正忙」拒绝发送 */
   const handleSendMessage = async (
     msg: string | { content: string; images: string[] }
@@ -687,6 +715,14 @@ ${err}
   // Main App - Narrow vertical layout
   return (
     <div className="h-screen w-full bg-[#FAF8F5] dark:bg-zinc-950 flex flex-col overflow-hidden font-sans text-stone-900 dark:text-zinc-100">
+      {resourceUpdateBanner && (
+        <UpdateNotification
+          currentVersion={resourceUpdateBanner.currentVersion}
+          latestVersion={resourceUpdateBanner.latestVersion}
+          updateSize={resourceUpdateBanner.updateSize}
+          onClose={() => setResourceUpdateBanner(null)}
+        />
+      )}
       {/* Custom Titlebar */}
       <header
         className={`h-10 border-b border-stone-200/80 dark:border-zinc-800 flex items-center bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm shrink-0 transition-colors relative z-50 ${navigator.userAgent.includes('Mac') ? 'pl-20 pr-3' : 'px-3'

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Download, X, Loader2, CheckCircle } from 'lucide-react';
 
 interface UpdateNotificationProps {
@@ -22,23 +22,37 @@ export function UpdateNotification({
     updateSize,
     onClose
 }: UpdateNotificationProps) {
-    const [isUpdating, setIsUpdating] = useState(false);
+    /** 主进程在发现新版本后会立即执行更新，界面直接进入进度态 */
+    const [isUpdating, setIsUpdating] = useState(true);
     const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
     const [updateDone, setUpdateDone] = useState(false);
     const [countdown, setCountdown] = useState(3);
     const [restartTimeout, setRestartTimeout] = useState(false);
+    const onCloseRef = useRef(onClose);
+    onCloseRef.current = onClose;
 
     useEffect(() => {
-        // 监听更新进度
-        const removeListener = window.ipcRenderer?.on('resource:update-progress', (_event: unknown, ...args: unknown[]) => {
+        const removeProgress = window.ipcRenderer?.on('resource:update-progress', (_event: unknown, ...args: unknown[]) => {
             const progress = args[0] as UpdateProgress;
             setUpdateProgress(progress);
+            if (progress?.stage === 'completed') {
+                setUpdateDone(true);
+                setCountdown(3);
+                setIsUpdating(false);
+            }
+        });
+
+        const removeFailed = window.ipcRenderer?.on('resource:update-failed', (_event: unknown, ...args: unknown[]) => {
+            const payload = args[0] as { message?: string };
+            setIsUpdating(false);
+            setUpdateProgress(null);
+            alert(`资源自动更新失败: ${payload?.message ?? '未知错误'}\n\n可稍后在「关于」中重试或检查网络。`);
+            onCloseRef.current();
         });
 
         return () => {
-            if (removeListener) {
-                removeListener();
-            }
+            removeProgress?.();
+            removeFailed?.();
         };
     }, []);
 
@@ -70,39 +84,7 @@ export function UpdateNotification({
         try {
             await window.ipcRenderer?.invoke('resource:restart-app');
         } catch {
-            // 如果 IPC 调用失败，提示用户手动重启
             alert('请手动关闭并重新打开应用以完成更新。');
-        }
-    };
-
-    const handleUpdate = async () => {
-        setIsUpdating(true);
-        setUpdateProgress(null);
-        
-        try {
-            const result = await window.ipcRenderer?.invoke('resource:perform-update') as {
-                success: boolean;
-                willRestart?: boolean;
-                error?: string;
-                version?: string;
-            } | undefined;
-            
-            if (result && result.success) {
-                // 主进程会自动重启，此处展示倒计时提示
-                setUpdateDone(true);
-                setCountdown(3);
-            } else {
-                const errorMsg = result?.error || '未知错误';
-                alert(`资源更新失败: ${errorMsg}\n\n请检查网络连接或稍后重试。`);
-                setIsUpdating(false);
-                setUpdateProgress(null);
-            }
-        } catch (error: unknown) {
-            console.error('Resource update failed', error);
-            const errorMsg = error instanceof Error ? error.message : '未知错误';
-            alert(`资源更新失败: ${errorMsg}\n\n请检查开发者控制台获取详细信息。`);
-            setIsUpdating(false);
-            setUpdateProgress(null);
         }
     };
 
@@ -118,7 +100,7 @@ export function UpdateNotification({
             case 'extracting': return '解压文件中...';
             case 'applying': return '应用更新中...';
             case 'completed': return '更新完成！';
-            default: return '准备更新...';
+            default: return '正在准备自动更新...';
         }
     };
 
@@ -146,12 +128,12 @@ export function UpdateNotification({
                         </div>
                         <div className="flex-1 min-w-0">
                             <h3 className="text-base font-bold text-orange-700 dark:text-orange-300 mb-0.5">
-                                {updateDone ? '✅ 更新完成' : '🎉 发现新资源版本!'}
+                                {updateDone ? '✅ 更新完成' : '正在自动更新资源'}
                             </h3>
                             <p className="text-sm text-orange-600 dark:text-orange-400">
                                 {updateDone
                                     ? `应用即将重启以应用新版本...`
-                                    : `当前: v${currentVersion} → 最新: v${latestVersion} ${formatSize(updateSize)}`
+                                    : `v${currentVersion} → v${latestVersion} ${formatSize(updateSize)}（无需操作）`
                                 }
                             </p>
                         </div>
@@ -211,6 +193,7 @@ export function UpdateNotification({
                                 更新已完成，但应用未能自动重启。
                             </p>
                             <button
+                                type="button"
                                 onClick={handleManualRestart}
                                 className="px-4 py-2 text-sm font-semibold text-white bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 rounded-lg transition-all shadow-sm hover:shadow-md flex items-center gap-2"
                             >
@@ -220,30 +203,11 @@ export function UpdateNotification({
                         </div>
                     )}
 
-                    {/* Buttons */}
-                    {!isUpdating && !updateDone && (
-                        <div className="flex gap-2.5 justify-end">
-                            <button
-                                onClick={onClose}
-                                className="px-3 py-1.5 text-sm font-medium text-orange-700 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-900/30 rounded-lg transition-colors"
-                            >
-                                稍后提醒
-                            </button>
-                            <button
-                                onClick={handleUpdate}
-                                className="px-3 py-1.5 text-xs font-semibold text-white bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 rounded-lg transition-all shadow-sm hover:shadow-md flex items-center justify-center gap-1.5"
-                            >
-                                <Download size={12} />
-                                立即更新
-                            </button>
-                        </div>
-                    )}
-
-                    {/* Updating State */}
-                    {isUpdating && !updateDone && (
+                    {/* Updating State（无进度包时占位） */}
+                    {isUpdating && !updateDone && !updateProgress && (
                         <div className="flex items-center justify-center gap-2 text-orange-600 dark:text-orange-400 py-1">
                             <Loader2 size={14} className="animate-spin" />
-                            <span className="text-sm font-medium">正在更新，请稍候...</span>
+                            <span className="text-sm font-medium">正在连接更新服务，请稍候...</span>
                         </div>
                     )}
                 </div>

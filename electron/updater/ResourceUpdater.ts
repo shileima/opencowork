@@ -381,7 +381,7 @@ export class ResourceUpdater {
         if (result.hasUpdate) {
           if (onUpdateFound) {
             console.log('[ResourceUpdater] New version found, notifying...')
-            onUpdateFound(result)
+            await Promise.resolve(onUpdateFound(result))
           } else {
             console.warn('[ResourceUpdater] Update found but no callback provided')
           }

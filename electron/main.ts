@@ -183,6 +183,69 @@ let floatingBallAgent: AgentRuntime | null = null  // Independent agent for floa
 let resourceUpdater: ResourceUpdater | null = null  // Resource updater
 let playwrightManager: PlaywrightManager | null = null  // Playwright manager
 
+/** 避免定时检查与渲染进程 check-update 同时触发两次自动更新 */
+let resourceAutoUpdateInProgress = false
+
+async function runResourceUpdateJob(): Promise<{ success: boolean; error?: string; version?: string }> {
+  if (!resourceUpdater) {
+    return { success: false, error: 'Resource updater not initialized' }
+  }
+  try {
+    const success = await resourceUpdater.performUpdate((progress) => {
+      mainWin?.webContents.send('resource:update-progress', progress)
+      floatingBallWin?.webContents.send('resource:update-progress', progress)
+    })
+    if (success) {
+      const newVersion = resourceUpdater.getCurrentVersion()
+      console.log(`[Main] Resource update completed. New version: ${newVersion}`)
+      setTimeout(() => {
+        console.log('[Main] Auto-restarting after resource update...')
+        try {
+          app.relaunch()
+          app.quit()
+        } catch (restartError) {
+          console.error('[Main] app.relaunch() failed:', restartError)
+          try {
+            app.exit(0)
+          } catch (exitError) {
+            console.error('[Main] app.exit() also failed:', exitError)
+          }
+        }
+      }, 1500)
+      return { success: true, version: newVersion }
+    }
+    return { success: false, error: '更新失败：未知错误' }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error('[Main] Resource update failed:', error)
+    return { success: false, error: `更新失败: ${message || '未知错误'}` }
+  }
+}
+
+/** 发现新版本后由主进程强制执行热更新（无需用户点击） */
+async function triggerAutoResourceUpdate(source: string) {
+  if (!resourceUpdater) return
+  if (resourceAutoUpdateInProgress) {
+    console.log(`[Main] Resource auto-update skipped (${source}): already in progress`)
+    return
+  }
+  resourceAutoUpdateInProgress = true
+  try {
+    const result = await runResourceUpdateJob()
+    if (!result.success) {
+      const msg = result.error ?? '未知错误'
+      mainWin?.webContents.send('resource:update-failed', { message: msg })
+      floatingBallWin?.webContents.send('resource:update-failed', { message: msg })
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    mainWin?.webContents.send('resource:update-failed', { message: msg })
+    floatingBallWin?.webContents.send('resource:update-failed', { message: msg })
+  } finally {
+    resourceAutoUpdateInProgress = false
+  }
+}
+
 // Ball state
 let isBallExpanded = false
 const BALL_SIZE = 64
@@ -508,6 +571,7 @@ app.whenReady().then(() => {
     console.log('[Main] Resource update found, notifying renderer...')
     mainWin?.webContents.send('resource:update-available', updateInfo)
     floatingBallWin?.webContents.send('resource:update-available', updateInfo)
+    void triggerAutoResourceUpdate('auto-check')
   }
   
   if (app.isPackaged) {
@@ -1515,6 +1579,17 @@ ipcMain.handle('resource:check-update', async () => {
       return { success: false, error: 'Resource updater not initialized' }
     }
     const result = await resourceUpdater.checkForUpdates()
+    if (result.hasUpdate) {
+      const payload = {
+        currentVersion: result.currentVersion,
+        latestVersion: result.latestVersion,
+        updateSize: result.updateSize,
+        changelog: result.changelog,
+      }
+      mainWin?.webContents.send('resource:update-available', payload)
+      floatingBallWin?.webContents.send('resource:update-available', payload)
+      void triggerAutoResourceUpdate('renderer-check')
+    }
     return { success: true, ...result }
   } catch (error: any) {
     console.error('Resource update check failed:', error)
@@ -1522,40 +1597,18 @@ ipcMain.handle('resource:check-update', async () => {
   }
 })
 
-// 执行资源更新
+// 执行资源更新（关于页手动触发与自动更新共用同一套逻辑）
 ipcMain.handle('resource:perform-update', async () => {
-  try {
-    if (!resourceUpdater) {
-      return { success: false, error: 'Resource updater not initialized' }
+  const result = await runResourceUpdateJob()
+  if (result.success) {
+    return {
+      success: true,
+      willRestart: true,
+      message: `资源更新完成！新版本: v${result.version ?? ''}`,
+      version: result.version,
     }
-    const success = await resourceUpdater.performUpdate((progress) => {
-      mainWin?.webContents.send('resource:update-progress', progress)
-      floatingBallWin?.webContents.send('resource:update-progress', progress)
-    })
-    if (success) {
-      const newVersion = resourceUpdater.getCurrentVersion()
-      console.log(`[Main] Resource update completed. New version: ${newVersion}`)
-      setTimeout(() => {
-        console.log('[Main] Auto-restarting after resource update...')
-        try {
-          app.relaunch()
-          app.quit()
-        } catch (restartError) {
-          console.error('[Main] app.relaunch() failed:', restartError)
-          try {
-            app.exit(0)
-          } catch (exitError) {
-            console.error('[Main] app.exit() also failed:', exitError)
-          }
-        }
-      }, 1500)
-      return { success: true, willRestart: true, message: `资源更新完成！新版本: v${newVersion}`, version: newVersion }
-    }
-    return { success: false, error: '更新失败：未知错误' }
-  } catch (error: any) {
-    console.error('[Main] Resource update failed:', error)
-    return { success: false, error: `更新失败: ${error?.message || '未知错误'}` }
   }
+  return { success: false, error: result.error ?? '更新失败' }
 })
 
 // 清理热更新目录（回退到内置资源，解决整包更新后仍加载旧前端的问题）

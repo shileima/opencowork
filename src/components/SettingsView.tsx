@@ -242,12 +242,16 @@ export function SettingsView({ onClose }: SettingsViewProps) {
 
         const removeListener = window.ipcRenderer?.on('resource:update-available', handleAutoUpdateFound);
 
+        const removeFailed = window.ipcRenderer?.on('resource:update-failed', (_e: unknown, ...args: unknown[]) => {
+            const payload = args[0] as { message?: string };
+            showToast(payload?.message || '资源自动更新失败', 'error');
+        });
+
         return () => {
-            if (removeListener) {
-                removeListener();
-            }
+            removeListener?.();
+            removeFailed?.();
         };
-    }, []);
+    }, [showToast]);
 
     // 监听 electron-updater 事件
     useEffect(() => {
