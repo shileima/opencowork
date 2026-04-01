@@ -27,6 +27,7 @@ import { prepareMacDmgInstallFromPath, spawnMacReplaceScript } from './updater/m
 import { PlaywrightManager } from './utils/PlaywrightManager'
 import { setPlaywrightManager } from './utils/PlaywrightEnsure'
 import { ensureAgentBrowserCanFindChromium, getPlaywrightEnvVars, getPlaywrightNodePathSegmentForRpa } from './utils/PlaywrightPath'
+import { getPythonMissingErrorMessage, resolveRpaPythonCli } from './utils/PythonResolver'
 import { compareAppSemver } from './utils/appSemverCompare'
 import { registerContextSwitchHandler, registerRpaContextSwitchHandler } from './contextSwitchCoordinator'
 import Anthropic from '@anthropic-ai/sdk'
@@ -2964,7 +2965,7 @@ function injectRpaAutoClose(scriptContent: string, waitMs: number): string {
   return replaced !== scriptContent ? replaced : scriptContent;
 }
 
-/** 执行 RPA Playwright 脚本：支持 .js 和 .py，优先使用 Node.js 执行（更高效） */
+/** 执行 RPA Playwright 脚本：.js 使用内置 Node；.py 使用系统 Python 3（执行前检测，缺失时提示安装） */
 /** 向发起执行的窗口发送运行输出（若提供了 runId） */
 function sendRunOutput(sender: Electron.WebContents, runId: string | undefined, event: 'rpa:run:start' | 'rpa:run:output' | 'rpa:run:end', payload: object) {
   if (!runId || sender.isDestroyed()) return;
@@ -3078,8 +3079,25 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
         });
       });
     } else if (ext === '.py') {
-      const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-      const child = cpSpawn(pythonCmd, [path.basename(scriptPath)], {
+      const pyCli = resolveRpaPythonCli();
+      if (!pyCli) {
+        const error = getPythonMissingErrorMessage();
+        sendRunOutput(sender, runId, 'rpa:run:end', { runId, success: false, error, stdout: '', stderr: '' });
+        const { response } = await dialog.showMessageBox({
+          type: 'warning',
+          title: '需要安装 Python 3',
+          message: '当前系统未检测到可用的 Python 3，无法执行 .py 自动化脚本。',
+          detail: error,
+          buttons: ['打开 Python 官网下载页', '关闭'],
+          defaultId: 0,
+          cancelId: 1,
+        });
+        if (response === 0) {
+          await shell.openExternal('https://www.python.org/downloads/');
+        }
+        return { success: false, error };
+      }
+      const child = cpSpawn(pyCli.command, [...pyCli.prefixArgs, path.basename(scriptPath)], {
         cwd: scriptDir,
         stdio: ['ignore', 'pipe', 'pipe']
       });
