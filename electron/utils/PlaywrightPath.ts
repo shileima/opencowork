@@ -123,7 +123,10 @@ export function getBuiltinPlaywrightBrowsersPath(): string | null {
   const appBrowsers = path.join(getAppPlaywrightDir(), 'browsers');
   if (fs.existsSync(appBrowsers)) {
     const hasChromium = fs.readdirSync(appBrowsers).some((f) => f.startsWith('chromium-'));
-    if (hasChromium) return appBrowsers;
+    if (hasChromium) {
+      ensureBrowserVersionCompatibility(appBrowsers);
+      return appBrowsers;
+    }
   }
 
   // 2. 打包模式：检查 userData 下已解压的目录，或触发首次解压
@@ -131,13 +134,19 @@ export function getBuiltinPlaywrightBrowsersPath(): string | null {
     const userDataBrowsers = path.join(app.getPath('userData'), 'playwright', 'browsers');
     if (fs.existsSync(userDataBrowsers)) {
       const hasChromium = fs.readdirSync(userDataBrowsers).some((f) => f.startsWith('chromium-'));
-      if (hasChromium) return userDataBrowsers;
+      if (hasChromium) {
+        ensureBrowserVersionCompatibility(userDataBrowsers);
+        return userDataBrowsers;
+      }
     }
     // 尝试从内置 tar.gz 解压
     const tarGz = path.join(process.resourcesPath, 'playwright', 'chromium.tar.gz');
     if (fs.existsSync(tarGz)) {
       const extracted = extractChromiumTarGz(tarGz, userDataBrowsers);
-      if (extracted) return userDataBrowsers;
+      if (extracted) {
+        ensureBrowserVersionCompatibility(userDataBrowsers);
+        return userDataBrowsers;
+      }
     }
   }
 
@@ -145,9 +154,108 @@ export function getBuiltinPlaywrightBrowsersPath(): string | null {
   const userBrowsers = path.join(AGENT_BROWSER_SKILL_DIR, 'browsers');
   if (fs.existsSync(userBrowsers)) {
     const hasChromium = fs.readdirSync(userBrowsers).some((f) => f.startsWith('chromium-'));
-    if (hasChromium) return userBrowsers;
+    if (hasChromium) {
+      ensureBrowserVersionCompatibility(userBrowsers);
+      return userBrowsers;
+    }
   }
   return null;
+}
+
+/**
+ * 读取内置 playwright-core 的 browsers.json，返回期望的 chromium revision（如 "1208"）。
+ * 找不到时返回 null。
+ */
+function getExpectedChromiumRevision(): string | null {
+  const moduleDir = getBuiltinPlaywrightModuleDir();
+  if (!moduleDir) return null;
+  // playwright-core 的 browsers.json 在 playwright 包的同级目录
+  const candidates = [
+    path.join(path.dirname(moduleDir), 'playwright-core', 'browsers.json'),
+    path.join(moduleDir, '..', 'playwright-core', 'browsers.json'),
+    // 有时 playwright 包自身也包含 browsers.json
+    path.join(moduleDir, 'browsers.json'),
+  ];
+  for (const jsonPath of candidates) {
+    try {
+      if (!fs.existsSync(jsonPath)) continue;
+      const data = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+      const chromiumEntry = (data.browsers || []).find(
+        (b: { name: string; revision: string }) => b.name === 'chromium'
+      );
+      if (chromiumEntry?.revision) return chromiumEntry.revision;
+    } catch {
+      // 解析失败，继续尝试下一个候选路径
+    }
+  }
+  return null;
+}
+
+/**
+ * 确保 browsers 目录中存在 Playwright 期望的 chromium-XXXX 版本目录。
+ *
+ * 当 userData 下通过 PlaywrightManager 安装了更新版本的 chromium（如 chromium-1217），
+ * 但内置 Playwright JS 库期望的是旧版本（如 chromium-1208）时，
+ * 为期望的版本创建指向最新可用版本的 symlink，避免 "Executable doesn't exist" 错误。
+ *
+ * 同样处理 chromium_headless_shell-XXXX 的兼容。
+ */
+function ensureBrowserVersionCompatibility(browsersDir: string): void {
+  try {
+    const expectedRevision = getExpectedChromiumRevision();
+    if (!expectedRevision) return;
+
+    const entries = fs.readdirSync(browsersDir);
+
+    // 处理 chromium-XXXX（完整浏览器）
+    const chromiumDirs = entries.filter((d) => /^chromium-\d+$/.test(d)).sort();
+    const expectedChromium = `chromium-${expectedRevision}`;
+    if (chromiumDirs.length > 0 && !chromiumDirs.includes(expectedChromium)) {
+      // 找到最新版本作为 symlink 目标
+      const newest = chromiumDirs[chromiumDirs.length - 1];
+      const linkPath = path.join(browsersDir, expectedChromium);
+      const targetPath = path.join(browsersDir, newest);
+      try {
+        const stat = fs.lstatSync(linkPath);
+        if (stat.isSymbolicLink()) {
+          // 已有 symlink，检查是否正确
+          if (fs.readlinkSync(linkPath) === targetPath) return;
+          fs.unlinkSync(linkPath);
+        } else if (stat.isDirectory()) {
+          // 已有真实目录，不覆盖
+          return;
+        }
+      } catch {
+        // 路径不存在，继续创建
+      }
+      fs.symlinkSync(targetPath, linkPath);
+      console.log(`[PlaywrightPath] 创建浏览器兼容 symlink: ${expectedChromium} → ${newest}`);
+    }
+
+    // 处理 chromium_headless_shell-XXXX
+    const headlessDirs = entries.filter((d) => /^chromium_headless_shell-\d+$/.test(d)).sort();
+    const expectedHeadless = `chromium_headless_shell-${expectedRevision}`;
+    if (headlessDirs.length > 0 && !headlessDirs.includes(expectedHeadless)) {
+      const newest = headlessDirs[headlessDirs.length - 1];
+      const linkPath = path.join(browsersDir, expectedHeadless);
+      const targetPath = path.join(browsersDir, newest);
+      try {
+        const stat = fs.lstatSync(linkPath);
+        if (stat.isSymbolicLink()) {
+          if (fs.readlinkSync(linkPath) === targetPath) return;
+          fs.unlinkSync(linkPath);
+        } else if (stat.isDirectory()) {
+          return;
+        }
+      } catch {
+        // 路径不存在，继续创建
+      }
+      fs.symlinkSync(targetPath, linkPath);
+      console.log(`[PlaywrightPath] 创建 headless shell 兼容 symlink: ${expectedHeadless} → ${newest}`);
+    }
+  } catch (err) {
+    console.warn('[PlaywrightPath] ensureBrowserVersionCompatibility error:', err);
+  }
 }
 
 /**
