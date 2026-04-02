@@ -13,6 +13,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { app } from 'electron'
 import { getBuiltinNodePath, getBuiltinNodeDir, getBuiltinNpmPath, getBuiltinNpmCliJsPath, getNpmEnvVars, getBuiltinPnpmPath } from './NodePath'
+import { getSystemChromePath } from './PlaywrightPath'
 
 const execAsync = promisify(exec)
 
@@ -63,8 +64,7 @@ export class PlaywrightManager {
   async isBrowserInstalled(): Promise<boolean> {
     try {
       // 优先：系统已安装 Chrome/Chromium，无需下载 Chromium
-      const systemChrome = this.getSystemChromePath()
-      if (systemChrome) return true
+      if (getSystemChromePath()) return true
 
       // 兜底：检查 Playwright 管理的 Chromium
       if (!fs.existsSync(this.browsersPath)) {
@@ -75,44 +75,6 @@ export class PlaywrightManager {
     } catch (error) {
       return false
     }
-  }
-
-  /**
-   * 获取系统已安装的 Chrome 可执行路径
-   */
-  private getSystemChromePath(): string | null {
-    if (process.platform === 'darwin') {
-      const candidates = [
-        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-        '/Applications/Chromium.app/Contents/MacOS/Chromium',
-        '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-      ]
-      for (const p of candidates) {
-        if (fs.existsSync(p)) return p
-      }
-    } else if (process.platform === 'linux') {
-      const candidates = [
-        '/usr/bin/google-chrome',
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/chromium',
-        '/snap/bin/chromium',
-      ]
-      for (const p of candidates) {
-        if (fs.existsSync(p)) return p
-      }
-    } else if (process.platform === 'win32') {
-      const candidates = [
-        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-        path.join(os.homedir(), 'AppData', 'Local', 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      ]
-      for (const p of candidates) {
-        if (fs.existsSync(p)) return p
-      }
-    }
-    return null
   }
 
   /**
@@ -328,7 +290,7 @@ export class PlaywrightManager {
   ): Promise<{ success: boolean; error?: string }> {
     try {
       // 优先：系统已有 Chrome，跳过 Chromium 下载
-      const systemChrome = this.getSystemChromePath()
+      const systemChrome = getSystemChromePath()
       if (systemChrome) {
         onProgress?.(`检测到系统 Chrome，跳过 Chromium 下载 ✓ (${systemChrome})`)
         return { success: true }
