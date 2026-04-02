@@ -2969,6 +2969,9 @@ function injectRpaAutoClose(scriptContent: string, waitMs: number): string {
 /** 向发起执行的窗口发送运行输出（若提供了 runId） */
 function sendRunOutput(sender: Electron.WebContents, runId: string | undefined, event: 'rpa:run:start' | 'rpa:run:output' | 'rpa:run:end', payload: object) {
   if (!runId || sender.isDestroyed()) return;
+  if (event === 'rpa:run:end') {
+    mainWin?.setAlwaysOnTop(false);
+  }
   sender.send(event, payload);
 }
 
