@@ -17,6 +17,14 @@ const SALT = 'qacowork-salt';
 const ITERATIONS = 100000;
 
 /**
+ * 与本地 Claude Code CLI ~/.claude/settings.json 中 env 对齐的 NewAPI 预设（不含密钥）
+ * ANTHROPIC_BASE_URL / ANTHROPIC_DEFAULT_SONNET_MODEL / CLAUDE_CODE_MAX_OUTPUT_TOKENS
+ */
+const NEWAPI_BASE_URL = 'https://newapi.waimai.st.sankuai.com';
+const NEWAPI_DEFAULT_MODEL = 'aws.claude-sonnet-4.5';
+const NEWAPI_MAX_OUTPUT_TOKENS = 64000;
+
+/**
  * 生成加密密钥（固定密钥，跨机器通用）
  */
 function getMachineKey() {
@@ -78,10 +86,10 @@ async function main() {
     console.log();
     
     console.log('加密密钥模式: 固定密钥（跨机器通用）');
+    console.log('默认明文密钥来源: 环境变量 ANTHROPIC_AUTH_TOKEN（与 Claude Code CLI 一致，勿将明文写入仓库）');
     console.log();
     
-    // 默认密钥（用户提供的）
-    const defaultKey = 'sk-IxmaHhECm3gk3lgCD12246316c1543B58';
+    const defaultKey = (process.env.ANTHROPIC_AUTH_TOKEN || '').trim();
     
     const rl = readline.createInterface({
         input: process.stdin,
@@ -91,12 +99,18 @@ async function main() {
     const question = (query) => new Promise((resolve) => rl.question(query, resolve));
     
     try {
-        console.log(`默认密钥: ${defaultKey}`);
-        const useDefault = await question('使用默认密钥？(y/n，默认 y): ');
-        
-        let plainKey = defaultKey;
-        if (useDefault.toLowerCase() === 'n') {
-            plainKey = await question('请输入要加密的 API 密钥: ');
+        let plainKey = '';
+        if (defaultKey) {
+            console.log(`已检测到 ANTHROPIC_AUTH_TOKEN（长度 ${defaultKey.length}，内容已隐藏）`);
+            const useDefault = await question('使用该密钥进行加密？(y/n，默认 y): ');
+            if (useDefault.toLowerCase() === 'n') {
+                plainKey = (await question('请输入要加密的 API 密钥: ')).trim();
+            } else {
+                plainKey = defaultKey;
+            }
+        } else {
+            console.log('未检测到 ANTHROPIC_AUTH_TOKEN。请在当前 shell 中 export 后再运行，或直接粘贴要加密的密钥。');
+            plainKey = (await question('请输入要加密的 API 密钥: ')).trim();
         }
         
         if (!plainKey || plainKey.trim().length === 0) {
@@ -135,9 +149,9 @@ async function main() {
     id: 'custom',
     name: '自定义',
     apiKey: 'ENCRYPTED:${encrypted}',
-    apiUrl: 'https://ccr.waimai.test.sankuai.com',
-    model: 'oneapi,aws.claude-sonnet-4.5',
-    maxTokens: 131072,
+    apiUrl: '${NEWAPI_BASE_URL}',
+    model: '${NEWAPI_DEFAULT_MODEL}',
+    maxTokens: ${NEWAPI_MAX_OUTPUT_TOKENS},
     isCustom: true,
     readonlyUrl: false,
     isPreset: true

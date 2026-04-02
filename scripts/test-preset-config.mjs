@@ -59,8 +59,8 @@ const checks = [
     { name: 'API Key 不为空', pass: customProvider.apiKey && customProvider.apiKey.length > 0 },
     { name: 'API Key 不以 ENCRYPTED: 开头', pass: !customProvider.apiKey?.startsWith('ENCRYPTED:') },
     { name: 'isPreset 为 true', pass: customProvider.isPreset === true },
-    { name: 'API URL 正确', pass: customProvider.apiUrl === 'https://ccr.waimai.test.sankuai.com' },
-    { name: 'Model 正确', pass: customProvider.model === 'oneapi,aws.claude-sonnet-4.5' }
+    { name: 'API URL 正确', pass: customProvider.apiUrl === 'https://newapi.waimai.st.sankuai.com' },
+    { name: 'Model 正确', pass: customProvider.model === 'aws.claude-sonnet-4.5' }
 ];
 
 console.log('验证结果:');

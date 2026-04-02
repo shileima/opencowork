@@ -116,10 +116,10 @@ const defaultProviders = {
     'custom': {
         id: 'custom',
         name: '自定义',
-        apiKey: 'ENCRYPTED:I/8TmhI7yKbUOwCFkVeVCQ==:eWCxb+AuF7rUt51Y44qw0Y5mpL4Hd9ZziwBFRuHT5EXnTaep80DG+upbdNwo9oAz',
-        apiUrl: 'https://ccr.waimai.test.sankuai.com',
-        model: 'oneapi,aws.claude-sonnet-4.5',
-        maxTokens: DEFAULT_MAX_TOKENS,
+        apiKey: 'ENCRYPTED:nYJ4xv9BnOan1KEHPuOd/g==:px8CE9CkPaWc2D5x7CX4S/a1VPnfjGLLYJ78rGTKDFZDCJ3zgJH4lqZDIiMbslDzD5kIew6HB4rGBq2MhCVufw==',
+        apiUrl: 'https://newapi.waimai.st.sankuai.com',
+        model: 'aws.claude-sonnet-4.5',
+        maxTokens: 64000,
         isCustom: true,
         readonlyUrl: false,
         isPreset: true
