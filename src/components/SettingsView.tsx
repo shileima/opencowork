@@ -328,26 +328,43 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     };
 
     const handleInstallUpdate = async () => {
+        // 直接显示"正在覆盖安装"提示，跳过确认弹框
+        setInstallConfirmStage('replacing');
         try {
+            // 第一次调用：获取 needConfirm
             const result = (await window.ipcRenderer?.invoke('app:install-update')) as
                 | { ok: true; willQuit?: boolean; openedDmg?: boolean }
                 | { ok: false; error?: string; cancelled?: boolean; needConfirm?: boolean }
                 | undefined;
             if (result && !result.ok) {
                 if ('needConfirm' in result && result.needConfirm) {
-                    // macOS 整包更新：显示自定义确认弹框
-                    setInstallConfirmStage('confirm');
+                    // macOS 整包更新：自动确认，直接执行覆盖安装
+                    const confirmResult = (await window.ipcRenderer?.invoke('app:install-update', true)) as
+                        | { ok: true; willQuit?: boolean }
+                        | { ok: false; error?: string }
+                        | undefined;
+                    if (confirmResult && !confirmResult.ok) {
+                        setInstallConfirmStage('idle');
+                        showToast(confirmResult.error || '安装更新失败', 'error');
+                    }
+                    // ok + willQuit => app 即将退出，弹框保持 replacing 状态
                     return;
                 }
-                if ('cancelled' in result && result.cancelled) return;
+                if ('cancelled' in result && result.cancelled) {
+                    setInstallConfirmStage('idle');
+                    return;
+                }
+                setInstallConfirmStage('idle');
                 showToast(result.error || '安装更新失败', 'error');
             }
+            // ok => 非 macOS 路径，app 即将退出
         } catch (err: unknown) {
+            setInstallConfirmStage('idle');
             showToast(err instanceof Error ? err.message : '安装更新失败', 'error');
         }
     };
 
-    // 用户在自定义弹框中确认继续更新
+    // 用户在自定义弹框中确认继续更新（保留为备用，当前流程已自动确认）
     const handleConfirmInstall = async () => {
         setInstallConfirmStage('replacing');
         try {
@@ -2065,10 +2082,10 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                                 <Loader2 size={36} className="animate-spin text-blue-500" />
                                 <div className="text-center">
                                     <p className="text-base font-medium text-stone-800 dark:text-zinc-100 mb-1">
-                                        本地正在替换更新
+                                        正在覆盖安装新版本...
                                     </p>
                                     <p className="text-sm text-stone-500 dark:text-zinc-400">
-                                        稍后自动重启，请稍等...
+                                        请稍等，完成后会自动重启
                                     </p>
                                 </div>
                                 <p className="text-xs text-stone-400 dark:text-zinc-600">
