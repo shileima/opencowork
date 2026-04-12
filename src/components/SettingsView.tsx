@@ -205,6 +205,8 @@ export function SettingsView({ onClose }: SettingsViewProps) {
     const [updatingResources, setUpdatingResources] = useState(false);
     const [resourceUpdateDone, setResourceUpdateDone] = useState(false);
     const [clearingHotUpdate, setClearingHotUpdate] = useState(false);
+    // 整包更新确认弹框状态: idle=无弹框, confirm=确认弹框, replacing=正在替换提示
+    const [installConfirmStage, setInstallConfirmStage] = useState<'idle' | 'confirm' | 'replacing'>('idle');
     const [updateProgress, setUpdateProgress] = useState<{ 
         stage?: 'checking' | 'downloading' | 'extracting' | 'applying' | 'completed';
         total: number; 
@@ -329,13 +331,37 @@ export function SettingsView({ onClose }: SettingsViewProps) {
         try {
             const result = (await window.ipcRenderer?.invoke('app:install-update')) as
                 | { ok: true; willQuit?: boolean; openedDmg?: boolean }
-                | { ok: false; error?: string; cancelled?: boolean }
+                | { ok: false; error?: string; cancelled?: boolean; needConfirm?: boolean }
                 | undefined;
             if (result && !result.ok) {
+                if ('needConfirm' in result && result.needConfirm) {
+                    // macOS 整包更新：显示自定义确认弹框
+                    setInstallConfirmStage('confirm');
+                    return;
+                }
                 if ('cancelled' in result && result.cancelled) return;
                 showToast(result.error || '安装更新失败', 'error');
             }
         } catch (err: unknown) {
+            showToast(err instanceof Error ? err.message : '安装更新失败', 'error');
+        }
+    };
+
+    // 用户在自定义弹框中确认继续更新
+    const handleConfirmInstall = async () => {
+        setInstallConfirmStage('replacing');
+        try {
+            const result = (await window.ipcRenderer?.invoke('app:install-update', true)) as
+                | { ok: true; willQuit?: boolean }
+                | { ok: false; error?: string }
+                | undefined;
+            if (result && !result.ok) {
+                setInstallConfirmStage('idle');
+                showToast(result.error || '安装更新失败', 'error');
+            }
+            // ok + willQuit => app 即将退出，弹框保持 replacing 状态
+        } catch (err: unknown) {
+            setInstallConfirmStage('idle');
             showToast(err instanceof Error ? err.message : '安装更新失败', 'error');
         }
     };
@@ -1998,6 +2024,61 @@ export function SettingsView({ onClose }: SettingsViewProps) {
                     />
                 )
             }
+
+            {/* 整包更新确认/替换中弹框 */}
+            {installConfirmStage !== 'idle' && (
+                <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-zinc-900 rounded-2xl p-6 w-full max-w-md shadow-xl animate-in fade-in zoom-in-95 duration-200 border border-stone-200 dark:border-zinc-800">
+                        {installConfirmStage === 'confirm' ? (
+                            <>
+                                <div className="flex items-start gap-3 mb-4">
+                                    <div className="p-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg shrink-0">
+                                        <AlertTriangle size={20} className="text-orange-600 dark:text-orange-400" />
+                                    </div>
+                                    <div>
+                                        <h3 className="font-semibold text-stone-800 dark:text-zinc-100 text-base mb-2">整包更新</h3>
+                                        <p className="text-sm text-stone-600 dark:text-zinc-400 leading-relaxed">
+                                            应用将自动退出，并在后台用新版本覆盖当前安装，随后重新打开。
+                                        </p>
+                                        <p className="text-sm text-stone-500 dark:text-zinc-500 mt-2">
+                                            请勿在更新过程中强制结束「bash」相关后台任务。
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-3 justify-end">
+                                    <button
+                                        onClick={() => setInstallConfirmStage('idle')}
+                                        className="px-4 py-2 text-sm rounded-lg border border-stone-300 dark:border-zinc-600 text-stone-700 dark:text-zinc-300 hover:bg-stone-100 dark:hover:bg-zinc-800 transition-colors"
+                                    >
+                                        取消
+                                    </button>
+                                    <button
+                                        onClick={handleConfirmInstall}
+                                        className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-500 hover:bg-blue-600 text-white transition-colors"
+                                    >
+                                        继续更新
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            <div className="flex flex-col items-center gap-4 py-4">
+                                <Loader2 size={36} className="animate-spin text-blue-500" />
+                                <div className="text-center">
+                                    <p className="text-base font-medium text-stone-800 dark:text-zinc-100 mb-1">
+                                        本地正在替换更新
+                                    </p>
+                                    <p className="text-sm text-stone-500 dark:text-zinc-400">
+                                        稍后自动重启，请稍等...
+                                    </p>
+                                </div>
+                                <p className="text-xs text-stone-400 dark:text-zinc-600">
+                                    请勿关闭应用或强制退出
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </div >
     );
 }

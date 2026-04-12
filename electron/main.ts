@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
-import { spawn as cpSpawn } from 'node:child_process'
+import { spawn as cpSpawn, execSync as cpExecSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import dotenv from 'dotenv'
 import { AgentRuntime } from './agent/AgentRuntime'
@@ -335,6 +335,24 @@ function restoreMainWindowFromMini() {
   }
 }
 
+/**
+ * 同步杀掉所有 Google Chrome for Testing 进程。
+ * 使用 execSync 保证在应用退出前一定执行完毕，不受 async 回调不被等待的影响。
+ */
+function killChromeForTestingSync() {
+  try {
+    if (process.platform === 'darwin' || process.platform === 'linux') {
+      cpExecSync('pkill -f "Google Chrome for Testing"', { timeout: 5000, stdio: 'ignore' });
+    } else if (process.platform === 'win32') {
+      cpExecSync('taskkill /F /IM "Google Chrome for Testing.exe" /T', { timeout: 5000, stdio: 'ignore' });
+    }
+  } catch (e: unknown) {
+    const err = e as { status?: number };
+    // pkill exit code 1 = no matching processes, which is fine
+    if (err.status !== 1) throw e;
+  }
+}
+
 app.on('before-quit', async () => {
   app.isQuitting = true
   console.log('[Main] Application is quitting, starting cleanup...');
@@ -360,6 +378,20 @@ app.on('before-quit', async () => {
     }
   } catch (error) {
     console.warn('[Main] Error closing browser:', error);
+  }
+
+  // 1.5 强制杀掉所有 Google Chrome for Testing 进程（使用同步方式确保退出前一定执行）
+  try {
+    console.log('[Main] Killing Google Chrome for Testing processes...');
+    killChromeForTestingSync();
+    console.log('[Main] Google Chrome for Testing processes killed');
+  } catch (chromeError: unknown) {
+    const err = chromeError as { code?: number; message?: string };
+    if (err.code === 1) {
+      console.log('[Main] No Google Chrome for Testing processes found');
+    } else {
+      console.warn('[Main] Error killing Chrome for Testing:', err.message || String(chromeError));
+    }
   }
   
   // 2. 清理所有终端会话
@@ -466,6 +498,15 @@ app.on('before-quit', async () => {
   
   console.log('[Main] Cleanup completed, application will now quit');
 })
+
+// 兜底：will-quit 在所有窗口关闭后、应用即将退出前同步触发，确保 Chrome for Testing 一定被清理
+app.on('will-quit', () => {
+  try {
+    killChromeForTestingSync();
+  } catch (_) {
+    // ignore
+  }
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -1468,7 +1509,7 @@ ipcMain.handle('app:download-update', async () => {
   await autoUpdater.downloadUpdate()
 })
 
-ipcMain.handle('app:install-update', async (event) => {
+ipcMain.handle('app:install-update', async (event, confirmed?: boolean) => {
   if (process.platform === 'darwin') {
     if (!macDownloadedDmgPath || !fs.existsSync(macDownloadedDmgPath)) {
       shell.openExternal('https://github.com/shileima/opencowork/releases')
@@ -1480,23 +1521,12 @@ ipcMain.handle('app:install-update', async (event) => {
       return { ok: true, openedDmg: true as const }
     }
 
-    const parentWin = BrowserWindow.fromWebContents(event.sender) ?? mainWin ?? floatingBallWin
-    const confirmOpts = {
-      type: 'info' as const,
-      title: '整包更新',
-      message:
-        '应用将自动退出，并在后台用新版本覆盖当前安装，随后重新打开。\n\n请勿在更新过程中强制结束「bash」相关后台任务。',
-      buttons: ['取消', '继续更新'],
-      defaultId: 1,
-      cancelId: 0,
-    }
-    const { response } = parentWin
-      ? await dialog.showMessageBox(parentWin, confirmOpts)
-      : await dialog.showMessageBox(confirmOpts)
-    if (response === 0) {
-      return { ok: false, cancelled: true as const }
+    // 第一次调用（未确认）：返回 needConfirm，由前端展示自定义确认弹框
+    if (!confirmed) {
+      return { ok: false, needConfirm: true as const }
     }
 
+    // 第二次调用（已确认）：执行替换安装
     const prep = prepareMacDmgInstallFromPath(macDownloadedDmgPath)
     if (!prep.ok) {
       return { ok: false, error: prep.error }
