@@ -1509,7 +1509,7 @@ ipcMain.handle('app:download-update', async () => {
   await autoUpdater.downloadUpdate()
 })
 
-ipcMain.handle('app:install-update', async (event, confirmed?: boolean) => {
+ipcMain.handle('app:install-update', async (_event, confirmed?: boolean) => {
   if (process.platform === 'darwin') {
     if (!macDownloadedDmgPath || !fs.existsSync(macDownloadedDmgPath)) {
       shell.openExternal('https://github.com/shileima/opencowork/releases')
