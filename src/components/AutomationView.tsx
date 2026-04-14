@@ -69,6 +69,17 @@ function formatScriptSize(bytes: number): string {
     return m >= 10 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;
 }
 
+/**
+ * 聊天区用 Markdown 渲染时，单个换行常被合并成空格，脚本里连续「步骤1:…步骤2:…」会挤成一行。
+ * 在非换行字符后的「步骤N:」「步骤N：」前插入空行（Markdown 段落分隔），使每个步骤单独成段显示。
+ */
+function formatAutomationStreamForChatMarkdown(chunk: string): string {
+    if (!chunk) return chunk;
+    let s = chunk.replace(/(?<=[^\r\n])步骤\d{1,4}[:：]/g, '\n\n$&');
+    s = s.replace(/\n{3,}/g, '\n\n');
+    return s;
+}
+
 // ─── 模板脚本定义 ──────────────────────────────────────────────────────────────
 
 interface ScriptTemplate {
@@ -726,7 +737,9 @@ export function AutomationView({
             const payload = args[0] as { runId: string; data: string; stream: 'stdout' | 'stderr' };
             const { runId, data, stream } = payload;
             if (lastExecutionRunIdForChatRef.current === runId) {
-                window.ipcRenderer.invoke('agent:append-to-last-assistant', data).catch(() => {});
+                window.ipcRenderer
+                    .invoke('agent:append-to-last-assistant', formatAutomationStreamForChatMarkdown(data))
+                    .catch(() => {});
             }
             const time = Date.now();
             const lines = data.split(/\r?\n/).filter(Boolean);
