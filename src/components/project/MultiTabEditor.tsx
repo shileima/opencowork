@@ -432,15 +432,44 @@ export function MultiTabEditor({ projectPath, agentContent: _agentContent, onFil
             </div>
 
             {/* Tab Content */}
-            <div className="flex-1 min-h-0 overflow-hidden">
-                {!activeTab ? (
+            {/* 终端和浏览器 tab 使用 display:none 隐藏而非条件卸载，
+                确保切换 tab 时不会销毁后台进程（如 pnpm install）或丢失浏览器状态。
+                编辑器和 Markdown 仍用条件渲染，因为它们没有后台进程。 */}
+            <div className="flex-1 min-h-0 overflow-hidden relative">
+                {/* 空状态提示 */}
+                {!activeTab && (
                     <div className="h-full flex items-center justify-center text-stone-400 dark:text-zinc-500">
                         <div className="text-center">
                             <p className="text-sm mb-2">{t('noTabsOpen') || '没有打开的标签页'}</p>
                             <p className="text-xs">{t('openFileHint') || '点击文件资源管理器中的文件打开编辑器'}</p>
                         </div>
                     </div>
-                ) : activeTab.type === 'editor' ? (
+                )}
+
+                {/* 终端 tab：始终挂载，通过 display 控制显隐 */}
+                {tabs.filter(tab => tab.type === 'terminal').map(tab => (
+                    <div
+                        key={tab.id}
+                        className="absolute inset-0"
+                        style={{ display: activeTabId === tab.id ? 'block' : 'none' }}
+                    >
+                        <TerminalPanel projectPath={(tab as TerminalTab).cwd} />
+                    </div>
+                ))}
+
+                {/* 浏览器 tab：始终挂载，通过 display 控制显隐 */}
+                {tabs.filter(tab => tab.type === 'browser').map(tab => (
+                    <div
+                        key={tab.id}
+                        className="absolute inset-0"
+                        style={{ display: activeTabId === tab.id ? 'block' : 'none' }}
+                    >
+                        <BrowserTab initialUrl={(tab as BrowserTabData).url} refreshTrigger={browserRefreshTrigger} />
+                    </div>
+                ))}
+
+                {/* 编辑器 tab：条件渲染（无后台进程） */}
+                {activeTab?.type === 'editor' && (
                     <div className="h-full pt-2 bg-[#1e1e1e]">
                         <MonacoEditor
                             filePath={activeTab.filePath}
@@ -449,11 +478,10 @@ export function MultiTabEditor({ projectPath, agentContent: _agentContent, onFil
                             onSave={(currentContent) => handleEditorSave(activeTab.id, currentContent)}
                         />
                     </div>
-                ) : activeTab.type === 'terminal' ? (
-                    <TerminalPanel projectPath={activeTab.cwd} />
-                ) : activeTab.type === 'browser' ? (
-                    <BrowserTab initialUrl={activeTab.url} refreshTrigger={browserRefreshTrigger} />
-                ) : (
+                )}
+
+                {/* Markdown/Agent tab：条件渲染（无后台进程） */}
+                {activeTab?.type === 'agent' && (
                     <div className="h-full overflow-y-auto p-4">
                         <MarkdownRenderer content={activeTab.content} isDark={true} />
                     </div>

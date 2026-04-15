@@ -21,6 +21,7 @@ import { getBuiltinNodePath, getBuiltinPnpmPath, getSystemNpxPath } from './util
 import { resolveDeployEnv } from './utils/DeployEnvResolver'
 import { runProjectQualityCheck } from './utils/ProjectQualityCheck'
 import { resolveShellPath, validateShellPath, getShellCandidates, resolveShellForCommand } from './utils/ShellResolver'
+import { getCommonPackageManagerPaths } from './utils/PathUtils'
 import https from 'node:https'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { prepareMacDmgInstallFromPath, spawnMacReplaceScript } from './updater/macDmgReplaceInstall'
@@ -3821,9 +3822,24 @@ console.log('[Terminal:Diag] ==================== 终端模块诊断结束 =====
 function buildPtyEnv(minimal: boolean): Record<string, string> {
   // 对于 PTY 模式，使用最简化的环境变量来避免 posix_spawnp 失败
   // 只包含绝对必需的环境变量
+  //
+  // 关键：当 Electron 从 Dock/Finder 启动时，process.env.PATH 通常只有
+  // /usr/bin:/bin:/usr/sbin:/sbin，缺少 /opt/homebrew/bin 等用户工具路径。
+  // 需要主动补充常见路径，确保终端中的子进程（如 /bin/sh 执行的脚本）
+  // 也能找到 brew、git-lfs 等命令。
+  const pathSep = process.platform === 'win32' ? ';' : ':';
+  const existingPath = process.env.PATH || '/usr/local/bin:/usr/bin:/bin';
+  const commonPaths = getCommonPackageManagerPaths();
+  // 将常见路径合并到 PATH 前面（去重）
+  const existingParts = new Set(existingPath.split(pathSep));
+  const extraParts = commonPaths.filter(p => !existingParts.has(p));
+  const enrichedPath = extraParts.length > 0
+    ? `${extraParts.join(pathSep)}${pathSep}${existingPath}`
+    : existingPath;
+
   const base: Record<string, string> = {
     TERM: 'xterm-256color',
-    PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+    PATH: enrichedPath,
     HOME: process.env.HOME || os.homedir(),
     USER: process.env.USER || process.env.LOGNAME || 'user',
     LANG: process.env.LANG || 'en_US.UTF-8',
@@ -4071,8 +4087,20 @@ async function createPipeTerminal(
   }
   
   // 设置环境变量
+  // 与 PTY 模式同理：从 Dock/Finder 启动时 process.env.PATH 缺少 /opt/homebrew/bin 等路径，
+  // 需要补充常见工具路径，使 Pipe 模式下的子进程也能找到 brew、git-lfs 等命令。
+  const pipPathSep = process.platform === 'win32' ? ';' : ':';
+  const pipeExistingPath = process.env.PATH || '';
+  const pipeCommonPaths = getCommonPackageManagerPaths();
+  const pipeExistingParts = new Set(pipeExistingPath.split(pipPathSep));
+  const pipeExtraParts = pipeCommonPaths.filter(p => !pipeExistingParts.has(p));
+  const pipeEnrichedPath = pipeExtraParts.length > 0
+    ? `${pipeExtraParts.join(pipPathSep)}${pipPathSep}${pipeExistingPath}`
+    : pipeExistingPath;
+
   const terminalEnv = {
     ...process.env,
+    PATH: pipeEnrichedPath,
     TERM: 'xterm-256color',
     ...(process.platform !== 'win32' ? { 
       FORCE_COLOR: '1',

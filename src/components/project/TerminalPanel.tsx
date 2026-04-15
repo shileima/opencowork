@@ -315,7 +315,7 @@ export function TerminalPanel({ projectPath, onClosePanel }: TerminalPanelProps)
                         tabIndex={0}
                         aria-selected={activeId === inst.id}
                         aria-label={inst.name}
-                        className={`group flex items-center gap-1.5 px-1 py-1.5 rounded-t text-xs font-light cursor-pointer transition-colors ${
+                        className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-t text-xs font-light cursor-pointer transition-colors ${
                             activeId === inst.id
                                 ? 'bg-white dark:bg-zinc-900 text-stone-900 dark:text-zinc-100 border border-b-0 border-stone-200 dark:border-zinc-800 -mb-px'
                                 : 'text-stone-600 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200'
