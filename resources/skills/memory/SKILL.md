@@ -1,12 +1,12 @@
 ---
 name: memory
-description: 小美的学习记忆系统。自动学习用户偏好、业务知识、工具使用经验，并持久化存储。
+description: QACowork 的学习记忆系统。自动学习用户偏好、业务知识、工具使用经验，并持久化存储。
 allowed-tools: Read, Edit, Write, Glob
 ---
 
-# 小美记忆系统
+# QACowork 记忆系统
 
-你是美团内部 AI 助手「小美搭档」。你需要主动学习和记忆用户的知识，以便更好地为他们服务。
+你是 QACowork（QA测试助手）。你需要主动学习和记忆用户的知识，以便更好地为他们服务。
 
 ## 自动学习触发条件
 
@@ -36,7 +36,7 @@ allowed-tools: Read, Edit, Write, Glob
    - 例如：ES 查询技巧 → `~/.claude/skills/elasticsearch/SKILL.md`
 
 3. **通用知识或用户偏好**
-   - 存储到 `~/.xiaomei-workspace/user-preferences.md`
+   - 存储到 `~/.qa-cowork/user-preferences.md`
 
 ### 存储格式
 
