@@ -1,33 +1,24 @@
 import { useRef } from 'react';
 import Editor, { type Monaco, loader } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
-import * as monacoEditor from 'monaco-editor';
-import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
-import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
-import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
-import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import { useI18n } from '../../i18n/I18nContext';
 import { Loader2 } from 'lucide-react';
 
 /**
- * 使用本地 node_modules 中的 monaco-editor，避免从 CDN（jsDelivr）下载。
- * 这是编辑器打开慢的根因：Electron 内网环境下 CDN 访问极慢或不可达。
+ * 使用国内 CDN 镜像加载 monaco-editor，避免从默认的 jsDelivr CDN 下载。
+ * 这是编辑器打开慢的根因：Electron 内网环境下 jsDelivr CDN 访问极慢或不可达。
  *
- * 1. 通过 loader.config({ monaco }) 让 @monaco-editor/react 直接使用已打包的 monaco 实例
- * 2. 通过 MonacoEnvironment.getWorker 提供 Vite 打包的 worker，避免运行时网络请求
+ * 注意：不能用 `import * as monacoEditor from 'monaco-editor'` + `loader.config({ monaco })`
+ * 的方式，因为这会让 Vite 把整个 monaco-editor ESM 源码（~50MB）纳入打包树，
+ * 导致 CI 环境 OOM（JavaScript heap out of memory）。
+ *
+ * 使用 npmmirror CDN 替代 jsDelivr，国内访问速度极快（<100ms）。
  */
-self.MonacoEnvironment = {
-    getWorker(_, label) {
-        if (label === 'json') return new jsonWorker();
-        if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker();
-        if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker();
-        if (label === 'typescript' || label === 'javascript') return new tsWorker();
-        return new editorWorker();
+loader.config({
+    paths: {
+        vs: 'https://registry.npmmirror.com/monaco-editor/0.55.1/files/min/vs',
     },
-};
-
-loader.config({ monaco: monacoEditor });
+});
 
 /**
  * 内嵌编辑器没有磁盘 node_modules / tsconfig 工程上下文。
