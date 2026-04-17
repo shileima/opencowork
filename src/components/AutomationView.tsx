@@ -3,7 +3,7 @@ import { RPATaskListPanel } from './project/RPATaskListPanel';
 import { ChatPanel } from './project/ChatPanel';
 import { ResizableSplitPane } from './project/ResizableSplitPane';
 import { MonacoEditor } from './project/MonacoEditor';
-import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, X, Zap } from 'lucide-react';
+import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, ChevronUp, Image as ImageIcon, X, Zap, Square } from 'lucide-react';
 import Anthropic from '@anthropic-ai/sdk';
 import { useI18n } from '../i18n/I18nContext';
 import type { TranslationKey } from '../i18n/translations';
@@ -484,8 +484,12 @@ export function AutomationView({
     /** 右侧编辑器多 tab；默认只展示最新一个自动化脚本（xxx_vN.js），切换项目后自动打开该脚本 */
     const [scriptTabs, setScriptTabs] = useState<AutomationScriptTab[]>([]);
     const [activeScriptTabId, setActiveScriptTabId] = useState<string | null>(null);
-    const [isExecuting, setIsExecuting] = useState(false);
-    useEffect(() => { onExecutingChange?.(isExecuting); }, [isExecuting, onExecutingChange]);
+const [isExecuting, setIsExecuting] = useState(false);
+/** 正在请求主进程停止脚本，避免连续点击 */
+const [isStopping, setIsStopping] = useState(false);
+useEffect(() => { onExecutingChange?.(isExecuting); }, [isExecuting, onExecutingChange]);
+// 脚本结束后自动复位 isStopping
+useEffect(() => { if (!isExecuting) setIsStopping(false); }, [isExecuting]);
     const [isLoadingHistory, setIsLoadingHistory] = useState(false);
     /** 执行任务卡片列表：每次点击执行新增一条，展示步骤输出与进度 */
     const [executionRuns, setExecutionRuns] = useState<RPAExecutionRun[]>([]);
@@ -1170,18 +1174,52 @@ export function AutomationView({
             const result = await window.ipcRenderer.invoke('rpa:execute-script', fullPath, runId) as { success: boolean; error?: string; stdout?: string; stderr?: string };
             if (result.success) {
                 showToast(t('execute') + ' 成功');
-            } else {
-                showToast(result.error || '执行失败');
             }
+            // 执行失败时不再弹 toast：
+            // - 聊天区已经追加"执行失败: <error>"完整信息，用户可直接查看
+            // - stderr 内容可能很长（Playwright stack 等），以 toast 形式展示体验差
         } catch (e) {
             lastExecutionRunIdForChatRef.current = null;
             lastExecutionTaskForRunRef.current = null;
-            showToast((e as Error).message || '执行失败');
+            // 同理：catch 到的异常已由 rpa:run:end 路径落到聊天区，这里不再弹 toast
+            console.error('[AutomationView] handleExecute error:', e);
         } finally {
             currentExecutionRunIdRef.current = null;
             setIsExecuting(false);
         }
     };
+
+    /**
+     * 停止当前正在执行的脚本：
+     * - 通知主进程 kill 脚本子进程（Node/Python），由主进程负责正常发出 rpa:run:end
+     * - 不杀共享的 Chrome for Testing（保留登录态，后续执行可复用）
+     * - 任务卡片 / isExecuting 状态 / 聊天区输出 均由 rpa:run:end 统一收尾
+     */
+    const handleStop = useCallback(async () => {
+        const runId = currentExecutionRunIdRef.current;
+        if (!runId) return;
+        setIsStopping(true);
+        try {
+            const res = await window.ipcRenderer.invoke('rpa:stop-script', runId) as { success: boolean; error?: string };
+            if (!res?.success) {
+                showToast(res?.error || '停止失败');
+            }
+        } catch (e) {
+            showToast((e as Error).message || '停止失败');
+        } finally {
+            setIsStopping(false);
+        }
+    }, [showToast]);
+
+    /**
+     * 对外暴露"停止"能力：
+     * 监听全局 'rpa:request-stop' 事件，由 App.tsx 顶栏（小窗模式下仍可见）触发。
+     */
+    useEffect(() => {
+        const onRequestStop = () => { void handleStop(); };
+        window.addEventListener('rpa:request-stop', onRequestStop);
+        return () => { window.removeEventListener('rpa:request-stop', onRequestStop); };
+    }, [handleStop]);
 
     if (!currentProject) {
         return (
@@ -1377,23 +1415,44 @@ export function AutomationView({
                                             </>
                                         )}
                                     </span>
-                                    <button
-                                        onClick={handleExecute}
-                                        disabled={isExecuting || !scriptContent.trim()}
-                                        className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
-                                            isExecuting || !scriptContent.trim()
-                                                ? 'bg-stone-400 text-white cursor-not-allowed'
-                                                : 'bg-green-600 hover:bg-green-700 text-white'
-                                        }`}
-                                        title={t('execute')}
-                                    >
-                                        {isExecuting ? (
-                                            <Loader2 size={14} className="animate-spin" />
-                                        ) : (
-                                            <Play size={14} />
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        <button
+                                            onClick={handleExecute}
+                                            disabled={isExecuting || !scriptContent.trim()}
+                                            className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all duration-200 ${
+                                                isExecuting || !scriptContent.trim()
+                                                    ? 'bg-stone-400 text-white cursor-not-allowed'
+                                                    : 'bg-green-600 text-white hover:bg-green-500 hover:shadow-[0_0_0_3px_rgba(34,197,94,0.25),0_0_16px_2px_rgba(34,197,94,0.55)]'
+                                            }`}
+                                            title={t('execute')}
+                                        >
+                                            {isExecuting ? (
+                                                <Loader2 size={14} className="animate-spin" />
+                                            ) : (
+                                                <Play size={14} />
+                                            )}
+                                            {t('execute')}
+                                        </button>
+                                        {isExecuting && (
+                                            <button
+                                                onClick={handleStop}
+                                                disabled={isStopping}
+                                                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all duration-200 ${
+                                                    isStopping
+                                                        ? 'bg-stone-400 text-white cursor-not-allowed'
+                                                        : 'bg-red-600 text-white hover:bg-red-500 hover:shadow-[0_0_0_3px_rgba(239,68,68,0.25),0_0_16px_2px_rgba(239,68,68,0.55)]'
+                                                }`}
+                                                title="停止执行"
+                                            >
+                                                {isStopping ? (
+                                                    <Loader2 size={14} className="animate-spin" />
+                                                ) : (
+                                                    <Square size={14} fill="currentColor" />
+                                                )}
+                                                停止
+                                            </button>
                                         )}
-                                        {t('execute')}
-                                    </button>
+                                    </div>
                                 </div>
                                 {scriptTabs.length > 0 && (
                                     <div className="shrink-0 flex items-end gap-0.5 px-2 pt-1 pb-0 border-b border-stone-700 bg-[#252526] overflow-x-auto">

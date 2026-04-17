@@ -124,31 +124,61 @@ function extractChromiumTarGz(tarGzPath: string, destDir: string): boolean {
  *   2. 项目根 node_modules/playwright-core/browsers.json（dev 模式）
  */
 function getExpectedChromiumRevision(): string | null {
+  const all = getAllExpectedChromiumRevisions();
+  return all.length > 0 ? all[0] : null;
+}
+
+/**
+ * 收集运行时所有"可能被加载的 playwright-core 期望的 chromium revision"。
+ *
+ * 防御性地枚举：
+ *   - 内置 playwright 同级 node_modules/playwright-core/browsers.json（权威）
+ *   - 项目根 node_modules/playwright-core/browsers.json（dev 模式）
+ *   - 用户 agent-browser 中的 playwright-core（含 .pnpm/playwright-core@*）
+ *   - 用户 $HOME/node_modules/playwright-core（用户曾经全局安装过）
+ *
+ * 这样 ensureBrowserVersionCompatibility 可以为每个期望的 chromium-XXXX
+ * 都在 browsers 目录下建 symlink 指向实际存在的那一份浏览器，
+ * 避免子进程加载到异版本 playwright 时找不到浏览器可执行文件。
+ */
+function getAllExpectedChromiumRevisions(): string[] {
   const moduleDir = getBuiltinPlaywrightModuleDir();
-  const candidates: string[] = [];
+  const revisions = new Set<string>();
 
-  if (moduleDir) {
-    // playwright-core 通常在 playwright 同级的 node_modules 中
-    candidates.push(
-      path.join(path.dirname(moduleDir), 'playwright-core', 'browsers.json'),
-    );
-  }
-  // dev 模式下也检查项目根 node_modules
-  if (!app.isPackaged) {
-    candidates.push(
-      path.join(app.getAppPath(), 'node_modules', 'playwright-core', 'browsers.json'),
-    );
-  }
-
-  for (const jsonPath of candidates) {
-    if (!safeExists(jsonPath)) continue;
+  const addFromJson = (jsonPath: string) => {
+    if (!safeExists(jsonPath)) return;
     const data = safeReadJson(jsonPath);
-    if (!data) continue;
+    if (!data) return;
     const browsers = data.browsers as Array<{ name: string; revision: string }> | undefined;
     const chromiumEntry = browsers?.find((b) => b.name === 'chromium');
-    if (chromiumEntry?.revision) return chromiumEntry.revision;
+    if (chromiumEntry?.revision) revisions.add(chromiumEntry.revision);
+  };
+
+  if (moduleDir) {
+    addFromJson(path.join(path.dirname(moduleDir), 'playwright-core', 'browsers.json'));
   }
-  return null;
+
+  if (!app.isPackaged) {
+    addFromJson(path.join(app.getAppPath(), 'node_modules', 'playwright-core', 'browsers.json'));
+  }
+
+  // 用户 agent-browser
+  addFromJson(path.join(AGENT_BROWSER_SKILL_DIR, 'node_modules', 'playwright-core', 'browsers.json'));
+  // agent-browser 使用 pnpm 布局时 playwright-core 会在 .pnpm 下
+  try {
+    const pnpmDir = path.join(AGENT_BROWSER_SKILL_DIR, 'node_modules', '.pnpm');
+    for (const sub of safeReaddir(pnpmDir)) {
+      if (!/^playwright-core@/.test(sub)) continue;
+      addFromJson(path.join(pnpmDir, sub, 'node_modules', 'playwright-core', 'browsers.json'));
+    }
+  } catch { /* ignore */ }
+
+  // 用户 HOME/node_modules（Node 向上查找兜底会命中这里）
+  try {
+    addFromJson(path.join(os.homedir(), 'node_modules', 'playwright-core', 'browsers.json'));
+  } catch { /* ignore */ }
+
+  return Array.from(revisions);
 }
 
 /**
@@ -162,48 +192,50 @@ function getExpectedChromiumRevision(): string | null {
  */
 function ensureBrowserVersionCompatibility(browsersDir: string): void {
   try {
-    const expectedRevision = getExpectedChromiumRevision();
-    if (!expectedRevision) return;
+    const expectedRevisions = getAllExpectedChromiumRevisions();
+    if (expectedRevisions.length === 0) return;
 
     const entries = safeReaddir(browsersDir);
     if (entries.length === 0) return;
 
-    // 处理 chromium-XXXX（完整浏览器）
+    // 实际存在的 chromium-XXXX、headless、ffmpeg 目录
     const chromiumDirs = entries.filter((d) => /^chromium-\d+$/.test(d)).sort();
-    const expectedChromium = `chromium-${expectedRevision}`;
-    if (chromiumDirs.length > 0 && !chromiumDirs.includes(expectedChromium)) {
-      const newest = chromiumDirs[chromiumDirs.length - 1];
-      const linkPath = path.join(browsersDir, expectedChromium);
-      const targetPath = path.join(browsersDir, newest);
-      if (ensureSymlink(linkPath, targetPath)) {
-        console.log(`${LOG_TAG} 浏览器兼容 symlink: ${expectedChromium} → ${newest}`);
-      }
-    }
-
-    // 处理 chromium_headless_shell-XXXX
     const headlessDirs = entries.filter((d) => /^chromium_headless_shell-\d+$/.test(d)).sort();
-    const expectedHeadless = `chromium_headless_shell-${expectedRevision}`;
-    if (headlessDirs.length > 0 && !headlessDirs.includes(expectedHeadless)) {
-      const newest = headlessDirs[headlessDirs.length - 1];
-      const linkPath = path.join(browsersDir, expectedHeadless);
-      const targetPath = path.join(browsersDir, newest);
-      if (ensureSymlink(linkPath, targetPath)) {
-        console.log(`${LOG_TAG} headless shell 兼容 symlink: ${expectedHeadless} → ${newest}`);
-      }
-    }
-
-    // 处理 ffmpeg-XXXX（播放视频所需）
     const ffmpegDirs = entries.filter((d) => /^ffmpeg-\d+$/.test(d)).sort();
-    // ffmpeg 的期望 revision 可能与 chromium 不同，但在 browsers.json 中有定义
-    // 这里我们只做"有任何 ffmpeg 但缺少期望版本"的兼容
-    if (ffmpegDirs.length > 0) {
-      const expectedFfmpeg = `ffmpeg-${expectedRevision}`;
-      if (!ffmpegDirs.includes(expectedFfmpeg)) {
-        const newest = ffmpegDirs[ffmpegDirs.length - 1];
-        const linkPath = path.join(browsersDir, expectedFfmpeg);
-        const targetPath = path.join(browsersDir, newest);
-        // ffmpeg 的 revision 可能不同，只在目标不存在时创建
-        if (!safeExists(linkPath)) {
+
+    const newestChromium = chromiumDirs[chromiumDirs.length - 1];
+    const newestHeadless = headlessDirs[headlessDirs.length - 1];
+    const newestFfmpeg = ffmpegDirs[ffmpegDirs.length - 1];
+
+    for (const rev of expectedRevisions) {
+      // chromium-XXXX
+      if (newestChromium) {
+        const expected = `chromium-${rev}`;
+        if (!chromiumDirs.includes(expected)) {
+          const linkPath = path.join(browsersDir, expected);
+          const targetPath = path.join(browsersDir, newestChromium);
+          if (ensureSymlink(linkPath, targetPath)) {
+            console.log(`${LOG_TAG} 浏览器兼容 symlink: ${expected} → ${newestChromium}`);
+          }
+        }
+      }
+      // chromium_headless_shell-XXXX
+      if (newestHeadless) {
+        const expected = `chromium_headless_shell-${rev}`;
+        if (!headlessDirs.includes(expected)) {
+          const linkPath = path.join(browsersDir, expected);
+          const targetPath = path.join(browsersDir, newestHeadless);
+          if (ensureSymlink(linkPath, targetPath)) {
+            console.log(`${LOG_TAG} headless shell 兼容 symlink: ${expected} → ${newestHeadless}`);
+          }
+        }
+      }
+      // ffmpeg-XXXX
+      if (newestFfmpeg) {
+        const expected = `ffmpeg-${rev}`;
+        if (!ffmpegDirs.includes(expected) && !safeExists(path.join(browsersDir, expected))) {
+          const linkPath = path.join(browsersDir, expected);
+          const targetPath = path.join(browsersDir, newestFfmpeg);
           ensureSymlink(linkPath, targetPath);
         }
       }

@@ -23,6 +23,7 @@ import { runProjectQualityCheck } from './utils/ProjectQualityCheck'
 import { resolveShellPath, validateShellPath, getShellCandidates, resolveShellForCommand } from './utils/ShellResolver'
 import { getCommonPackageManagerPaths } from './utils/PathUtils'
 import https from 'node:https'
+import http from 'node:http'
 import { ResourceUpdater } from './updater/ResourceUpdater'
 import { prepareMacDmgInstallFromPath, spawnMacReplaceScript } from './updater/macDmgReplaceInstall'
 import { PlaywrightManager } from './utils/PlaywrightManager'
@@ -351,6 +352,158 @@ function killChromeForTestingSync() {
     const err = e as { status?: number };
     // pkill exit code 1 = no matching processes, which is fine
     if (err.status !== 1) throw e;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RPA Persistent Chrome for Testing
+// ───────────────────────────────────────────────────────────────────────────────
+// 目标：点击「执行」自动化时，若本机已有一个由 Electron 主进程启动的
+// Chrome for Testing 实例，则让 RPA 脚本通过 CDP 复用它（打开新 tab）；
+// 否则主进程启动一个 Chrome for Testing 实例并持续保活，供后续复用。
+//
+// 设计要点：
+// 1. 主进程用 child_process.spawn 启动 Chrome for Testing 可执行文件，
+//    附加 --remote-debugging-port=<port> --user-data-dir=<固定 profile 目录>
+// 2. 使用固定的 user-data-dir 保留登录态和历史记录。
+// 3. 进程保活：Electron 运行期间保持，app quit 时由已有 killChromeForTestingSync 统一清理。
+// 4. 脚本端：通过注入 prelude 将 `chromium.launch()` 改写为 `chromium.connectOverCDP()`，
+//    `browser.close()` 降级为"只关闭本次脚本新开的 tab/context"，保证用户浏览器不被误杀。
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** 供 RPA 复用的 Chrome for Testing 的 CDP 远程调试端口 */
+const RPA_CDP_PORT = 9333;
+
+/** 主进程持有的 Chrome for Testing 子进程句柄（用于健康检查） */
+let rpaChromeChild: ReturnType<typeof cpSpawn> | null = null;
+
+/** RPA Chrome 固定的 user-data-dir，保留登录态 */
+function getRpaChromeUserDataDir(): string {
+  return path.join(app.getPath('userData'), 'rpa-chrome-profile');
+}
+
+/**
+ * 解析应用内置 Chrome for Testing 可执行文件的绝对路径。
+ * 依赖 `getBuiltinPlaywrightBrowsersPath()` 返回的 browsers 目录，
+ * 在其中找形如 `chromium-<rev>/chrome-mac-arm64/Google Chrome for Testing.app/...`
+ */
+function resolveChromeForTestingExecutable(): string | null {
+  const { getBuiltinPlaywrightBrowsersPath } = require('./utils/PlaywrightPath') as typeof import('./utils/PlaywrightPath');
+  const browsersDir = getBuiltinPlaywrightBrowsersPath();
+  if (!browsersDir) return null;
+
+  let entries: string[] = [];
+  try { entries = fs.readdirSync(browsersDir); } catch { return null; }
+  const chromiumDirs = entries
+    .filter((d) => /^chromium-\d+$/.test(d))
+    .map((d) => path.join(browsersDir, d))
+    .filter((d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
+  if (chromiumDirs.length === 0) return null;
+
+  // 各平台的可执行路径
+  const relCandidates = (): string[] => {
+    if (process.platform === 'darwin') {
+      return [
+        'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+        'chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+        'chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+      ];
+    }
+    if (process.platform === 'win32') {
+      return [
+        'chrome-win/chrome.exe',
+        'chrome-win64/chrome.exe',
+      ];
+    }
+    return [
+      'chrome-linux/chrome',
+      'chrome-linux64/chrome',
+    ];
+  };
+
+  for (const dir of chromiumDirs) {
+    for (const rel of relCandidates()) {
+      const full = path.join(dir, rel);
+      try { if (fs.existsSync(full)) return full; } catch { /* ignore */ }
+    }
+  }
+  return null;
+}
+
+/** 通过 /json/version 探测端口是否有可连接的 CDP 实例（返回 true 表示存在） */
+function probeRpaCdpAlive(): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const req = http.get(
+        { host: '127.0.0.1', port: RPA_CDP_PORT, path: '/json/version', timeout: 800 },
+        (res) => {
+          let body = '';
+          res.on('data', (c: Buffer) => { body += c.toString(); });
+          res.on('end', () => {
+            try {
+              const data = JSON.parse(body);
+              resolve(Boolean(data && data.webSocketDebuggerUrl));
+            } catch { resolve(false); }
+          });
+        },
+      );
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => { try { req.destroy(); } catch { /* ignore */ } resolve(false); });
+    } catch { resolve(false); }
+  });
+}
+
+/**
+ * 确保用于 RPA 复用的 Chrome for Testing 正在运行。
+ * - 若 CDP 端口已可连通 → 立即返回（认定为存活，可能是上次主进程保留的）
+ * - 否则启动内置 Chrome for Testing，等待 CDP 端口就绪后再返回
+ * - 若无法定位可执行文件或启动失败 → 返回 false（脚本仍可按原路径执行）
+ */
+async function ensureRpaChromeRunning(): Promise<boolean> {
+  // 已存活则直接用
+  if (await probeRpaCdpAlive()) return true;
+
+  const exe = resolveChromeForTestingExecutable();
+  if (!exe) {
+    console.warn('[RPA-Chrome] 未找到内置 Chrome for Testing，浏览器复用功能不可用');
+    return false;
+  }
+
+  const userDataDir = getRpaChromeUserDataDir();
+  try { fs.mkdirSync(userDataDir, { recursive: true }); } catch { /* ignore */ }
+
+  const args = [
+    `--remote-debugging-port=${RPA_CDP_PORT}`,
+    `--user-data-dir=${userDataDir}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-session-crashed-bubble',
+    '--disable-infobars',
+    '--start-maximized',
+  ];
+
+  try {
+    console.log('[RPA-Chrome] 启动 Chrome for Testing:', exe, args.join(' '));
+    rpaChromeChild = cpSpawn(exe, args, {
+      detached: false,
+      stdio: 'ignore',
+      env: process.env,
+    });
+    rpaChromeChild.on('exit', (code, signal) => {
+      console.log(`[RPA-Chrome] Chrome for Testing exited (code=${code}, signal=${signal})`);
+      rpaChromeChild = null;
+    });
+    // 轮询等待 CDP 就绪（最多 10 秒）
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if (await probeRpaCdpAlive()) return true;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    console.warn('[RPA-Chrome] CDP 端口在超时时间内未就绪');
+    return false;
+  } catch (err) {
+    console.warn('[RPA-Chrome] 启动失败:', err instanceof Error ? err.message : err);
+    return false;
   }
 }
 
@@ -2969,6 +3122,8 @@ ipcMain.handle('rpa:task:delete', (_, projectId: string, taskId: string) => {
 /** 执行完成后默认等待时长（毫秒），然后关闭 Playwright 浏览器再标记完成 */
 const RPA_POST_EXECUTE_WAIT_MS = 10_000;
 
+// 注：RPA_CDP_PORT 已在文件前部（RPA Persistent Chrome for Testing 段落）声明
+
 /**
  * 当 RPA 脚本因缺少文件（如 ENOENT + .json）失败时，在错误信息后追加友好提示。
  */
@@ -2985,15 +3140,247 @@ function enhanceRpaMissingFileError(rawError: string): string {
 }
 
 /**
- * 对 .js 脚本注入：执行完成后等待 RPA_POST_EXECUTE_WAIT_MS，再关闭 context/browser，避免浏览器常驻。
- * 若脚本末尾为 })();（async IIFE），则链上 .then(等待).then(关闭).catch(退出)。
+ * 构造注入到 RPA 脚本顶部的"浏览器复用"Prelude。
+ *
+ * 功能：
+ * 1. Monkey-patch `require('playwright').chromium.launch`：
+ *    - 若本机 127.0.0.1:<port> 已有 Chrome for Testing 在监听（上次脚本留下的 --remote-debugging-port）
+ *      → 走 `chromium.connectOverCDP`，复用该浏览器，后续 `browser.newPage()` 会在现有窗口开新 tab
+ *    - 否则按原逻辑启动新的 Chrome for Testing，但强制附加 --remote-debugging-port=<port>
+ *      以便下次执行时可以被复用
+ * 2. 复用模式下，将 `browser.close()` 降级为"只断开连接、不杀进程"，
+ *    再配合 auto-close snippet 的 `context.close()` 只关闭本次新开的 tab/context，
+ *    保证用户已登录的 Chrome 会话不被清理。
+ */
+function buildChromeReusePrelude(port: number): string {
+  return `
+// ==== RPA_CHROME_REUSE_PRELUDE (injected) ====
+try {
+  const __rpa_path = require('path');
+  const __rpa_Module = require('module');
+  // 优先通过环境变量指定的绝对路径加载内置 playwright，避免因 Node 的
+  // 向上 node_modules 查找把用户全局 ~/node_modules 下的异版本 playwright
+  // 解析进来（例如 1.59.1 期望 chromium-1217，而内置只有 1208）
+  const __rpa_forcedPwDir = process.env.__RPA_PLAYWRIGHT_DIR || '';
+  const __rpa_loadBuiltinPlaywright = () => {
+    if (!__rpa_forcedPwDir) return null;
+    try {
+      const pwEntry = require.resolve(__rpa_forcedPwDir);
+      const mod = require(pwEntry);
+      // 把 'playwright' 这个裸模块标识符的 require.cache 预填充，
+      // 让后续用户脚本 require('playwright') 也走到这份内置版本
+      try {
+        const cache = require.cache;
+        if (cache) {
+          cache[pwEntry] = cache[pwEntry] || { id: pwEntry, filename: pwEntry, loaded: true, exports: mod, children: [], paths: [] };
+        }
+      } catch (_) {}
+      // 劫持 Module._resolveFilename：遇到 'playwright' / 'playwright-core' 时
+      // 返回内置路径，绕过 Node 默认的路径解析
+      try {
+        const origResolve = __rpa_Module._resolveFilename;
+        __rpa_Module._resolveFilename = function (request, parent, ...rest) {
+          if (request === 'playwright' || request === 'playwright/') return pwEntry;
+          if (request === 'playwright-core' || request === 'playwright-core/') {
+            try {
+              const coreEntry = require.resolve('playwright-core', { paths: [__rpa_path.join(__rpa_forcedPwDir, '..')] });
+              return coreEntry;
+            } catch (_) { /* fallthrough */ }
+          }
+          return origResolve.call(this, request, parent, ...rest);
+        };
+      } catch (_) {}
+      return mod;
+    } catch (e) {
+      console.warn('[RPA] 加载内置 playwright 失败（将回退到默认解析）:', (e && e.message) || e);
+      return null;
+    }
+  };
+  const __rpa_pw = __rpa_loadBuiltinPlaywright() || require('playwright');
+  try {
+    const __rpa_pwPkg = (() => { try { return require.resolve('playwright/package.json', { paths: __rpa_forcedPwDir ? [__rpa_path.join(__rpa_forcedPwDir, '..')] : undefined }); } catch (_) { return null; } })();
+    console.log('[RPA] 已加载 playwright：forcedDir=' + (__rpa_forcedPwDir || '(未设置)') + '，pkg=' + (__rpa_pwPkg || '?'));
+  } catch (_) {}
+  const __rpa_chromium = __rpa_pw && __rpa_pw.chromium;
+  const __rpa_http = require('http');
+  const __RPA_CDP_PORT = ${port};
+  if (__rpa_chromium && typeof __rpa_chromium.launch === 'function' && !__rpa_chromium.__rpaReuseHooked) {
+    const __rpa_origLaunch = __rpa_chromium.launch.bind(__rpa_chromium);
+    const __rpaProbeCdp = (p) => new Promise((resolve) => {
+      try {
+        const req = __rpa_http.get({ host: '127.0.0.1', port: p, path: '/json/version', timeout: 1000 }, (res) => {
+          let data = '';
+          res.on('data', (c) => { data += c; });
+          res.on('end', () => { try { const v = JSON.parse(data); resolve(v && v.webSocketDebuggerUrl ? v : null); } catch (_) { resolve(null); } });
+        });
+        req.on('error', () => resolve(null));
+        req.on('timeout', () => { try { req.destroy(); } catch (_) {} resolve(null); });
+      } catch (_) { resolve(null); }
+    });
+    __rpa_chromium.launch = async function(opts) {
+      const options = Object.assign({}, opts || {});
+      const info = await __rpaProbeCdp(__RPA_CDP_PORT);
+      if (info && info.webSocketDebuggerUrl) {
+        console.log('[RPA] 检测到已运行的 Chrome for Testing（CDP ' + __RPA_CDP_PORT + '），复用现有浏览器并打开新 tab');
+        const browser = await __rpa_chromium.connectOverCDP('http://127.0.0.1:' + __RPA_CDP_PORT);
+        browser.__rpaReused = true;
+        const __ownCtxs = new Set();
+        const __ownPages = new Set();
+        const __origNewContext = browser.newContext.bind(browser);
+        // 将某个已有 context 包装为"共享 context 代理"：
+        //   - newPage()：在同窗口开新 tab（记入 __ownPages，供 close 时清理）
+        //   - close()：仅关闭本次脚本新开的 tab，不关闭整个 context（保留用户登录态）
+        //   - 其他方法（cookies/route/addInitScript 等）直接透传到真实 context
+        const __wrapSharedContext = (realCtx) => {
+          if (!realCtx) return realCtx;
+          if (realCtx.__rpaShared) return realCtx;
+          const origNewPage = realCtx.newPage.bind(realCtx);
+          const proxy = new Proxy(realCtx, {
+            get(target, prop) {
+              if (prop === '__rpaShared') return true;
+              if (prop === 'newPage') {
+                return async function(o) {
+                  const page = await origNewPage(o);
+                  if (o && o.viewport) { try { await page.setViewportSize(o.viewport); } catch (_) {} }
+                  __ownPages.add(page);
+                  return page;
+                };
+              }
+              if (prop === 'close') {
+                return async function() {
+                  for (const p of __ownPages) { try { await p.close(); } catch (_) {} }
+                  __ownPages.clear();
+                  // 注意：不真正关闭 context，保留用户默认 context
+                };
+              }
+              const v = target[prop];
+              return typeof v === 'function' ? v.bind(target) : v;
+            },
+          });
+          return proxy;
+        };
+        // 判断 options 是否要求"强隔离"（需要独立登录态/代理等）
+        // 这种情况下才真的创建一个新 BrowserContext，否则默认复用已有 context 在同窗口开 tab。
+        const __needsIsolation = (o) => {
+          if (!o || typeof o !== 'object') return false;
+          if (o.__rpaForceNewContext === true) return true;
+          // 下列字段一旦出现，说明脚本期望独立的隔离环境
+          if (o.storageState || o.proxy || o.httpCredentials || o.extraHTTPHeaders) return true;
+          if (o.geolocation || o.permissions || o.locale || o.timezoneId) return true;
+          return false;
+        };
+        browser.newContext = async function(o) {
+          if (__needsIsolation(o)) {
+            const ctx = await __origNewContext(o);
+            __ownCtxs.add(ctx);
+            return ctx;
+          }
+          // 默认：复用已有默认 context，让后续 newPage() 开同窗口新 tab
+          try {
+            const ctxs = browser.contexts();
+            if (ctxs && ctxs.length > 0) {
+              return __wrapSharedContext(ctxs[0]);
+            }
+          } catch (_) {}
+          // 兜底：如果没有已有 context（极少见），才真的建新的
+          const ctx = await __origNewContext(o);
+          __ownCtxs.add(ctx);
+          return ctx;
+        };
+        const __origNewPage = browser.newPage ? browser.newPage.bind(browser) : null;
+        browser.newPage = async function(o) {
+          // 优先在用户已有的默认 context 中开新 tab，保留登录态
+          try {
+            const ctxs = browser.contexts();
+            if (ctxs && ctxs.length > 0) {
+              const page = await ctxs[0].newPage();
+              if (o && o.viewport) { try { await page.setViewportSize(o.viewport); } catch (_) {} }
+              __ownPages.add(page);
+              return page;
+            }
+          } catch (_) {}
+          if (__origNewPage) {
+            const p = await __origNewPage(o);
+            __ownPages.add(p);
+            return p;
+          }
+          const ctx = await __origNewContext(o || {});
+          __ownCtxs.add(ctx);
+          const p = await ctx.newPage();
+          __ownPages.add(p);
+          return p;
+        };
+        browser.close = async function() {
+          // 仅关闭本次脚本显式创建的 context 与打开的 tab，保留用户已有 tabs
+          for (const p of __ownPages) { try { await p.close(); } catch (_) {} }
+          __ownPages.clear();
+          for (const c of __ownCtxs) { try { await c.close(); } catch (_) {} }
+          __ownCtxs.clear();
+          // 断开 CDP 连接，但不杀掉浏览器进程
+          try {
+            if (typeof browser.disconnect === 'function') {
+              await browser.disconnect();
+            }
+          } catch (_) {}
+          // 不调用底层 close() —— 否则会关闭用户浏览器
+        };
+        return browser;
+      }
+      // 未检测到已运行实例：在 args 中注入 --remote-debugging-port，让本次启动的浏览器
+      // 保留 CDP 端口，供下一次脚本复用
+      const args = Array.isArray(options.args) ? options.args.slice() : [];
+      const hasPortArg = args.some((a) => typeof a === 'string' && a.indexOf('--remote-debugging-port') === 0);
+      if (!hasPortArg) args.push('--remote-debugging-port=' + __RPA_CDP_PORT);
+      options.args = args;
+      console.log('[RPA] 未检测到已运行浏览器，启动新的 Chrome for Testing（CDP ' + __RPA_CDP_PORT + '，后续执行可复用）');
+      const freshBrowser = await __rpa_origLaunch(options);
+      // 将 close() 改为：仅关闭本次创建的 context/tab，保留浏览器进程存活，
+      // 这样下一次脚本点击"执行"时可通过 CDP 探测到并复用。
+      const __ownCtxsFresh = new Set();
+      const __origNewContextFresh = freshBrowser.newContext.bind(freshBrowser);
+      freshBrowser.newContext = async function(o) {
+        const ctx = await __origNewContextFresh(o);
+        __ownCtxsFresh.add(ctx);
+        return ctx;
+      };
+      freshBrowser.close = async function() {
+        for (const c of __ownCtxsFresh) { try { await c.close(); } catch (_) {} }
+        __ownCtxsFresh.clear();
+        // 故意不真正关闭浏览器：保留进程以便下次脚本复用
+      };
+      return freshBrowser;
+    };
+    __rpa_chromium.__rpaReuseHooked = true;
+  }
+} catch (__rpa_err) {
+  console.warn('[RPA] 浏览器复用 prelude 注入失败:', (__rpa_err && __rpa_err.message) || __rpa_err);
+}
+// ==== /RPA_CHROME_REUSE_PRELUDE ====
+`;
+}
+
+/**
+ * 对 .js 脚本注入：
+ *   1) 顶部注入浏览器复用 Prelude（buildChromeReusePrelude）
+ *   2) 执行完成后等待 RPA_POST_EXECUTE_WAIT_MS，再关闭 context/browser，避免浏览器常驻。
+ *      若脚本末尾为 })();（async IIFE），则链上 .then(等待).then(关闭).catch(退出)。
  */
 function injectRpaAutoClose(scriptContent: string, waitMs: number): string {
-  if (scriptContent.includes('RPA_AUTO_CLOSE_AFTER')) return scriptContent;
-  // 必须保留 })() 里的调用括号，让 IIFE 执行后返回 Promise，再链 .then；否则 .then 会挂在函数对象上导致 .then is not a function
-  const closeSnippet = `})().then(() => { console.log('\\n__RPA_SCRIPT_DONE__\\n'); return new Promise(r => setTimeout(r, ${waitMs})); }).then(async () => { try { if (typeof context !== 'undefined' && context.close) await context.close(); } catch(e){} try { if (typeof browser !== 'undefined' && browser.close) await browser.close(); } catch(e){} }).catch(e => { console.error(e); process.exit(1); });`;
-  const replaced = scriptContent.replace(/\}\s*\)\s*\(\s*\)\s*;\s*$/, closeSnippet);
-  return replaced !== scriptContent ? replaced : scriptContent;
+  let result = scriptContent;
+
+  // 1) 注入复用 Prelude（幂等）
+  if (!/RPA_CHROME_REUSE_PRELUDE/.test(result)) {
+    result = buildChromeReusePrelude(RPA_CDP_PORT) + '\n' + result;
+  }
+
+  // 2) 注入 auto-close（幂等）
+  if (!result.includes('RPA_AUTO_CLOSE_AFTER')) {
+    // 必须保留 })() 里的调用括号，让 IIFE 执行后返回 Promise，再链 .then；否则 .then 会挂在函数对象上导致 .then is not a function
+    const closeSnippet = `})().then(() => { console.log('\\n__RPA_SCRIPT_DONE__\\n'); return new Promise(r => setTimeout(r, ${waitMs})); }).then(async () => { /* RPA_AUTO_CLOSE_AFTER */ try { if (typeof context !== 'undefined' && context && context.close) await context.close(); } catch(e){} try { if (typeof browser !== 'undefined' && browser && browser.close) await browser.close(); } catch(e){} }).catch(e => { console.error(e); process.exit(1); });`;
+    result = result.replace(/\}\s*\)\s*\(\s*\)\s*;\s*$/, closeSnippet);
+  }
+
+  return result;
 }
 
 /** 执行 RPA Playwright 脚本：.js 使用内置 Node；.py 使用系统 Python 3（执行前检测，缺失时提示安装） */
@@ -3006,6 +3393,17 @@ function sendRunOutput(sender: Electron.WebContents, runId: string | undefined, 
   sender.send(event, payload);
 }
 
+/**
+ * 记录正在执行的 RPA 脚本子进程，供“停止”按钮随时终止。
+ * key: runId；value: { child, stoppedByUser, cleanup(可选：删除临时脚本文件) }
+ * 仅终止脚本进程本身，不杀共享的 Chrome for Testing（否则登录态丢失、后续点击执行需重新拉起）。
+ * 脚本进程被 kill 后，通过 connectOverCDP 新开的 tab 会因断开而由 Chrome 自行保留或关闭，对用户浏览器无影响。
+ */
+const rpaRunningScripts = new Map<string, {
+  child: ReturnType<typeof cpSpawn>;
+  stoppedByUser: boolean;
+}>();
+
 ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: string) => {
   const sender = event.sender;
   try {
@@ -3014,14 +3412,31 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
     }
 
     // 只要会打开浏览器或本地应用就缩小到右下角：有头 Playwright（headless:false 或 .launch 且未显式 headless:true）
+    let scriptUsesChromium = false;
     try {
       const scriptContent = fs.readFileSync(scriptPath, 'utf-8');
+      const launchesBrowser = /\bchromium\.launch\(|playwright.*\.launch\s*\(/.test(scriptContent);
       const hasHeadedBrowser = /headless\s*:\s*false/.test(scriptContent) ||
-        (/\bchromium\.launch\(|playwright.*\.launch\s*\(/.test(scriptContent) && !/headless\s*:\s*true/.test(scriptContent));
+        (launchesBrowser && !/headless\s*:\s*true/.test(scriptContent));
+      scriptUsesChromium = launchesBrowser || /require\(['"]playwright['"]\)/.test(scriptContent);
       if (hasHeadedBrowser) {
         shrinkMainWindowToBottomRight();
       }
     } catch { /* ignore read error */ }
+
+    // 提前确保共享的 Chrome for Testing 已启动（CDP 可连通），
+    // 随后注入到脚本顶部的 prelude 会通过 connectOverCDP 复用它：
+    // 首次点击"执行"会启动一个 Chrome for Testing，后续点击直接复用并开新 tab。
+    if (scriptUsesChromium) {
+      try {
+        const ok = await ensureRpaChromeRunning();
+        if (!ok) {
+          console.warn('[RPA-Chrome] 共享 Chrome for Testing 未就绪，脚本将退化为各自启动新的浏览器');
+        }
+      } catch (e) {
+        console.warn('[RPA-Chrome] ensureRpaChromeRunning 抛错:', e instanceof Error ? e.message : e);
+      }
+    }
 
     sendRunOutput(sender, runId, 'rpa:run:start', { runId, scriptPath });
 
@@ -3066,11 +3481,30 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
       if (nodePathEnv) {
         rpaChildEnv.NODE_PATH = nodePathEnv;
       }
+      // 将内置 playwright 包目录以环境变量形式传给子进程，prelude 会强制通过
+      // 绝对路径 require，避免 Node 向上查找 node_modules 误命中异版本 playwright
+      // （如 ~/node_modules/playwright@1.59.1，期望 chromium-1217 但内置只有 1208）
+      try {
+        const { getBuiltinPlaywrightModuleDir } = require('./utils/PlaywrightPath') as typeof import('./utils/PlaywrightPath');
+        const builtinPwModuleDir = getBuiltinPlaywrightModuleDir();
+        if (builtinPwModuleDir) {
+          rpaChildEnv.__RPA_PLAYWRIGHT_DIR = builtinPwModuleDir;
+          console.log('[RPA] 为子进程注入 __RPA_PLAYWRIGHT_DIR =', builtinPwModuleDir);
+        } else {
+          console.warn('[RPA] 未能解析内置 playwright 模块目录，子进程可能加载到错误版本的 playwright');
+        }
+      } catch (e) {
+        console.warn('[RPA] 注入 __RPA_PLAYWRIGHT_DIR 失败：', e instanceof Error ? e.message : e);
+      }
       const child = cpSpawn(nodePath, [path.basename(scriptToRun)], {
         cwd: scriptDir,
         env: rpaChildEnv,
         stdio: ['ignore', 'pipe', 'pipe']
       });
+      if (runId) {
+        rpaRunningScripts.set(runId, { child, stoppedByUser: false });
+        child.on('close', () => { rpaRunningScripts.delete(runId); });
+      }
       if (useTmp) {
         const tmpFile = scriptToRun;
         const cleanup = () => { try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch {} };
@@ -3101,9 +3535,13 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
         sendRunOutput(sender, runId, 'rpa:run:output', { runId, data: s, stream: 'stderr' });
       });
       return new Promise<{ success: boolean; error?: string; stdout?: string; stderr?: string }>((resolve) => {
-        child.on('close', (code) => {
-          const success = code === 0;
-          const error = !success ? enhanceRpaMissingFileError(stderr || stdout || `Exit code ${code}`) : undefined;
+        child.on('close', (code, signal) => {
+          const entry = runId ? rpaRunningScripts.get(runId) : undefined;
+          const stoppedByUser = !!entry?.stoppedByUser;
+          const success = !stoppedByUser && code === 0;
+          const error = stoppedByUser
+            ? '已手动停止执行'
+            : (!success ? enhanceRpaMissingFileError(stderr || stdout || `Exit code ${code}${signal ? `, signal ${signal}` : ''}`) : undefined);
           sendRunEndIfNeeded(success, error);
           if (!success) {
             resolve({ success: false, error, stdout, stderr });
@@ -3135,6 +3573,10 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
         cwd: scriptDir,
         stdio: ['ignore', 'pipe', 'pipe']
       });
+      if (runId) {
+        rpaRunningScripts.set(runId, { child, stoppedByUser: false });
+        child.on('close', () => { rpaRunningScripts.delete(runId); });
+      }
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d) => {
@@ -3148,9 +3590,13 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
         sendRunOutput(sender, runId, 'rpa:run:output', { runId, data: s, stream: 'stderr' });
       });
       return new Promise<{ success: boolean; error?: string; stdout?: string; stderr?: string }>((resolve) => {
-        child.on('close', (code) => {
-          const success = code === 0;
-          const error = !success ? enhanceRpaMissingFileError(stderr || stdout || `Exit code ${code}`) : undefined;
+        child.on('close', (code, signal) => {
+          const entry = runId ? rpaRunningScripts.get(runId) : undefined;
+          const stoppedByUser = !!entry?.stoppedByUser;
+          const success = !stoppedByUser && code === 0;
+          const error = stoppedByUser
+            ? '已手动停止执行'
+            : (!success ? enhanceRpaMissingFileError(stderr || stdout || `Exit code ${code}${signal ? `, signal ${signal}` : ''}`) : undefined);
           sendRunOutput(sender, runId, 'rpa:run:end', { runId, success, error, stdout, stderr });
           if (!success) {
             resolve({ success: false, error, stdout, stderr });
@@ -3171,6 +3617,46 @@ ipcMain.handle('rpa:execute-script', async (event, scriptPath: string, runId?: s
 
 ipcMain.handle('rpa:get-projects-path', () => {
   return rpaProjectStore.getDefaultRpaPath();
+});
+
+/**
+ * 停止正在执行的 RPA 脚本。
+ * - 仅终止脚本子进程（Node/Python），不杀共享的 Chrome for Testing（用户浏览器与登录态不受影响）。
+ * - 临时脚本文件（.rpa-exec-*.js）由 child 'close' 事件统一清理。
+ * - 恢复主窗口 AlwaysOnTop 状态（通过 rpa:run:end 统一处理）。
+ */
+ipcMain.handle('rpa:stop-script', async (_event, runId: string): Promise<{ success: boolean; error?: string }> => {
+  if (!runId) return { success: false, error: 'runId is required' };
+  const entry = rpaRunningScripts.get(runId);
+  if (!entry) return { success: false, error: '未找到正在执行的脚本（可能已结束）' };
+  entry.stoppedByUser = true;
+  const child = entry.child;
+  try {
+    if (child.pid) {
+      if (process.platform === 'win32') {
+        // Windows：用 taskkill 终止整棵进程树，防止 Node/Python 子孙残留
+        try {
+          cpSpawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+        } catch {
+          try { child.kill('SIGKILL'); } catch { /* ignore */ }
+        }
+      } else {
+        // Unix：先 SIGTERM 让脚本有机会走 finally（关闭新开 tab 等），2s 后强制 SIGKILL
+        try { child.kill('SIGTERM'); } catch { /* ignore */ }
+        setTimeout(() => {
+          try {
+            if (!child.killed && child.exitCode === null) {
+              child.kill('SIGKILL');
+            }
+          } catch { /* ignore */ }
+        }, 2000);
+      }
+    }
+    return { success: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: msg };
+  }
 });
 
 // ═══════════════════════════════════════

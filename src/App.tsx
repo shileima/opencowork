@@ -118,6 +118,8 @@ function App() {
   // 切换模式：先通知主进程清空并切换，再更新本地状态，确保新视图加载的是本模式的历史
   const handleModeSwitch = useCallback((newView: ViewType) => {
     if (isProcessing) return;
+    // 自动化执行中，禁止切换到其他模式
+    if (isRpaExecuting && newView !== 'automation') return;
     if (newView === activeView) return;
     // 1. 先通知主进程切换并清空（在 re-render 之前执行，避免旧视图的异步逻辑覆盖）
     window.ipcRenderer.invoke('app:set-active-view', newView);
@@ -131,7 +133,7 @@ function App() {
         console.warn('[App] session:auto-load on switch failed:', err);
       });
     }
-  }, [activeView, isProcessing]);
+  }, [activeView, isProcessing, isRpaExecuting]);
 
   // 从 localStorage 加载资源管理器隐藏状态；任务列表面板默认展示，不恢复隐藏状态
   useEffect(() => {
@@ -992,36 +994,36 @@ ${err}
           {/* Navigation Tabs */}
           <div
             className="flex items-center gap-0.5 bg-stone-100 dark:bg-zinc-800 rounded-lg p-0.5"
-            title={isProcessing ? '任务执行中，请等待完成后再切换模式' : undefined}
+            title={isProcessing ? '任务执行中，请等待完成后再切换模式' : (isRpaExecuting ? '自动化执行中，请等待完成后再切换模式' : undefined)}
           >
             <button
               onClick={() => handleModeSwitch('cowork')}
-              title={isProcessing ? '任务执行中，请等待完成后再切换模式' : t('cowork')}
-              disabled={isProcessing}
+              title={isProcessing ? '任务执行中，请等待完成后再切换模式' : (isRpaExecuting ? '自动化执行中，请等待完成后再切换模式' : t('cowork'))}
+              disabled={isProcessing || isRpaExecuting}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'cowork'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
-                } ${isProcessing && activeView !== 'cowork' ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}
+                } ${(isProcessing || isRpaExecuting) && activeView !== 'cowork' ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}
             >
               <Zap size={12} />
               <span className="max-[480px]:hidden">{t('cowork')}</span>
             </button>
             <button
               onClick={() => handleModeSwitch('project')}
-              title={isProcessing ? '任务执行中，请等待完成后再切换模式' : t('project')}
-              disabled={isProcessing}
+              title={isProcessing ? '任务执行中，请等待完成后再切换模式' : (isRpaExecuting ? '自动化执行中，请等待完成后再切换模式' : t('project'))}
+              disabled={isProcessing || isRpaExecuting}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'project'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
-                } ${isProcessing && activeView !== 'project' ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}
+                } ${(isProcessing || isRpaExecuting) && activeView !== 'project' ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}
             >
               <FolderKanban size={12} />
               <span className="max-[480px]:hidden">{t('project')}</span>
             </button>
             <button
               onClick={() => handleModeSwitch('automation')}
-              title={isProcessing ? '任务执行中，请等待完成后再切换模式' : t('automation')}
-              disabled={isProcessing}
+              title={isProcessing ? '任务执行中，请等待完成后再切换模式' : (isRpaExecuting && activeView !== 'automation' ? '自动化执行中，请等待完成后再切换模式' : t('automation'))}
+              disabled={isProcessing || (isRpaExecuting && activeView !== 'automation')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap ${activeView === 'automation'
                 ? 'bg-white dark:bg-zinc-700 text-stone-800 dark:text-zinc-100 shadow-sm'
                 : 'text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-200'
@@ -1031,6 +1033,25 @@ ${err}
               <span className="max-[480px]:hidden">{t('automation')}</span>
             </button>
           </div>
+          {/* 顶栏停止按钮：仅在小窗（窄窗口/缩小到右下角）模式下显示。
+              - 宽屏时编辑器面板右上角已有自己的停止按钮，避免与之重复。
+              - 使用 opacity + pointer-events 过渡，保证从宽屏缩到小窗时淡入衔接自然。 */}
+          {activeView === 'automation' && (
+            <button
+              onClick={() => window.dispatchEvent(new Event('rpa:request-stop'))}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium bg-red-600 text-white shrink-0 transition-all duration-300 hover:bg-red-500 hover:shadow-[0_0_0_3px_rgba(239,68,68,0.25),0_0_16px_2px_rgba(239,68,68,0.55)] ${
+                isRpaExecuting && isNarrowWindow
+                  ? 'opacity-100 pointer-events-auto'
+                  : 'opacity-0 pointer-events-none w-0 p-0 overflow-hidden'
+              }`}
+              title="停止执行"
+              aria-hidden={!(isRpaExecuting && isNarrowWindow)}
+              tabIndex={isRpaExecuting && isNarrowWindow ? 0 : -1}
+            >
+              <Square size={10} fill="currentColor" />
+              <span className="max-[480px]:hidden">停止</span>
+            </button>
+          )}
           {/* SSO 用户信息 */}
           {ssoUser && !isNarrowWindow && (
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-stone-100 dark:bg-zinc-800 cursor-default">
