@@ -2345,7 +2345,7 @@ ipcMain.handle('project:open-folder', async (event, dirPath: string) => {
 // 新建项目：在 ~/Library/Application Support/qacowork/projects 下创建目录，从模板拷贝，重名则加后缀 -1、-2…
 ipcMain.handle('project:create-new', async (event, name: string) => {
   if (!name || typeof name !== 'string') return { success: false, error: 'Invalid project name' };
-  const sanitized = name.trim().replace(/[/\\:*?"<>|]/g, '-').replace(/-+/g, '-') || 'project';
+  const sanitized = name.trim().replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_+/, '') || 'project';
 
   // 模板路径：
   // - 开发环境：优先使用仓库内模板，避免本地热更新缓存覆盖最新代码

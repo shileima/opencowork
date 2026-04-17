@@ -125,6 +125,108 @@ async function waitForHttpReady(
     return false;
 }
 
+/** HTTP GET 获取页面完整响应体 */
+function httpGetBody(url: string, timeoutMs = 10000): Promise<{ status: number; body: string } | null> {
+    return new Promise((resolve) => {
+        const req = http.get(url, { timeout: timeoutMs }, (res) => {
+            const status = res.statusCode || 0;
+            let body = '';
+            res.setEncoding('utf-8');
+            res.on('data', (chunk) => { body += chunk; });
+            res.on('end', () => resolve({ status, body }));
+            res.on('error', () => resolve(null));
+        });
+        req.on('error', () => resolve(null));
+        req.on('timeout', () => {
+            req.destroy();
+            resolve(null);
+        });
+    });
+}
+
+interface ContentValidationResult {
+    ok: boolean;
+    status: number;
+    bodyLength: number;
+    hasHtmlTag: boolean;
+    hasRootOrApp: boolean;
+    hasScriptTag: boolean;
+    /** 当 ok=false 时提供简短诊断 */
+    diagnosis: string;
+    /** 截取前 500 字符用于日志 */
+    bodySnippet: string;
+}
+
+/**
+ * 验证开发服务器返回内容是否符合预期（类似 curl localhost:3000 检查）。
+ * 检查维度：
+ *   1. HTTP 状态码 < 400
+ *   2. 响应体非空
+ *   3. 包含 <html> / <!DOCTYPE
+ *   4. 包含 <div id="root"> 或 <div id="app"> （SPA 挂载点）
+ *   5. 包含 <script（Vite 注入的 JS）
+ * 同时尝试 127.0.0.1 和 localhost 两个地址。
+ */
+async function validateDevServerContent(
+    port: number,
+    options: { timeoutMs?: number; maxRetries?: number; intervalMs?: number } = {}
+): Promise<ContentValidationResult> {
+    const { timeoutMs = 10000, maxRetries = 3, intervalMs = 1000 } = options;
+    const hosts = ['127.0.0.1', 'localhost'];
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        for (const host of hosts) {
+            const url = `http://${host}:${port}/`;
+            const resp = await httpGetBody(url, timeoutMs);
+            if (!resp) continue;
+
+            const { status, body } = resp;
+            const bodyLower = body.toLowerCase();
+            const hasHtmlTag = bodyLower.includes('<html') || bodyLower.includes('<!doctype');
+            const hasRootOrApp = /id\s*=\s*["']?(root|app)["']?/i.test(body);
+            const hasScriptTag = bodyLower.includes('<script');
+            const bodyLength = body.length;
+            const bodySnippet = body.substring(0, 500);
+
+            const ok = status < 400 && bodyLength > 50 && hasHtmlTag && (hasRootOrApp || hasScriptTag);
+
+            let diagnosis = '';
+            if (status >= 400) {
+                diagnosis = `HTTP ${status} 错误`;
+            } else if (bodyLength === 0) {
+                diagnosis = '响应体为空';
+            } else if (bodyLength <= 50) {
+                diagnosis = `响应体过短（${bodyLength} 字节），可能不是有效 HTML`;
+            } else if (!hasHtmlTag) {
+                diagnosis = '响应不包含 <html> 标签，可能不是有效的 HTML 页面';
+            } else if (!hasRootOrApp && !hasScriptTag) {
+                diagnosis = '响应缺少 SPA 挂载点（<div id="root"> 或 <div id="app">）和 <script> 标签';
+            }
+            if (!diagnosis && ok) {
+                diagnosis = '页面内容验证通过';
+            }
+
+            // 只要拿到有效 HTTP 响应就返回结果（无论是否 ok），不再重试
+            return { ok, status, bodyLength, hasHtmlTag, hasRootOrApp, hasScriptTag, diagnosis, bodySnippet };
+        }
+        // 当前轮两个 host 都无法连接，等一下再重试
+        if (attempt < maxRetries - 1) {
+            await new Promise((r) => setTimeout(r, intervalMs));
+        }
+    }
+    // 所有尝试都失败（网络不通）
+    return {
+        ok: false,
+        status: 0,
+        bodyLength: 0,
+        hasHtmlTag: false,
+        hasRootOrApp: false,
+        hasScriptTag: false,
+        diagnosis: `无法连接 localhost:${port}，服务器可能未成功启动`,
+        bodySnippet: '',
+    };
+}
+
 export const ReadFileSchema = {
     name: "read_file",
     description: "Read the content of a file from the local filesystem. Use this to analyze code or documents.",
@@ -1133,6 +1235,18 @@ export class FileSystemTools {
                         console.warn(`[FileSystemTools] Dev server port ${PROJECT_DEV_PORT} HTTP did not respond in time, opening browser anyway.`);
                     }
                 }
+
+                // 内容级别验证：实际 GET 请求 localhost:PORT 并检查返回 HTML 是否符合预期
+                console.log(`[FileSystemTools] Validating dev server content on port ${PROJECT_DEV_PORT}...`);
+                const contentValidation = await validateDevServerContent(PROJECT_DEV_PORT, { maxRetries: 3, intervalMs: 1000 });
+                if (contentValidation.ok) {
+                    console.log(`[FileSystemTools] Dev server content validation PASSED: HTTP ${contentValidation.status}, ${contentValidation.bodyLength} bytes, hasRoot=${contentValidation.hasRootOrApp}, hasScript=${contentValidation.hasScriptTag}`);
+                } else {
+                    console.warn(`[FileSystemTools] Dev server content validation FAILED: ${contentValidation.diagnosis}`);
+                    if (contentValidation.bodySnippet) {
+                        console.warn(`[FileSystemTools] Response body snippet: ${contentValidation.bodySnippet}`);
+                    }
+                }
                 
                 // 检测收集到的错误
                 const allErrors = ErrorDetector.detectFromOutput(stdoutBuffer + stderrBuffer, workingDir);
@@ -1141,6 +1255,19 @@ export class FileSystemTools {
                 const url = `http://localhost:${PROJECT_DEV_PORT}`;
                 let result = `[Dev server started in background]\n\nCommand: ${runCommand}\nWorking directory: ${workingDir}\nNode.js: ${nodePath}\nnpm: ${npmPath || 'builtin'}\n\nPreview URL: ${url}\n\nThe development server is running on port ${PROJECT_DEV_PORT}. Use open_browser_preview with url=${url} and cwd="${workingDir}" for auto-fix to work.`;
                 
+                // 添加内容验证结果
+                if (contentValidation.ok) {
+                    result += `\n\n✅ Content validation passed: HTTP ${contentValidation.status}, ${contentValidation.bodyLength} bytes, page contains valid HTML with SPA mount point.`;
+                } else {
+                    result += `\n\n⚠️ Content validation warning: ${contentValidation.diagnosis}`;
+                    if (contentValidation.status > 0) {
+                        result += ` (HTTP ${contentValidation.status}, ${contentValidation.bodyLength} bytes)`;
+                    }
+                    if (contentValidation.bodySnippet) {
+                        result += `\nResponse preview:\n${contentValidation.bodySnippet}`;
+                    }
+                }
+
                 // 如果有错误，添加到结果中
                 if (uniqueErrors.length > 0) {
                     result += `\n\n⚠️ Detected ${uniqueErrors.length} error(s) during startup:\n`;
@@ -1184,8 +1311,34 @@ export class FileSystemTools {
                 console.log(`[FileSystemTools] Waiting for preview server to start on port ${PROJECT_PREVIEW_PORT}...`);
                 await waitForPortReady('127.0.0.1', PROJECT_PREVIEW_PORT, { maxWaitMs: 15000, intervalMs: 300 });
 
+                // 内容级别验证：实际 GET 请求 localhost:PORT 并检查返回 HTML 是否符合预期
+                console.log(`[FileSystemTools] Validating preview server content on port ${PROJECT_PREVIEW_PORT}...`);
+                const previewValidation = await validateDevServerContent(PROJECT_PREVIEW_PORT, { maxRetries: 3, intervalMs: 1000 });
+                if (previewValidation.ok) {
+                    console.log(`[FileSystemTools] Preview server content validation PASSED: HTTP ${previewValidation.status}, ${previewValidation.bodyLength} bytes`);
+                } else {
+                    console.warn(`[FileSystemTools] Preview server content validation FAILED: ${previewValidation.diagnosis}`);
+                    if (previewValidation.bodySnippet) {
+                        console.warn(`[FileSystemTools] Response body snippet: ${previewValidation.bodySnippet}`);
+                    }
+                }
+
                 const url = `http://localhost:${PROJECT_PREVIEW_PORT}`;
-                return `[Preview server started in background]\n\nCommand: ${command}\nWorking directory: ${workingDir}\n\nPreview URL: ${url}\n\nThe preview server is running on port ${PROJECT_PREVIEW_PORT}. Use open_browser_preview to display it in the built-in browser.`;
+                let previewResult = `[Preview server started in background]\n\nCommand: ${command}\nWorking directory: ${workingDir}\n\nPreview URL: ${url}\n\nThe preview server is running on port ${PROJECT_PREVIEW_PORT}. Use open_browser_preview to display it in the built-in browser.`;
+
+                if (previewValidation.ok) {
+                    previewResult += `\n\n✅ Content validation passed: HTTP ${previewValidation.status}, ${previewValidation.bodyLength} bytes, page contains valid HTML with SPA mount point.`;
+                } else {
+                    previewResult += `\n\n⚠️ Content validation warning: ${previewValidation.diagnosis}`;
+                    if (previewValidation.status > 0) {
+                        previewResult += ` (HTTP ${previewValidation.status}, ${previewValidation.bodyLength} bytes)`;
+                    }
+                    if (previewValidation.bodySnippet) {
+                        previewResult += `\nResponse preview:\n${previewValidation.bodySnippet}`;
+                    }
+                }
+
+                return previewResult;
             }
 
             if (Object.keys(playwrightEnv).length > 0) {

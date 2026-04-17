@@ -2,11 +2,11 @@ import { useState, useCallback } from 'react';
 import { X } from 'lucide-react';
 import { useI18n } from '../../i18n/I18nContext';
 
-/** 项目名称：英文开头，仅可包含英文、数字、下划线、横杠 */
-const PROJECT_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+/** 项目名称：英文开头，仅可包含英文、数字、下划线 */
+const PROJECT_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 
 const sanitizeProjectName = (value: string): string => {
-    const allowed = value.replace(/[^a-zA-Z0-9_-]/g, '');
+    const allowed = value.replace(/[^a-zA-Z0-9_]/g, '');
     const firstLetterIndex = allowed.search(/[a-zA-Z]/);
     if (firstLetterIndex === -1) return '';
     return allowed.slice(firstLetterIndex);

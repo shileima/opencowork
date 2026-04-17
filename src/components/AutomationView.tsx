@@ -10,6 +10,17 @@ import type { TranslationKey } from '../i18n/translations';
 import { useToast } from './Toast';
 import type { RPAProject, RPATask } from '../../electron/config/RPAProjectStore';
 
+/** 项目名称正则：英文开头，仅可包含英文、数字、下划线 */
+const PROJECT_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+
+/** 过滤非法字符，确保英文开头 */
+const sanitizeProjectName = (value: string): string => {
+    const allowed = value.replace(/[^a-zA-Z0-9_]/g, '');
+    const firstLetterIndex = allowed.search(/[a-zA-Z]/);
+    if (firstLetterIndex === -1) return '';
+    return allowed.slice(firstLetterIndex);
+};
+
 /** 单次执行的一条步骤输出 */
 export interface RPARunStep {
     text: string;
@@ -953,7 +964,7 @@ export function AutomationView({
 
     const handleCreateProject = async () => {
         const name = newProjectName.trim();
-        if (!name) return;
+        if (!name || !PROJECT_NAME_REGEX.test(name)) return;
         setIsCreatingProject(true);
         try {
             const result = await window.ipcRenderer.invoke('rpa:project:create', name) as { success: boolean; error?: string; project?: RPAProject };
@@ -1253,11 +1264,14 @@ export function AutomationView({
                                     <input
                                         type="text"
                                         value={newProjectName}
-                                        onChange={e => setNewProjectName(e.target.value)}
+                                        onChange={e => setNewProjectName(sanitizeProjectName(e.target.value))}
                                         placeholder={t('newProjectNamePlaceholder')}
                                         className="w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-stone-900 dark:text-zinc-100 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-400"
                                         autoFocus
                                     />
+                                    <p className="mt-1.5 text-xs text-stone-500 dark:text-zinc-500">
+                                        {t('projectNameRule')}
+                                    </p>
                                 </div>
                                 <div className="flex justify-end gap-2 pt-1">
                                     <button
@@ -1270,7 +1284,7 @@ export function AutomationView({
                                     <button
                                         type="button"
                                         onClick={handleCreateProject}
-                                        disabled={!newProjectName.trim() || isCreatingProject}
+                                        disabled={!newProjectName.trim() || !PROJECT_NAME_REGEX.test(newProjectName.trim()) || isCreatingProject}
                                         className="px-3 py-1.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-1.5"
                                     >
                                         {isCreatingProject && <Loader2 size={14} className="animate-spin" />}

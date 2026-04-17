@@ -93,7 +93,7 @@ class RPAProjectStore {
     /** 新建自动化项目 */
     createProject(name: string): RPAProject | null {
         const baseDir = this.ensureRpaProjectsDir();
-        const sanitized = name.trim().replace(/[/\\:*?"<>|]/g, '-').replace(/-+/g, '-') || 'rpa-project';
+        const sanitized = name.trim().replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_+/, '') || 'rpa_project';
         let dirName = sanitized;
         let dirPath = path.join(baseDir, dirName);
         let n = 1;

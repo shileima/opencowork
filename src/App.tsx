@@ -17,6 +17,17 @@ import type { Project, RPAProject, SsoUserInfo } from './api/types';
 
 type ViewType = 'cowork' | 'project' | 'automation';
 
+/** 项目名称正则：英文开头，仅可包含英文、数字、下划线 */
+const PROJECT_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+
+/** 过滤非法字符，确保英文开头 */
+const sanitizeProjectName = (value: string): string => {
+  const allowed = value.replace(/[^a-zA-Z0-9_]/g, '');
+  const firstLetterIndex = allowed.search(/[a-zA-Z]/);
+  if (firstLetterIndex === -1) return '';
+  return allowed.slice(firstLetterIndex);
+};
+
 function App() {
   const [isAppReady, setIsAppReady] = useState(false);
   const [ssoUser, setSsoUser] = useState<SsoUserInfo | null>(null);
@@ -272,7 +283,7 @@ function App() {
 
   const handleCreateNewProject = async () => {
     const name = newProjectName.trim();
-    if (!name) return;
+    if (!name || !PROJECT_NAME_REGEX.test(name)) return;
     try {
       const result = await api.project.create(name);
       if (result.success) {
@@ -374,7 +385,7 @@ function App() {
 
   const handleCreateNewRpaProject = async (retryCount = 2) => {
     const name = newRpaProjectName.trim();
-    if (!name) return;
+    if (!name || !PROJECT_NAME_REGEX.test(name)) return;
     try {
       const result = await api.rpaProject.create(name);
       if (result.success) {
@@ -1235,12 +1246,15 @@ ${err}
                 <input
                   type="text"
                   value={newRpaProjectName}
-                  onChange={(e) => setNewRpaProjectName(e.target.value)}
+                  onChange={(e) => setNewRpaProjectName(sanitizeProjectName(e.target.value))}
                   placeholder={t('newProjectNamePlaceholder')}
                   className="w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-stone-900 dark:text-zinc-100 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-400"
                   autoFocus
                   aria-label={t('projectName')}
                 />
+                <p className="mt-1.5 text-xs text-stone-500 dark:text-zinc-500">
+                  {t('projectNameRule')}
+                </p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-stone-700 dark:text-zinc-300 mb-2">
@@ -1265,7 +1279,7 @@ ${err}
               <button
                 type="button"
                 onClick={() => handleCreateNewRpaProject()}
-                disabled={!newRpaProjectName.trim()}
+                disabled={!newRpaProjectName.trim() || !PROJECT_NAME_REGEX.test(newRpaProjectName.trim())}
                 className="px-3 py-1.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
               >
                 {t('createProject')}
@@ -1309,12 +1323,15 @@ ${err}
                 <input
                   type="text"
                   value={newProjectName}
-                  onChange={(e) => setNewProjectName(e.target.value)}
+                  onChange={(e) => setNewProjectName(sanitizeProjectName(e.target.value))}
                   placeholder={t('newProjectNamePlaceholder')}
                   className="w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-zinc-600 bg-white dark:bg-zinc-900 text-stone-900 dark:text-zinc-100 placeholder-stone-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-400"
                   autoFocus
                   aria-label={t('projectName')}
                 />
+                <p className="mt-1.5 text-xs text-stone-500 dark:text-zinc-500">
+                  {t('projectNameRule')}
+                </p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-stone-700 dark:text-zinc-300 mb-2">
@@ -1342,7 +1359,7 @@ ${err}
               <button
                 type="button"
                 onClick={handleCreateNewProject}
-                disabled={!newProjectName.trim()}
+                disabled={!newProjectName.trim() || !PROJECT_NAME_REGEX.test(newProjectName.trim())}
                 className="px-3 py-1.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
               >
                 {t('createProject')}
