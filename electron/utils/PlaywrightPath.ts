@@ -117,18 +117,6 @@ function extractChromiumTarGz(tarGzPath: string, destDir: string): boolean {
 }
 
 /**
- * 读取 playwright-core 的 browsers.json，返回期望的 chromium revision（如 "1208"）。
- *
- * 查找策略（按优先级）：
- *   1. 内置 playwright 包同级的 playwright-core/browsers.json
- *   2. 项目根 node_modules/playwright-core/browsers.json（dev 模式）
- */
-function getExpectedChromiumRevision(): string | null {
-  const all = getAllExpectedChromiumRevisions();
-  return all.length > 0 ? all[0] : null;
-}
-
-/**
  * 收集运行时所有"可能被加载的 playwright-core 期望的 chromium revision"。
  *
  * 防御性地枚举：
